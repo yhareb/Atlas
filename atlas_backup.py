@@ -21,7 +21,10 @@ def create_zip():
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         # Backup Scripts
         for root, dirs, files in os.walk(SCRIPTS_DIR):
+            if ".git" in dirs:
+                dirs.remove(".git") # Skip git history in zip
             for file in files:
+                if file.endswith(".db"): continue # Skip live DB in zip, handle separately if needed
                 zipf.write(os.path.join(root, file), 
                            os.path.relpath(os.path.join(root, file), os.path.join(SCRIPTS_DIR, '..')))
         
@@ -36,21 +39,42 @@ def create_zip():
     return zip_path
 
 def upload_to_gdrive(file_path):
-    # Ensure the folder exists in GDrive (gws doesn't have a direct 'mkdir -p' equivalent for drive, so we just upload)
-    # We'll use gws drive files upload
     try:
         cmd = ["gws", "drive", "files", "upload", file_path, "--params", f'{{"name": "{os.path.basename(file_path)}"}}']
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
-            print(f"Backup uploaded successfully: {os.path.basename(file_path)}")
+            print(f"Backup uploaded to GDrive: {os.path.basename(file_path)}")
         else:
-            print(f"Error uploading backup: {result.stderr}")
+            print(f"Error uploading to GDrive: {result.stderr}")
     except Exception as e:
-        print(f"Exception during upload: {e}")
+        print(f"Exception during GDrive upload: {e}")
+
+def git_push():
+    print("Starting GitHub push...")
+    try:
+        # Add all changes
+        subprocess.run(["git", "-C", SCRIPTS_DIR, "add", "."], check=True)
+        # Commit with timestamp
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        subprocess.run(["git", "-C", SCRIPTS_DIR, "commit", "-m", f"Automated Backup: {timestamp}"], capture_output=True)
+        # Push to origin main
+        result = subprocess.run(["git", "-C", SCRIPTS_DIR, "push", "origin", "main"], capture_output=True, text=True)
+        if result.returncode == 0:
+            print("GitHub push successful.")
+        else:
+            print(f"GitHub push failed: {result.stderr}")
+    except Exception as e:
+        print(f"Exception during GitHub push: {e}")
 
 if __name__ == "__main__":
     print(f"Starting Atlas V2 Backup at {datetime.datetime.now()}")
+    
+    # 1. Local ZIP & GDrive Upload
     zip_path = create_zip()
-    print(f"Local backup created: {zip_path}")
+    print(f"Local ZIP created: {zip_path}")
     upload_to_gdrive(zip_path)
+    
+    # 2. GitHub Push
+    git_push()
+    
     print("Backup process complete.")
