@@ -5,13 +5,70 @@ from datetime import datetime
 
 DB_PATH = "/Users/yasser/scripts/atlas.db"
 
+# --------------------------------------------------------------------------- #
+# Real-time push to The Vault (Option A).
+#
+# Atlas remains the SINGLE SOURCE OF TRUTH. After Atlas writes a row locally,
+# it also pushes a copy to The Vault so the dashboard updates instantly. The
+# push is fire-and-forget and can NEVER raise into Atlas: if vault_client is
+# missing, unconfigured, or the network is down, Atlas keeps working exactly as
+# before and the scheduled vault_sync.py re-sends the row later (idempotent).
+# --------------------------------------------------------------------------- #
+try:
+    import vault_client as _vault
+except Exception:  # noqa: BLE001 — Atlas must run even without the pusher present
+    _vault = None
+
+
+def _safe_push(fn_name, *args):
+    """Invoke a vault_client.push_* function, swallowing every error."""
+    if _vault is None:
+        return
+    try:
+        getattr(_vault, fn_name)(*args)
+    except Exception:  # noqa: BLE001 — never let a push break an Atlas write
+        pass
+
+
+def _fetch_trade_rows(ids):
+    """Read specific trade lots by id as dicts (for pushing to the Vault)."""
+    ids = [int(i) for i in (ids or []) if i is not None]
+    if not ids:
+        return []
+    conn = get_connection()
+    cursor = conn.cursor()
+    placeholders = ",".join("?" for _ in ids)
+    cursor.execute(f'''
+        SELECT id, ticker, status, quantity, entry_price, entry_at,
+               exit_price, exit_at, entry_fees, exit_fees,
+               realized_pnl, realized_pnl_pct, parent_id, notes, updated_at
+        FROM trades WHERE id IN ({placeholders})
+    ''', ids)
+    cols = [d[0] for d in cursor.description]
+    rows = [dict(zip(cols, r)) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
 def get_connection():
     return sqlite3.connect(DB_PATH)
 
+
+# --------------------------------------------------------------------------- #
+# Schema / migration
+# --------------------------------------------------------------------------- #
 def init_db():
+    """Create tables if missing and run safe, idempotent migrations.
+
+    IMPORTANT: This never drops or rewrites existing data. The original
+    signals / positions / handoff tables are left exactly as they were. The
+    new `trades` table is added, and any existing `positions` rows are
+    backfilled into it so no historical trade is lost.
+    """
     conn = get_connection()
     cursor = conn.cursor()
 
+    # Signals table (every scan result) -- unchanged.
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS signals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,18 +89,22 @@ def init_db():
         )
     ''')
 
+    # Positions table (legacy log of buy/sell actions) -- unchanged.
+    # Kept for backward compatibility; `trades` is now the source of truth
+    # for P&L and history.
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS positions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             ticker TEXT,
-            action TEXT,
+            action TEXT, -- e.g., 'BUY', 'SELL'
             price REAL,
             quantity INTEGER,
-            status TEXT DEFAULT 'OPEN'
+            status TEXT DEFAULT 'OPEN' -- 'OPEN', 'CLOSED'
         )
     ''')
 
+    # Handoff table (latest state snapshot) -- unchanged.
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS handoff (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,26 +113,143 @@ def init_db():
         )
     ''')
 
+    # NEW: trades table -- one row per LOT.
+    #
+    # A "lot" is a quantity of shares bought together. When you sell, we close
+    # shares FIFO from the oldest open lot(s). A partial sell SPLITS a lot:
+    # the sold shares become a CLOSED lot with realized P&L, and the remaining
+    # shares stay OPEN as their own lot. This matches real brokerage accounting.
+    #
+    #   status        : 'OPEN' | 'CLOSED'
+    #   quantity      : shares in THIS lot
+    #   entry_price   : per-share buy price
+    #   entry_at      : buy timestamp (UTC, 'YYYY-MM-DD HH:MM:SS')
+    #   exit_price    : per-share sell price (NULL while open)
+    #   exit_at       : sell timestamp (NULL while open)
+    #   entry_fees    : fees attributed to the buy side of this lot
+    #   exit_fees     : fees attributed to the sell side of this lot
+    #   realized_pnl  : (exit_price-entry_price)*qty - entry_fees - exit_fees (NULL while open)
+    #   realized_pnl_pct : realized_pnl / (entry_price*qty) * 100 (NULL while open)
+    #   parent_id     : if this lot was split off another lot, the original lot id
+    #   notes         : free text
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'OPEN',
+            quantity INTEGER NOT NULL,
+            entry_price REAL NOT NULL,
+            entry_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            exit_price REAL,
+            exit_at DATETIME,
+            entry_fees REAL DEFAULT 0,
+            exit_fees REAL DEFAULT 0,
+            realized_pnl REAL,
+            realized_pnl_pct REAL,
+            parent_id INTEGER,
+            notes TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trades_ticker_status ON trades(ticker, status)"
+    )
+
     conn.commit()
+
+    # Backfill: migrate legacy `positions` rows into `trades` exactly once.
+    _backfill_positions_into_trades(conn)
+
     conn.close()
 
-def log_signal(ticker, signal, score, rvol, entry_price, stop_loss,
-               max_loss_per_share, atr, trend_stack, relative_strength,
-               volume, catalyst, warnings):
+
+def _table_has_rows(cursor, table):
+    cursor.execute(f"SELECT COUNT(*) FROM {table}")
+    return cursor.fetchone()[0] > 0
+
+
+def _backfill_positions_into_trades(conn):
+    """One-time, idempotent migration of legacy positions -> trades.
+
+    We only backfill if `trades` is empty AND `positions` has data, so running
+    init_db() repeatedly never duplicates anything. Each legacy BUY row becomes
+    an OPEN trade lot; legacy SELL rows are recorded as CLOSED lots with no
+    matched entry (we cannot reconstruct the original buy price), so realized
+    P&L is left NULL and a note explains it is a legacy import.
+    """
+    cursor = conn.cursor()
+
+    # Guard: skip if trades already has data (already migrated).
+    cursor.execute("SELECT COUNT(*) FROM trades")
+    if cursor.fetchone()[0] > 0:
+        return
+    # Guard: nothing to migrate.
+    if not _table_has_rows(cursor, "positions"):
+        return
+
+    cursor.execute(
+        "SELECT id, timestamp, ticker, action, price, quantity, status FROM positions ORDER BY id ASC"
+    )
+    legacy = cursor.fetchall()
+    for _id, ts, ticker, action, price, qty, status in legacy:
+        ticker = (ticker or "").upper()
+        action = (action or "BUY").upper()
+        qty = int(qty or 0)
+        price = float(price or 0)
+        if not ticker or qty <= 0 or price <= 0:
+            continue
+        if action == "SELL":
+            # Legacy sell with no matched buy: store as closed, P&L unknown.
+            cursor.execute('''
+                INSERT INTO trades (ticker, status, quantity, entry_price, entry_at,
+                                    exit_price, exit_at, realized_pnl, realized_pnl_pct, notes)
+                VALUES (?, 'CLOSED', ?, ?, ?, ?, ?, NULL, NULL, ?)
+            ''', (ticker, qty, price, ts, price, ts,
+                  "Legacy SELL imported from positions; original entry unknown."))
+        else:
+            # Legacy buy -> open lot.
+            cursor.execute('''
+                INSERT INTO trades (ticker, status, quantity, entry_price, entry_at, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (ticker, status or "OPEN", qty, price, ts,
+                  "Imported from legacy positions table."))
+    conn.commit()
+
+
+# --------------------------------------------------------------------------- #
+# Signals (unchanged API)
+# --------------------------------------------------------------------------- #
+def log_signal(ticker, signal, score, rvol, entry_price, stop_loss, max_loss_per_share, atr, trend_stack, relative_strength, volume, catalyst, warnings):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO signals (ticker, signal, score, rvol, entry_price,
-            stop_loss, max_loss_per_share, atr, trend_stack,
-            relative_strength, volume, catalyst, warnings)
+        INSERT INTO signals (ticker, signal, score, rvol, entry_price, stop_loss, max_loss_per_share, atr, trend_stack, relative_strength, volume, catalyst, warnings)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (ticker, signal, score, rvol, entry_price, stop_loss,
-          max_loss_per_share, atr, trend_stack, relative_strength,
-          volume, catalyst, warnings))
+    ''', (ticker, signal, score, rvol, entry_price, stop_loss, max_loss_per_share, atr, trend_stack, relative_strength, volume, catalyst, warnings))
+    new_id = cursor.lastrowid
     conn.commit()
     conn.close()
 
+    # Real-time push to the Vault (fire-and-forget; never raises).
+    _safe_push("push_signal", {
+        "id": new_id, "timestamp": _now(), "ticker": ticker, "signal": signal,
+        "score": score, "rvol": rvol, "entry_price": entry_price,
+        "stop_loss": stop_loss, "max_loss_per_share": max_loss_per_share,
+        "atr": atr, "trend_stack": trend_stack, "relative_strength": relative_strength,
+        "volume": volume, "catalyst": catalyst, "warnings": warnings,
+    })
+
+
+# --------------------------------------------------------------------------- #
+# Legacy positions (kept so existing /positions command keeps working)
+# --------------------------------------------------------------------------- #
 def log_position(ticker, action, price, quantity=0, status='OPEN'):
+    """Legacy logger. Still writes to `positions` for backward compatibility,
+    AND routes into the new trades ledger so history/P&L stays correct.
+
+    - action BUY  -> opens a trade lot
+    - action SELL -> closes shares FIFO and realizes P&L
+    """
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -81,27 +259,232 @@ def log_position(ticker, action, price, quantity=0, status='OPEN'):
     conn.commit()
     conn.close()
 
-def get_open_positions():
+    # Mirror into the trades ledger.
+    if str(action).upper() == "SELL":
+        close_trade(ticker, price, quantity=quantity)
+    else:
+        open_trade(ticker, price, quantity=quantity)
+
+
+# --------------------------------------------------------------------------- #
+# Trades ledger (NEW — source of truth for P&L and history)
+# --------------------------------------------------------------------------- #
+def _now():
+    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def open_trade(ticker, entry_price, quantity, fees=0.0, notes=None, entry_at=None):
+    """Open a new lot. Returns the new trade id."""
+    ticker = (ticker or "").upper()
+    quantity = int(quantity or 0)
+    entry_price = float(entry_price)
+    if not ticker or quantity <= 0 or entry_price <= 0:
+        raise ValueError("open_trade requires ticker, positive quantity, positive entry_price")
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT ticker, action, price, quantity, timestamp
-        FROM positions WHERE status = 'OPEN'
+        INSERT INTO trades (ticker, status, quantity, entry_price, entry_at, entry_fees, notes, updated_at)
+        VALUES (?, 'OPEN', ?, ?, ?, ?, ?, ?)
+    ''', (ticker, quantity, entry_price, entry_at or _now(), float(fees or 0), notes, _now()))
+    trade_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    # Real-time push of the new lot (fire-and-forget; never raises).
+    _safe_push("push_trades", _fetch_trade_rows([trade_id]))
+    return trade_id
+
+
+def close_trade(ticker, exit_price, quantity=None, fees=0.0, exit_at=None):
+    """Close shares of `ticker` FIFO at `exit_price`.
+
+    Partial sells SPLIT lots: if you sell fewer shares than the oldest open
+    lot holds, that lot is split into a CLOSED portion (with realized P&L) and
+    a remaining OPEN portion. `fees` (the sell-side commission) is distributed
+    across the closed shares proportionally.
+
+    If `quantity` is None, ALL open shares of the ticker are closed.
+    Returns a list of the CLOSED trade ids created/affected.
+    """
+    ticker = (ticker or "").upper()
+    exit_price = float(exit_price)
+    exit_at = exit_at or _now()
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, quantity, entry_price, entry_at, entry_fees
+        FROM trades
+        WHERE ticker = ? AND status = 'OPEN'
+        ORDER BY entry_at ASC, id ASC
+    ''', (ticker,))
+    open_lots = cursor.fetchall()
+
+    total_open = sum(int(r[1]) for r in open_lots)
+    if total_open == 0:
+        conn.close()
+        raise ValueError(f"No open shares of {ticker} to close.")
+
+    shares_to_close = int(quantity) if quantity not in (None, 0) else total_open
+    if shares_to_close > total_open:
+        # Don't oversell; clamp to what's open and note it.
+        shares_to_close = total_open
+
+    total_sell_fee = float(fees or 0)
+    closed_ids = []
+    remaining = shares_to_close
+
+    for lot_id, lot_qty, entry_price, entry_at, entry_fee in open_lots:
+        if remaining <= 0:
+            break
+        lot_qty = int(lot_qty)
+        entry_price = float(entry_price)
+        entry_fee = float(entry_fee or 0)
+
+        take = min(remaining, lot_qty)
+        # Proportional fees for the portion being closed.
+        sell_fee_share = total_sell_fee * (take / shares_to_close) if shares_to_close else 0
+        entry_fee_share = entry_fee * (take / lot_qty) if lot_qty else 0
+
+        gross = (exit_price - entry_price) * take
+        realized = gross - entry_fee_share - sell_fee_share
+        cost_basis = entry_price * take
+        realized_pct = (realized / cost_basis * 100) if cost_basis else None
+
+        if take == lot_qty:
+            # Close the whole lot in place.
+            cursor.execute('''
+                UPDATE trades
+                SET status='CLOSED', exit_price=?, exit_at=?, exit_fees=?,
+                    entry_fees=?, realized_pnl=?, realized_pnl_pct=?, updated_at=?
+                WHERE id=?
+            ''', (exit_price, exit_at, sell_fee_share, entry_fee_share,
+                  realized, realized_pct, _now(), lot_id))
+            closed_ids.append(lot_id)
+        else:
+            # SPLIT: shrink the open lot, create a new CLOSED child lot.
+            new_open_qty = lot_qty - take
+            new_entry_fee = entry_fee - entry_fee_share
+            cursor.execute('''
+                UPDATE trades SET quantity=?, entry_fees=?, updated_at=? WHERE id=?
+            ''', (new_open_qty, new_entry_fee, _now(), lot_id))
+            cursor.execute('''
+                INSERT INTO trades (ticker, status, quantity, entry_price, entry_at,
+                                    exit_price, exit_at, entry_fees, exit_fees,
+                                    realized_pnl, realized_pnl_pct, parent_id, notes, updated_at)
+                VALUES (?, 'CLOSED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (ticker, take, entry_price, entry_at, exit_price, exit_at,
+                  entry_fee_share, sell_fee_share, realized, realized_pct, lot_id,
+                  f"Partial close split from lot #{lot_id}.", _now()))
+            closed_ids.append(cursor.lastrowid)
+
+        remaining -= take
+
+    # Lots affected by this sell: the CLOSED lots we created/closed, plus any
+    # parent lots whose quantity shrank from a partial split (their ids are the
+    # open-lot ids we iterated). Push them all so the Vault mirrors the split.
+    affected_ids = list(closed_ids) + [int(r[0]) for r in open_lots]
+
+    conn.commit()
+    conn.close()
+
+    # Real-time push of every affected lot (fire-and-forget; never raises).
+    _safe_push("push_trades", _fetch_trade_rows(sorted(set(affected_ids))))
+    return closed_ids
+
+
+def get_trades(status=None, limit=500):
+    """Return trade lots, newest activity first. Optional status filter."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    if status:
+        cursor.execute('''
+            SELECT id, ticker, status, quantity, entry_price, entry_at,
+                   exit_price, exit_at, entry_fees, exit_fees,
+                   realized_pnl, realized_pnl_pct, parent_id, notes, updated_at
+            FROM trades WHERE status = ?
+            ORDER BY COALESCE(exit_at, entry_at) DESC, id DESC LIMIT ?
+        ''', (status.upper(), limit))
+    else:
+        cursor.execute('''
+            SELECT id, ticker, status, quantity, entry_price, entry_at,
+                   exit_price, exit_at, entry_fees, exit_fees,
+                   realized_pnl, realized_pnl_pct, parent_id, notes, updated_at
+            FROM trades
+            ORDER BY COALESCE(exit_at, entry_at) DESC, id DESC LIMIT ?
+        ''', (limit,))
+    cols = [d[0] for d in cursor.description]
+    rows = [dict(zip(cols, r)) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_realized_pnl():
+    """Aggregate realized P&L across all CLOSED lots."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT COALESCE(SUM(realized_pnl), 0),
+               COUNT(*),
+               COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END), 0)
+        FROM trades WHERE status = 'CLOSED' AND realized_pnl IS NOT NULL
+    ''')
+    total, closed_count, winners = cursor.fetchone()
+    conn.close()
+    win_rate = (winners / closed_count * 100) if closed_count else 0
+    return {
+        "realized_pnl": round(total, 2),
+        "closed_trades": closed_count,
+        "winners": winners,
+        "win_rate_pct": round(win_rate, 1),
+    }
+
+
+def get_open_positions():
+    """Backward-compatible: open positions for the /positions command.
+
+    Now sourced from the trades ledger so it reflects splits correctly, with
+    the same dict shape the existing SKILL.md command expects.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT ticker, quantity, entry_price, entry_at
+        FROM trades WHERE status = 'OPEN'
+        ORDER BY entry_at ASC, id ASC
     ''')
     rows = cursor.fetchall()
     conn.close()
-    return [{'ticker': r[0], 'action': r[1], 'price': r[2],
-             'quantity': r[3], 'timestamp': r[4]} for r in rows]
+    return [
+        {
+            "ticker": r[0],
+            "action": "BUY",
+            "price": r[2],
+            "quantity": r[1],
+            "timestamp": r[3],
+        }
+        for r in rows
+    ]
 
+
+# --------------------------------------------------------------------------- #
+# Handoff (unchanged API)
+# --------------------------------------------------------------------------- #
 def update_handoff(date_str, data_dict):
     conn = get_connection()
     cursor = conn.cursor()
+    data_json = json.dumps(data_dict)
     cursor.execute('''
-        INSERT INTO handoff (date, data) VALUES (?, ?)
+        INSERT INTO handoff (date, data)
+        VALUES (?, ?)
         ON CONFLICT(date) DO UPDATE SET data=excluded.data
-    ''', (date_str, json.dumps(data_dict)))
+    ''', (date_str, data_json))
     conn.commit()
     conn.close()
+
+    # Real-time push of the handoff snapshot (fire-and-forget; never raises).
+    _safe_push("push_handoff", date_str, data_dict)
+
 
 def get_handoff(date_str):
     conn = get_connection()
@@ -109,7 +492,10 @@ def get_handoff(date_str):
     cursor.execute('SELECT data FROM handoff WHERE date = ?', (date_str,))
     row = cursor.fetchone()
     conn.close()
-    return json.loads(row[0]) if row else None
+    if row:
+        return json.loads(row[0])
+    return None
+
 
 if __name__ == "__main__":
     init_db()
