@@ -1,0 +1,239 @@
+import os
+import sys
+import json
+import requests
+import datetime
+from datetime import timedelta
+
+MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY")
+BENZINGA_API_KEY = os.environ.get("BENZINGA_API_KEY")
+EODHD_API_KEY = os.environ.get("EODHD_API_KEY")
+
+if not MASSIVE_API_KEY:
+    print(json.dumps({"error": "MASSIVE_API_KEY not found in environment."}))
+    sys.exit(1)
+
+MASSIVE_BASE = "https://api.massive.com"
+
+def get_massive_aggs(ticker, days=365 ):
+    end_date = datetime.date.today()
+    start_date = end_date - timedelta(days=days)
+    url = f"{MASSIVE_BASE}/v2/aggs/ticker/{ticker}/range/1/day/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
+    params = {"apiKey": MASSIVE_API_KEY, "adjusted": "true", "sort": "asc"}
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            if "results" in data and data["results"]:
+                return data["results"]
+    except:
+        pass
+    return None
+
+def calculate_sma(prices, period):
+    if len(prices) < period:
+        return None
+    return sum(prices[-period:]) / period
+
+def calculate_atr(aggs, period=14):
+    if len(aggs) < period + 1:
+        return None
+    true_ranges = []
+    for i in range(1, len(aggs)):
+        high = aggs[i]['h']
+        low = aggs[i]['l']
+        prev_close = aggs[i-1]['c']
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        true_ranges.append(tr)
+    return sum(true_ranges[-period:]) / period
+
+def check_news_catalyst(ticker):
+    if not MASSIVE_API_KEY:
+        return False, None
+    url = f"{MASSIVE_BASE}/benzinga/v2/news"
+    params = {
+        "apiKey": MASSIVE_API_KEY,
+        "ticker": ticker,
+        "date.gte": (datetime.date.today() - timedelta(days=3)).strftime('%Y-%m-%d'),
+        "limit": 5
+    }
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            results = data.get("results", [])
+            if results:
+                return True, results[0].get("title", "Recent news found")
+    except:
+        pass
+    return False, None
+
+def check_analyst_ratings(ticker):
+    url = f"{MASSIVE_BASE}/benzinga/v1/ratings"
+    params = {
+        "apiKey": MASSIVE_API_KEY,
+        "ticker": ticker,
+        "date.gte": (datetime.date.today() - timedelta(days=7)).strftime('%Y-%m-%d'),
+        "rating_action.any_of": "upgrades,initiates_coverage_on,assumes",
+        "limit": 3
+    }
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            results = data.get("results", [])
+            if results:
+                top = results[0]
+                return True, f"{top.get('rating_action','').replace('_',' ').title()} by {top.get('firm','Unknown')} → PT ${top.get('price_target','N/A')}"
+    except:
+        pass
+    return False, None
+
+def check_earnings_risk(ticker):
+    url = f"{MASSIVE_BASE}/benzinga/v1/earnings"
+    params = {
+        "apiKey": MASSIVE_API_KEY,
+        "ticker": ticker,
+        "date.gte": datetime.date.today().strftime('%Y-%m-%d'),
+        "date.lte": (datetime.date.today() + timedelta(days=7)).strftime('%Y-%m-%d'),
+        "limit": 1
+    }
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            results = data.get("results", [])
+            if results:
+                return True, results[0].get("date", "this week")
+    except:
+        pass
+    return False, None
+
+def check_insider_buying(ticker):
+    if not EODHD_API_KEY:
+        return False, None
+    url = f"https://eodhd.com/api/sec-filings/{ticker}/form4"
+    params = {"api_token": EODHD_API_KEY, "fmt": "json", "page[limit]": 10}
+    try:
+        r = requests.get(url, params=params, timeout=10 )
+        if r.status_code == 200:
+            data = r.json()
+            filings = data.get("data", [])
+            cutoff = datetime.date.today() - timedelta(days=30)
+            buys = []
+            for filing in filings:
+                filed = datetime.date.fromisoformat(filing.get("filed_at", "2000-01-01"))
+                if filed >= cutoff:
+                    for tx in filing.get("non_derivative", []):
+                        if tx.get("transaction_code") == "P" and tx.get("acquired_or_disposed") == "A":
+                            buys.append(tx)
+            if buys:
+                total_value = sum(b.get("total_value", 0) or 0 for b in buys)
+                return True, f"{len(buys)} open-market purchase(s), ~${total_value:,.0f} total"
+    except:
+        pass
+    return False, None
+
+def analyze_ticker(ticker):
+    aggs = get_massive_aggs(ticker)
+    if not aggs:
+        return {"error": f"Could not fetch price data for {ticker}"}
+
+    closes = [day['c'] for day in aggs]
+    volumes = [day['v'] for day in aggs]
+    current_price = closes[-1]
+    current_vol = volumes[-1]
+
+    sma_50 = calculate_sma(closes, 50)
+    sma_150 = calculate_sma(closes, 150)
+    sma_200 = calculate_sma(closes, 200)
+    avg_vol_50 = calculate_sma(volumes, 50)
+    rvol = current_vol / avg_vol_50 if avg_vol_50 else 0
+    atr = calculate_atr(aggs)
+
+    pillars_met = 0
+    pillar_details = []
+    warnings = []
+
+    # Pillar 1: Trend Stack
+    if sma_50 and sma_150 and sma_200:
+        if current_price > sma_50 and sma_50 > sma_150 and sma_150 > sma_200:
+            pillars_met += 1
+            pillar_details.append("✅ Trend Stack: YES (Price > 50SMA > 150SMA > 200SMA)")
+        else:
+            pillar_details.append("❌ Trend Stack: NO")
+    else:
+        pillar_details.append("❌ Trend Stack: N/A (Insufficient Data)")
+
+    # Pillar 2: Relative Strength
+    highs_50 = max([day['h'] for day in aggs[-50:]]) if len(aggs) >= 50 else current_price
+    if current_price >= (highs_50 * 0.90):
+        pillars_met += 1
+        pillar_details.append("✅ Relative Strength: YES (Within 10% of 50D High)")
+    else:
+        pillar_details.append("❌ Relative Strength: NO")
+
+    # Pillar 3: Volume
+    if rvol >= 1.2:
+        pillars_met += 1
+        pillar_details.append(f"✅ Volume: YES (RVOL: {rvol:.2f})")
+    else:
+        pillar_details.append(f"❌ Volume: NO (RVOL: {rvol:.2f})")
+
+    # Pillar 4: Catalyst (News + Analyst Upgrade)
+    news_hit, news_title = check_news_catalyst(ticker)
+    analyst_hit, analyst_detail = check_analyst_ratings(ticker)
+    if analyst_hit:
+        pillars_met += 1
+        pillar_details.append(f"✅ Catalyst: YES — {analyst_detail}")
+    elif news_hit:
+        pillars_met += 1
+        pillar_details.append(f"✅ Catalyst: YES — Recent news")
+    else:
+        pillar_details.append("❌ Catalyst: NO")
+
+    # Earnings Risk Warning
+    earnings_soon, earnings_date = check_earnings_risk(ticker)
+    if earnings_soon:
+        warnings.append(f"⚠️ Earnings in next 7 days ({earnings_date}) — elevated risk")
+
+    # Insider Buying Signal
+    insider_hit, insider_detail = check_insider_buying(ticker)
+    if insider_hit:
+        warnings.append(f"🔥 Insider Buying (last 30 days): {insider_detail}")
+
+    # Signal
+    if pillars_met == 4:
+        signal = "🟢 BUY"
+    elif pillars_met == 3:
+        signal = "🟡 BUY (Small)"
+    elif pillars_met == 2:
+        signal = "⚪ WATCH"
+    else:
+        signal = "🔴 AVOID"
+
+    stop_loss = current_price - (atr * 2) if atr else current_price * 0.95
+    max_loss_per_share = current_price - stop_loss
+
+    result = {
+        "ticker": ticker,
+        "signal": signal,
+        "entry_price": round(current_price, 2),
+        "score": f"{pillars_met}/4 Pillars",
+        "rvol": round(rvol, 2),
+        "pillars": pillar_details,
+        "warnings": warnings,
+        "risk_card": {
+            "daily_volatility_atr": round(atr, 2) if atr else None,
+            "stop_loss": round(stop_loss, 2),
+            "max_loss_per_share": round(max_loss_per_share, 2)
+        }
+    }
+    return result
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(json.dumps({"error": "Please provide a ticker symbol."}))
+        sys.exit(1)
+    ticker = sys.argv[1].upper()
+    print(json.dumps(analyze_ticker(ticker), indent=2))
