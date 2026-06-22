@@ -7,8 +7,9 @@ summary card to Telegram.
 
 import os
 import sys
-import requests
 from datetime import datetime, timedelta
+from atlas_notify import send_telegram
+from atlas_time import current_et_market_date, previous_et_trading_date_str
 
 sys.path.insert(0, "/Users/yasser/scripts")
 import atlas_db
@@ -17,24 +18,12 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def send_telegram_message(message):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("[Morning Briefing] Telegram env vars not set. Printing to stdout:")
-        print(message)
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    try:
-        response = requests.post(url, json=payload, timeout=10 )
-        if response.status_code == 200:
-            print("[Morning Briefing] Sent to Telegram.")
-        else:
-            print(f"[Morning Briefing] Telegram error: {response.status_code} {response.text}")
-    except Exception as e:
-        print(f"[Morning Briefing] Failed: {e}")
+    return send_telegram(message, label="morning_briefing")
 
 def generate_morning_briefing():
-    today = datetime.now().strftime('%Y-%m-%d')
-    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+    market_day = current_et_market_date()
+    today = market_day.strftime('%Y-%m-%d')
+    yesterday = previous_et_trading_date_str(market_day)
 
     data = atlas_db.get_handoff(today) or atlas_db.get_handoff(yesterday)
 

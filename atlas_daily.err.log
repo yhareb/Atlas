@@ -1,0 +1,17 @@
+/Users/yasser/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+[2026-06-22T13:30:16+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-22T13:30:24+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-22T13:30:43+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-22T13:30:51+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-22T13:30:59+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-22T13:31:06+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-22T13:31:14+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-22T13:31:21+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-22T13:31:38+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-22T13:31:46+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-22T13:31:52+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-22T13:32:00+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-22T13:32:08+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-22T13:32:16+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-22T13:32:22+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}

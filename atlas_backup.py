@@ -3,6 +3,7 @@ import zipfile
 import datetime
 import subprocess
 import sys
+from atlas_notify import send_telegram
 
 # Configuration
 BACKUP_DIR = "/Users/yasser/backups"
@@ -78,3 +79,4 @@ if __name__ == "__main__":
     git_push()
     
     print("Backup process complete.")
+    send_telegram(f"✅ Atlas V2 Backup complete\nLocal ZIP: {zip_path}", label="atlas_backup")

@@ -28,7 +28,7 @@ Configuration (env)
     VAULT_URL          e.g. https://the-vault.manus.space
     VAULT_SYNC_TOKEN   the shared bearer token (same one vault_sync.py uses)
     VAULT_PUSH         optional; set to "0"/"false" to disable real-time push
-    VAULT_PUSH_TIMEOUT optional; seconds (default 5) — kept short so a slow
+    VAULT_PUSH_TIMEOUT optional; seconds (default 10) — kept short so a slow
                        network barely delays the Atlas command
     VAULT_PUSH_LOG     optional; path to append push outcomes (default: stderr)
 
@@ -48,6 +48,7 @@ import os
 import queue
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -220,7 +221,12 @@ def _post(payload, timeout):
         url,
         data=body,
         method="POST",
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "Atlas-VaultSync/1.0",
+            "Accept": "application/json",
+        },
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.status, json.loads(resp.read().decode("utf-8"))
@@ -236,9 +242,16 @@ _worker_started = False
 
 
 def _do_post(payload, label, counts):
-    timeout = float(os.environ.get("VAULT_PUSH_TIMEOUT", "5"))
+    timeout = float(os.environ.get("VAULT_PUSH_TIMEOUT", "10"))
     try:
-        status, data = _post(payload, timeout)
+        try:
+            status, data = _post(payload, timeout)
+        except Exception as e:  # noqa: BLE001 — retry timeout once, then let outer handler log
+            if isinstance(e, TimeoutError) or "timed out" in repr(e).lower():
+                time.sleep(1)
+                status, data = _post(payload, timeout)
+            else:
+                raise
         if status == 200 and data.get("ok"):
             _log(f"pushed {label} {counts} synced={data.get('synced')}")
             return True
