@@ -52,7 +52,18 @@ def send_telegram(message, label="atlas", parse_mode="Markdown", print_fallback=
             try:
                 r = requests.post(url, json=payload, timeout=(5, timeout))
                 if r.status_code != 200:
-                    raise RuntimeError(f"Telegram HTTP {r.status_code}: {r.text[:300]}")
+                    err_text = r.text[:300]
+                    if r.status_code == 400 and parse_mode and "can't parse entities" in err_text:
+                        plain_payload = {"chat_id": chat, "text": chunk}
+                        r = requests.post(url, json=plain_payload, timeout=(5, timeout))
+                        if r.status_code == 200:
+                            data = r.json()
+                            if data.get("ok"):
+                                msg_id = data.get("result", {}).get("message_id")
+                                sent_ids.append(msg_id)
+                                print(f"[{label}] telegram chunk {idx}/{len(_chunks(message))} sent plain-text after Markdown parse failure on attempt {attempt}: message_id={msg_id}")
+                                break
+                    raise RuntimeError(f"Telegram HTTP {r.status_code}: {err_text}")
                 data = r.json()
                 if not data.get("ok"):
                     raise RuntimeError(f"Telegram rejected chunk {idx}: {data}")
@@ -73,3 +84,8 @@ def send_telegram(message, label="atlas", parse_mode="Markdown", print_fallback=
             return False
     print(f"[{label}] telegram report sent: chunks={len(sent_ids)} message_ids={sent_ids}")
     return True
+
+
+def send_message(message, label="atlas", parse_mode="Markdown", print_fallback=True):
+    """Compatibility alias for callers that expect send_message()."""
+    return send_telegram(message, label=label, parse_mode=parse_mode, print_fallback=print_fallback)

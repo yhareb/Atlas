@@ -1,0 +1,57 @@
+─────────────────────────────────────────
+📊 POST-MARKET REPORT — 2026-06-23
+═══════════════════════════════
+
+1️⃣ ENGINE DECISIONS
+   ✅ BOUGHT (0)
+   ⛔ BLOCKED — EARNINGS (0)
+   🎣 ARMED — WAITING PULLBACK (2)
+      • PGEN — $5.41 (+13.10% > EMA) · limit $4.80
+      • CGEM — $17.11 (+13.40% > EMA) · limit $15.17
+   🚀 TOO HOT — SKIPPED (1)
+      • BLZE — +25.60% > EMA
+   ⏸️ NO DATA (0)
+
+2️⃣ OPEN POSITIONS (2)
+   • TSM — 6 sh · entry $441.98 · stop $441.98 · close $441.00 · P/L $-5.88 (-0.22%)
+   • TSM — 11.34288404 sh · entry $440.81 · stop N/A · close $441.00 · P/L $2.16 (+0.04%)
+
+3️⃣ WATCHLIST CLOSE (13)
+   🟢 BLZE       $10.94    +34.30%
+   🟢 PTGX      $116.25     +1.06%
+   🟢 PGEN        $5.43     +1.02%
+   🟢 APGE      $132.56     +0.01%
+   🔴 CGEM       $17.16     -0.81%
+   🔴 SPCX      $148.75     -2.73%
+   🔴 ABSI        $8.11     -3.04%
+   🔴 TE          $9.85     -5.24%
+   🔴 TSM       $441.00     -5.44%
+   🔴 VIAV       $49.33     -6.60%
+   🔴 LRCX      $366.56    -10.41%
+   🔴 CRDO      $269.09    -10.96%
+   🔴 MU      $1,069.22    -11.36%
+
+4️⃣ MARKET MOVERS
+   🏆 Top Gainers
+      • ATLN        $1.12   ▲ +152.61%
+      • ORGNW       $0.00   ▲ +100.00%
+      • HSCS        $3.28    ▲ +80.23%
+      • BOLD        $2.30    ▲ +63.57%
+      • RDGT        $2.07    ▲ +51.09%
+   💀 Top Losers
+      • RQIR        $0.01    ▼ -62.67%
+      • NXTS        $6.37    ▼ -50.38%
+      • INLF        $0.06    ▼ -45.68%
+      • WHLR        $2.41    ▼ -36.58%
+      • PRIM       $69.81    ▼ -35.56%
+
+5️⃣ CATALYST WATCH — TOMORROW (0 hits / 39 checked)
+   ⏱️ Window: 06/23 16:00 ET → 06/23 16:45 ET
+   • No strong per-ticker catalysts found.
+
+6️⃣ BOTTOM LINE
+   • 📈 Decisions: 3  ·  ✅ Bought: 0  ·  🎣 Armed: 2  ·  ⛔ Blocked: 0
+   • 💼 Open positions: 2
+   • 💰 Cash: $37,000.00  ·  Equity: $37,000.00
+   • 🌙 Market closed. Handoff written. See you tomorrow, Prof.
+─────────────────────────────────────────

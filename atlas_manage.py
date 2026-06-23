@@ -45,7 +45,11 @@ import atlas_db
 import atlas_account as acct
 import atlas_portfolio as port
 from atlas_time import current_et_market_date_str
-from atlas_engine import analyze_ticker, check_regime
+from atlas_engine import analyze_ticker, check_regime, check_macro_context
+try:
+    from atlas_audit import log_signal as _atlas_log_signal
+except Exception:
+    _atlas_log_signal = None
 
 # Default universe if the user passes no tickers. Kept small & liquid; the
 # scout normally supplies the real candidates, but this gives a sane default.
@@ -98,6 +102,55 @@ def _pillar_count(score):
         return 0
 
 
+def _scan_source(ticker, pending_scan, ema_retry_scan):
+    t = (ticker or "").upper()
+    if t in set(ema_retry_scan or []):
+        return "ema_retry"
+    if t in set(pending_scan or []):
+        return "pending_pullback"
+    return "normal_scan"
+
+
+def _audit_action(decision, live):
+    raw = str((decision or {}).get("action") or "SKIP").upper()
+    reason = str((decision or {}).get("reason") or "")
+    if raw == "BUY" and live:
+        return "PENDING_FILL"
+    if raw == "WAIT":
+        return "WAITING"
+    if raw == "EXPIRE":
+        return "SKIP"
+    if raw == "SKIP" and reason.startswith("TOO EXTENDED"):
+        return "TOO HOT"
+    if raw in {"BUY", "SKIP", "BLOCK"}:
+        return raw
+    return "SKIP"
+
+
+def _audit_signal_decision(ticker, decision, score, pillars, live, source, market_date, run_id):
+    try:
+        if not _atlas_log_signal:
+            return
+        decision = decision or {}
+        _atlas_log_signal(
+            ticker=(ticker or "").upper(),
+            action=_audit_action(decision, live),
+            reason=decision.get("reason") or decision.get("signal") or "",
+            score=score,
+            pillars=pillars,
+            live=bool(live),
+            source=source,
+            entry=decision.get("entry"),
+            stop=decision.get("stop"),
+            target=decision.get("target"),
+            market_date=market_date,
+            run_id=run_id,
+            metadata={"raw_action": decision.get("action"), "signal": decision.get("signal")},
+        )
+    except Exception:
+        pass
+
+
 def _catalyst_reason(res):
     reason = (res.get("catalyst_reason") or "").strip()
     if reason:
@@ -112,7 +165,9 @@ def run(args):
     global LAST_RUN_SUMMARY
     live = args.live
     mode = "LIVE — orders WILL be written" if live else "DRY-RUN — no writes"
-    LAST_RUN_SUMMARY = {"live": live, "mode": mode, "started_at": datetime.now().isoformat()}
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    market_date = current_et_market_date_str()
+    LAST_RUN_SUMMARY = {"live": live, "mode": mode, "started_at": datetime.now().isoformat(), "run_id": run_id, "market_date": market_date}
     print(LINE)
     print(f"  ATLAS v2 DAILY MANAGER   {datetime.now():%Y-%m-%d %H:%M}")
     print(f"  Mode: {mode}")
@@ -158,7 +213,13 @@ def run(args):
     regime = check_regime()
     regime_ok, regime_detail = regime
     LAST_RUN_SUMMARY.update({"regime_ok": regime_ok, "regime_detail": regime_detail})
+    macro_ctx = check_macro_context()
+    LAST_RUN_SUMMARY.update({"macro_context": macro_ctx})
     print(f"  {'RISK-ON ' if regime_ok else 'RISK-OFF'} : {regime_detail}")
+    if macro_ctx.get("cautious"):
+        print(f"  MACRO    : {macro_ctx.get('note')} ({', '.join(e.get('type','') for e in macro_ctx.get('events', [])[:3])})")
+    elif macro_ctx.get("status") == "na":
+        print(f"  MACRO    : {macro_ctx.get('note')}")
     if not regime_ok:
         print("  No new positions today (SPY below 50-day SMA).")
         LAST_RUN_SUMMARY.update({"candidates": [], "scanned_count": 0, "high_candidates": [], "watch_2": [], "catalysts": [], "buys": [], "result": "ACTION" if sells else "DO NOTHING"})
@@ -191,6 +252,7 @@ def run(args):
         if pending_decision:
             pact = pending_decision.get("action")
             pscore = pending_decision.get("score") or "?"
+            _audit_signal_decision(tkr, pending_decision, pscore, _pillar_count(pscore), live, "pending_pullback", market_date, run_id)
             if pact == "BUY":
                 buys.append(pending_decision)
                 pending.append(tkr.upper())
@@ -205,9 +267,17 @@ def run(args):
                     "analyst_rating": pending_decision.get("analyst_rating"),
                     "analyst_insight": pending_decision.get("analyst_insight"),
                     "fundamentals": pending_decision.get("fundamentals"),
+                    "indicator_info": pending_decision.get("indicator_info"),
+                    "atr_info": pending_decision.get("atr_info"),
+                    "sentiment_info": pending_decision.get("sentiment_info"),
+                    "insider_activity": pending_decision.get("insider_activity"),
+                    "macro_context": pending_decision.get("macro_context"),
                     "earnings_context": pending_decision.get("earnings_context"),
                     "earnings_note": pending_decision.get("earnings_note"),
                     "earnings_blackout": pending_decision.get("earnings_blackout"),
+                    "fda_calendar": pending_decision.get("fda_calendar"),
+                    "fda_note": pending_decision.get("fda_note"),
+                    "fda_blackout": pending_decision.get("fda_blackout"),
                 })
                 print(f"  BUY   {tkr:<6} {pending_decision['shares']} sh @ {pending_decision['entry']} "
                       f"(stop {pending_decision['stop']}, {pending_decision['risk_pct']:.1f}% risk, "
@@ -228,9 +298,17 @@ def run(args):
                     "analyst_rating": pending_decision.get("analyst_rating"),
                     "analyst_insight": pending_decision.get("analyst_insight"),
                     "fundamentals": pending_decision.get("fundamentals"),
+                    "indicator_info": pending_decision.get("indicator_info"),
+                    "atr_info": pending_decision.get("atr_info"),
+                    "sentiment_info": pending_decision.get("sentiment_info"),
+                    "insider_activity": pending_decision.get("insider_activity"),
+                    "macro_context": pending_decision.get("macro_context"),
                     "earnings_context": pending_decision.get("earnings_context"),
                     "earnings_note": pending_decision.get("earnings_note"),
                     "earnings_blackout": pending_decision.get("earnings_blackout"),
+                    "fda_calendar": pending_decision.get("fda_calendar"),
+                    "fda_note": pending_decision.get("fda_note"),
+                    "fda_blackout": pending_decision.get("fda_blackout"),
                 })
                 print(f"  ⏳ {pending_decision['reason']}")
                 continue
@@ -240,9 +318,17 @@ def run(args):
                     "signal": pending_decision.get("signal", ""), "action": pact,
                     "reason": pending_decision.get("reason", ""),
                     "fundamentals": pending_decision.get("fundamentals"),
+                    "indicator_info": pending_decision.get("indicator_info"),
+                    "atr_info": pending_decision.get("atr_info"),
+                    "sentiment_info": pending_decision.get("sentiment_info"),
+                    "insider_activity": pending_decision.get("insider_activity"),
+                    "macro_context": pending_decision.get("macro_context"),
                     "earnings_context": pending_decision.get("earnings_context"),
                     "earnings_note": pending_decision.get("earnings_note"),
                     "earnings_blackout": pending_decision.get("earnings_blackout"),
+                    "fda_calendar": pending_decision.get("fda_calendar"),
+                    "fda_note": pending_decision.get("fda_note"),
+                    "fda_blackout": pending_decision.get("fda_blackout"),
                 })
                 print(f"  {pact.lower():<5} {tkr:<6} ({pscore}) {pending_decision.get('reason','')}")
                 continue
@@ -253,6 +339,7 @@ def run(args):
             res = analyze_ticker(tkr)  # back-compat if regime kwarg absent
         if "error" in res:
             scan_errors.append({"ticker": tkr.upper(), "error": res["error"]})
+            _audit_signal_decision(tkr, {"action": "SKIP", "reason": res.get("error"), "signal": res.get("signal")}, "0/4 Pillars", 0, live, _scan_source(tkr, pending_scan, ema_retry_scan), market_date, run_id)
             print(f"  ----  {tkr:<6} {res['error']}")
             continue
         scanned_count += 1
@@ -266,6 +353,7 @@ def run(args):
                 watch.append(tkr.upper())
                 if pillars == 2:
                     watch_2.append(tkr.upper())
+            _audit_signal_decision(tkr, {"action": "SKIP", "reason": res.get("signal", ""), "signal": res.get("signal")}, score, pillars, live, _scan_source(tkr, pending_scan, ema_retry_scan), market_date, run_id)
             print(f"  skip  {tkr:<6} {res.get('signal','')}  ({score})")
             continue
 
@@ -279,9 +367,17 @@ def run(args):
         decision.setdefault("analyst_rating", res.get("analyst_rating"))
         decision.setdefault("analyst_insight", res.get("analyst_insight"))
         decision.setdefault("fundamentals", res.get("fundamentals"))
+        decision.setdefault("indicator_info", res.get("indicator_info"))
+        decision.setdefault("atr_info", res.get("atr_info"))
+        decision.setdefault("sentiment_info", res.get("sentiment_info"))
+        decision.setdefault("insider_activity", res.get("insider_activity"))
+        decision.setdefault("macro_context", decision.get("macro_context") or macro_ctx)
         decision.setdefault("earnings_context", res.get("earnings_context"))
         decision.setdefault("earnings_note", decision.get("earnings_note") or ((res.get("earnings_context") or {}).get("earnings_momentum") or {}).get("earnings_momentum_note") or ((res.get("earnings_context") or {}).get("earnings_miss") or {}).get("earnings_miss_note") or ((res.get("earnings_context") or {}).get("note") if (res.get("earnings_context") or {}).get("unknown") else None))
+        decision.setdefault("fda_calendar", decision.get("fda_calendar") or res.get("fda_calendar"))
+        decision.setdefault("fda_note", decision.get("fda_note") or ((decision.get("fda_calendar") or {}).get("tag") if isinstance(decision.get("fda_calendar"), dict) else None))
         act = decision["action"]
+        _audit_signal_decision(tkr, decision, score, pillars, live, _scan_source(tkr, pending_scan, ema_retry_scan), market_date, run_id)
         high_candidates.append({
             "ticker": tkr.upper(),
             "score": score,
@@ -300,9 +396,17 @@ def run(args):
             "analyst_rating": decision.get("analyst_rating"),
             "analyst_insight": decision.get("analyst_insight"),
             "fundamentals": decision.get("fundamentals"),
+            "indicator_info": decision.get("indicator_info"),
+            "atr_info": decision.get("atr_info"),
+            "sentiment_info": decision.get("sentiment_info"),
+            "insider_activity": decision.get("insider_activity"),
+            "macro_context": decision.get("macro_context"),
             "earnings_context": decision.get("earnings_context"),
             "earnings_note": decision.get("earnings_note"),
             "earnings_blackout": decision.get("earnings_blackout"),
+            "fda_calendar": decision.get("fda_calendar"),
+            "fda_note": decision.get("fda_note"),
+            "fda_blackout": decision.get("fda_blackout"),
         })
         if act == "BUY":
             buys.append(decision)
@@ -374,7 +478,55 @@ def _finish(live, sells, buys):
     print(LINE + "\n")
 
 
+def _register_value(parts, key, default=None):
+    prefix = key + "="
+    for part in parts:
+        if str(part).startswith(prefix):
+            return str(part).split("=", 1)[1]
+    return default
+
+
+def handle_register(argv):
+    """Register a user-confirmed broker fill.
+
+    Usage: atlas_manage.py register TICKER buy qty=N price=P fees=F ref=REF
+    If a PENDING_FILL row exists for the ticker, it is confirmed into OPEN.
+    Otherwise a new OPEN trade is created for manual broker registrations.
+    """
+    if len(argv) < 4:
+        raise SystemExit("Usage: atlas_manage.py register TICKER buy qty=N price=P fees=F ref=REF")
+    ticker = argv[2].upper()
+    side = argv[3].lower()
+    if side != "buy":
+        raise SystemExit("Only 'buy' register is supported here")
+    qty_raw = _register_value(argv[4:], "qty")
+    price_raw = _register_value(argv[4:], "price")
+    if qty_raw is None or price_raw is None:
+        raise SystemExit("register requires qty=N and price=P")
+    qty = float(qty_raw)
+    price = float(str(price_raw).replace("$", ""))
+    fees = float(str(_register_value(argv[4:], "fees", "0")).replace("$", ""))
+    ref = _register_value(argv[4:], "ref", "")
+    pending = [r for r in atlas_db.get_pending_fill_trades() if str(r.get("ticker", "")).upper() == ticker]
+    if pending:
+        trade = atlas_db.confirm_trade_fill(pending[0]["id"], qty, price, fees, ref)
+        print(f"REGISTERED {ticker}: PENDING_FILL #{pending[0]['id']} -> OPEN, qty={qty}, price=${price:.2f}, fees=${fees:.2f}, ref={ref}")
+        return {"registered": True, "mode": "confirmed_pending", "trade": trade}
+    trade_id = atlas_db.open_trade(
+        ticker, price, qty, fees=fees, status="OPEN",
+        notes=f"Manual broker registration ref {ref}" if ref else "Manual broker registration",
+    )
+    conn = atlas_db.get_connection(); cur = conn.cursor()
+    atlas_db._append_cash_ledger(cur, -(qty * price + fees), f"Manual broker fill {ticker} {ref}: {qty} sh @ {price} plus fees {fees}")
+    conn.commit(); conn.close()
+    print(f"REGISTERED {ticker}: new OPEN trade #{trade_id}, qty={qty}, price=${price:.2f}, fees=${fees:.2f}, ref={ref}")
+    return {"registered": True, "mode": "manual_open", "trade_id": trade_id}
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1].lower() == "register":
+        handle_register(sys.argv)
+        return
     p = argparse.ArgumentParser(description="Atlas v2 daily portfolio manager")
     p.add_argument("tickers", nargs="*", help="Optional explicit tickers to scan")
     p.add_argument("--file", help="Path to a watchlist file (one/many tickers per line)")

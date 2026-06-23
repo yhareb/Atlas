@@ -19,6 +19,27 @@ try:
 except Exception:  # noqa: BLE001 — Atlas must run even without the pusher present
     _vault = None
 
+try:
+    from atlas_audit import log_db_event as _atlas_log_db_event
+except Exception:
+    _atlas_log_db_event = None
+
+
+def _audit_db_event(table_name, operation, row_id=None, ticker=None, source_function=None, metadata=None):
+    try:
+        if not _atlas_log_db_event:
+            return
+        _atlas_log_db_event(
+            table_name=table_name,
+            operation=operation,
+            row_id=None if row_id is None else str(row_id),
+            ticker=(ticker or None),
+            source_function=source_function,
+            metadata=metadata,
+        )
+    except Exception:
+        pass
+
 
 def _safe_push(fn_name, *args):
     """Invoke a vault_client.push_* function, swallowing every error."""
@@ -203,6 +224,7 @@ def init_db():
         "stop_loss": "ALTER TABLE trades ADD COLUMN stop_loss REAL",
         "risk_pct": "ALTER TABLE trades ADD COLUMN risk_pct REAL",
         "target_price": "ALTER TABLE trades ADD COLUMN target_price REAL",
+        "broker_ref": "ALTER TABLE trades ADD COLUMN broker_ref TEXT DEFAULT NULL",
     }.items():
         if _col not in _trade_cols:
             cursor.execute(_ddl)
@@ -281,6 +303,7 @@ def log_signal(ticker, signal, score, rvol, entry_price, stop_loss, max_loss_per
     new_id = cursor.lastrowid
     conn.commit()
     conn.close()
+    _audit_db_event("signals", "INSERT", new_id, ticker, "log_signal")
 
     # Real-time push to the Vault (fire-and-forget; never raises).
     _safe_push("push_signal", {
@@ -308,8 +331,10 @@ def log_position(ticker, action, price, quantity=0, status='OPEN'):
         INSERT INTO positions (ticker, action, price, quantity, status)
         VALUES (?, ?, ?, ?, ?)
     ''', (ticker, action, price, quantity, status))
+    position_id = cursor.lastrowid
     conn.commit()
     conn.close()
+    _audit_db_event("positions", "INSERT", position_id, ticker, "log_position")
 
     # Mirror into the trades ledger.
     if str(action).upper() == "SELL":
@@ -326,11 +351,18 @@ def _now():
 
 
 def open_trade(ticker, entry_price, quantity, fees=0.0, notes=None, entry_at=None,
-               stop_loss=None, risk_pct=None, target_price=None):
+               stop_loss=None, risk_pct=None, target_price=None, status="PENDING_FILL"):
     """Open a new lot. Returns the new trade id."""
     ticker = (ticker or "").upper()
     quantity = int(quantity or 0)
     entry_price = float(entry_price)
+    status = str(status or "PENDING_FILL").upper()
+    if status not in ("PENDING_FILL", "OPEN"):
+        raise ValueError("open_trade status must be PENDING_FILL or OPEN")
+    if target_price is None and stop_loss is not None:
+        risk = entry_price - float(stop_loss)
+        if risk > 0:
+            target_price = round(entry_price + (2 * risk), 2)
     if not ticker or quantity <= 0 or entry_price <= 0:
         raise ValueError("open_trade requires ticker, positive quantity, positive entry_price")
     conn = get_connection()
@@ -338,18 +370,107 @@ def open_trade(ticker, entry_price, quantity, fees=0.0, notes=None, entry_at=Non
     cursor.execute('''
         INSERT INTO trades (ticker, status, quantity, entry_price, entry_at,
                             entry_fees, stop_loss, risk_pct, target_price, notes, updated_at)
-        VALUES (?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (ticker, quantity, entry_price, entry_at or _now(), float(fees or 0),
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (ticker, status, quantity, entry_price, entry_at or _now(), float(fees or 0),
           None if stop_loss is None else float(stop_loss),
           None if risk_pct is None else float(risk_pct),
           None if target_price is None else float(target_price), notes, _now()))
     trade_id = cursor.lastrowid
     conn.commit()
     conn.close()
+    _audit_db_event("trades", "INSERT", trade_id, ticker, "open_trade")
 
     # Real-time push of the new lot (fire-and-forget; never raises).
     _safe_push("push_trades", _fetch_trade_rows([trade_id]))
     return trade_id
+
+
+def _latest_cash_balance(cursor):
+    row = cursor.execute("SELECT balance_after FROM cash_ledger ORDER BY id DESC LIMIT 1").fetchone()
+    if row:
+        return float(row[0])
+    row = cursor.execute("SELECT starting_cash FROM account WHERE id = 1").fetchone()
+    return float(row[0]) if row else 0.0
+
+
+def _append_cash_ledger(cursor, amount, reason):
+    amount = float(amount)
+    balance_after = round(_latest_cash_balance(cursor) + amount, 2)
+    cursor.execute(
+        "INSERT INTO cash_ledger (amount, reason, balance_after) VALUES (?, ?, ?)",
+        (amount, reason, balance_after),
+    )
+    ledger_id = cursor.lastrowid
+    _audit_db_event("cash_ledger", "INSERT", ledger_id, None, "_append_cash_ledger", {"reason": reason, "amount": amount})
+    return balance_after
+
+
+def confirm_trade_fill(trade_id, broker_qty, broker_price, broker_fees, broker_ref=None):
+    """Flip a PENDING_FILL trade to OPEN using confirmed broker fill details."""
+    trade_id = int(trade_id)
+    broker_qty = float(broker_qty)
+    broker_price = float(broker_price)
+    broker_fees = float(broker_fees or 0.0)
+    broker_ref = str(broker_ref or "").strip()
+    if broker_qty <= 0 or broker_price <= 0:
+        raise ValueError("confirm_trade_fill requires positive broker_qty and broker_price")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT ticker, status, stop_loss, target_price, notes
+        FROM trades WHERE id = ?
+    """, (trade_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise ValueError(f"Trade id {trade_id} not found")
+    ticker, status, stop_loss, target_price, notes = row
+    if status != "PENDING_FILL":
+        conn.close()
+        raise ValueError(f"Trade id {trade_id} is {status}, not PENDING_FILL")
+    if target_price is None and stop_loss is not None:
+        risk = broker_price - float(stop_loss)
+        if risk > 0:
+            target_price = round(broker_price + (2 * risk), 2)
+    fill_note = f"Broker fill confirmed ref {broker_ref}" if broker_ref else "Broker fill confirmed"
+    notes = (notes or "").rstrip()
+    notes = f"{notes} | {fill_note}" if notes else fill_note
+    cursor.execute("""
+        UPDATE trades
+        SET status='OPEN', quantity=?, entry_price=?, entry_fees=?,
+            target_price=?, broker_ref=?, notes=?, updated_at=?
+        WHERE id=? AND status='PENDING_FILL'
+    """, (broker_qty, broker_price, broker_fees,
+          None if target_price is None else float(target_price),
+          broker_ref or None, notes, _now(), trade_id))
+    if cursor.rowcount != 1:
+        conn.rollback(); conn.close()
+        raise RuntimeError(f"Failed to confirm trade id {trade_id}")
+    debit = -(broker_qty * broker_price + broker_fees)
+    _append_cash_ledger(cursor, debit, f"Broker fill {ticker} {broker_ref}: {broker_qty} sh @ {broker_price} plus fees {broker_fees}")
+    conn.commit()
+    conn.close()
+    _audit_db_event("trades", "UPDATE", trade_id, ticker, "confirm_trade_fill")
+    _safe_push("push_trades", _fetch_trade_rows([trade_id]))
+    return _fetch_trade_rows([trade_id])[0]
+
+
+def get_pending_fill_trades():
+    """Return engine-approved trades awaiting manual broker confirmation."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, ticker, status, quantity, entry_price, entry_at,
+               exit_price, exit_at, entry_fees, exit_fees,
+               realized_pnl, realized_pnl_pct, parent_id,
+               stop_loss, risk_pct, target_price, notes, updated_at
+        FROM trades WHERE status = 'PENDING_FILL'
+        ORDER BY entry_at ASC, id ASC
+    ''')
+    cols = [d[0] for d in cursor.description]
+    rows = [dict(zip(cols, r)) for r in cursor.fetchall()]
+    conn.close()
+    return rows
 
 
 def close_trade(ticker, exit_price, quantity=None, fees=0.0, exit_at=None):
@@ -446,6 +567,10 @@ def close_trade(ticker, exit_price, quantity=None, fees=0.0, exit_at=None):
 
     conn.commit()
     conn.close()
+    for _closed_id in closed_ids:
+        _audit_db_event("trades", "UPDATE", _closed_id, ticker, "close_trade")
+    for _affected_id in set(affected_ids) - set(closed_ids):
+        _audit_db_event("trades", "UPDATE", _affected_id, ticker, "close_trade")
 
     # Real-time push of every affected lot (fire-and-forget; never raises).
     _safe_push("push_trades", _fetch_trade_rows(sorted(set(affected_ids))))
@@ -484,20 +609,30 @@ def update_trade_stop(trade_id, stop_loss):
     """Raise/persist the structured stop on one trade lot. Never lowers it."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT stop_loss FROM trades WHERE id=? AND status='OPEN'", (int(trade_id),))
+    cursor.execute("SELECT entry_price, stop_loss, target_price FROM trades WHERE id=? AND status='OPEN'", (int(trade_id),))
     row = cursor.fetchone()
     if not row:
         conn.close()
         return 0
-    current = row[0]
+    entry_price, current, target_price = row
     new_stop = float(stop_loss)
     if current is not None and float(current) >= new_stop:
         conn.close()
         return 0
-    cursor.execute("UPDATE trades SET stop_loss=?, updated_at=? WHERE id=? AND status='OPEN'", (new_stop, _now(), int(trade_id)))
+    computed_target = None
+    if target_price is None and current is not None:
+        risk = float(entry_price) - float(current)
+        if risk > 0:
+            computed_target = round(float(entry_price) + (2 * risk), 2)
+    if computed_target is None:
+        cursor.execute("UPDATE trades SET stop_loss=?, updated_at=? WHERE id=? AND status='OPEN'", (new_stop, _now(), int(trade_id)))
+    else:
+        cursor.execute("UPDATE trades SET stop_loss=?, target_price=?, updated_at=? WHERE id=? AND status='OPEN'", (new_stop, computed_target, _now(), int(trade_id)))
     conn.commit()
     changed = cursor.rowcount
     conn.close()
+    if changed:
+        _audit_db_event("trades", "UPDATE", int(trade_id), None, "update_trade_stop")
     _safe_push("push_trades", _fetch_trade_rows([int(trade_id)]))
     return changed
 
@@ -583,6 +718,7 @@ def upsert_pending_pullback(ticker, score, signal, signal_result, ema10, trigger
     payload = json.dumps(signal_result or {}, default=str)
     conn = get_connection()
     cursor = conn.cursor()
+    existing_id = cursor.execute("SELECT id FROM pending_pullbacks WHERE ticker=?", (ticker,)).fetchone()
     cursor.execute("""
         INSERT INTO pending_pullbacks
             (ticker, status, score, signal, signal_json, armed_at, expires_at,
@@ -598,8 +734,10 @@ def upsert_pending_pullback(ticker, score, signal, signal_result, ema10, trigger
             filled_at=NULL, expired_at=NULL, updated_at=excluded.updated_at
     """, (ticker, str(score or ""), str(signal or ""), payload, armed_at, expires_at,
           float(ema10), float(trigger_price), float(reference_price), float(pct_over_ema), _now()))
+    pending_id = cursor.execute("SELECT id FROM pending_pullbacks WHERE ticker=?", (ticker,)).fetchone()
     conn.commit()
     conn.close()
+    _audit_db_event("pending_pullbacks", "UPDATE" if existing_id else "INSERT", pending_id[0] if pending_id else None, ticker, "upsert_pending_pullback")
     return get_pending_pullback(ticker)
 
 
@@ -655,6 +793,8 @@ def mark_pending_pullback_filled(ticker):
     conn.commit()
     changed = cursor.rowcount
     conn.close()
+    if changed:
+        _audit_db_event("pending_pullbacks", "UPDATE", None, (ticker or "").upper(), "mark_pending_pullback_filled")
     return changed
 
 
@@ -669,16 +809,21 @@ def expire_pending_pullback(ticker):
     conn.commit()
     changed = cursor.rowcount
     conn.close()
+    if changed:
+        _audit_db_event("pending_pullbacks", "UPDATE", None, (ticker or "").upper(), "expire_pending_pullback")
     return changed
 
 
 def delete_pending_pullback(ticker):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM pending_pullbacks WHERE ticker=?", ((ticker or "").upper(),))
+    _ticker = (ticker or "").upper()
+    cursor.execute("DELETE FROM pending_pullbacks WHERE ticker=?", (_ticker,))
     conn.commit()
     changed = cursor.rowcount
     conn.close()
+    if changed:
+        _audit_db_event("pending_pullbacks", "DELETE", None, _ticker, "delete_pending_pullback")
     return changed
 
 
@@ -693,6 +838,7 @@ def upsert_ema_retry(ticker, score, signal, signal_result, reason):
     now = _now()
     conn = get_connection()
     cursor = conn.cursor()
+    existing_id = cursor.execute("SELECT id FROM ema_retry_candidates WHERE ticker=?", (ticker,)).fetchone()
     cursor.execute("""
         INSERT INTO ema_retry_candidates
             (ticker, status, score, signal, signal_json, reason, first_seen_at, last_seen_at)
@@ -701,8 +847,10 @@ def upsert_ema_retry(ticker, score, signal, signal_result, reason):
             status='WAITING', score=excluded.score, signal=excluded.signal,
             signal_json=excluded.signal_json, reason=excluded.reason, last_seen_at=excluded.last_seen_at
     """, (ticker, str(score or ""), str(signal or ""), payload, str(reason or ""), now, now))
+    retry_id = cursor.execute("SELECT id FROM ema_retry_candidates WHERE ticker=?", (ticker,)).fetchone()
     conn.commit()
     conn.close()
+    _audit_db_event("ema_retry_candidates", "UPDATE" if existing_id else "INSERT", retry_id[0] if retry_id else None, ticker, "upsert_ema_retry")
     return get_ema_retry_candidates(ticker=ticker)[0]
 
 
@@ -742,10 +890,13 @@ def get_ema_retry_candidates(status="WAITING", ticker=None):
 def delete_ema_retry(ticker):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM ema_retry_candidates WHERE ticker=?", ((ticker or "").upper(),))
+    _ticker = (ticker or "").upper()
+    cursor.execute("DELETE FROM ema_retry_candidates WHERE ticker=?", (_ticker,))
     conn.commit()
     changed = cursor.rowcount
     conn.close()
+    if changed:
+        _audit_db_event("ema_retry_candidates", "DELETE", None, _ticker, "delete_ema_retry")
     return changed
 
 
@@ -756,13 +907,16 @@ def update_handoff(date_str, data_dict):
     conn = get_connection()
     cursor = conn.cursor()
     data_json = json.dumps(data_dict)
+    existing_id = cursor.execute("SELECT id FROM handoff WHERE date=?", (date_str,)).fetchone()
     cursor.execute('''
         INSERT INTO handoff (date, data)
         VALUES (?, ?)
         ON CONFLICT(date) DO UPDATE SET data=excluded.data
     ''', (date_str, data_json))
+    handoff_id = cursor.execute("SELECT id FROM handoff WHERE date=?", (date_str,)).fetchone()
     conn.commit()
     conn.close()
+    _audit_db_event("handoff", "UPDATE" if existing_id else "INSERT", handoff_id[0] if handoff_id else None, None, "update_handoff", {"date": date_str})
 
     # Real-time push of the handoff snapshot (fire-and-forget; never raises).
     _safe_push("push_handoff", date_str, data_dict)

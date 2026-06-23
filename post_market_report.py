@@ -38,6 +38,52 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 MASSIVE_BASE = "https://api.massive.com"
 INDEX_ETF_BLOCKLIST = {"SPY", "QQQ", "DIA"}
 
+
+try:
+    from atlas_audit import log_api_call as _atlas_log_api_call
+except Exception:
+    _atlas_log_api_call = None
+
+import time as _audit_time
+_REQUESTS_GET = requests.get
+
+
+def _audit_provider(endpoint):
+    text = str(endpoint or "").lower()
+    if "massive.com" in text or "polygon.io" in text:
+        return "Massive"
+    if "benzinga.com" in text:
+        return "Benzinga"
+    if "eodhd.com" in text:
+        return "EODHD"
+    return None
+
+
+def _audit_get(url, *args, **kwargs):
+    provider = _audit_provider(url)
+    start = _audit_time.perf_counter()
+    try:
+        response = _REQUESTS_GET(url, *args, **kwargs)
+        if provider and _atlas_log_api_call:
+            try:
+                latency_ms = int((_audit_time.perf_counter() - start) * 1000)
+                status = getattr(response, "status_code", None)
+                _atlas_log_api_call(provider, os.path.basename(__file__), sys._getframe(1).f_code.co_name,
+                                    str(url), status, latency_ms,
+                                    bool(status is not None and 200 <= int(status) < 400), None, None)
+            except Exception:
+                pass
+        return response
+    except Exception as e:
+        if provider and _atlas_log_api_call:
+            try:
+                latency_ms = int((_audit_time.perf_counter() - start) * 1000)
+                _atlas_log_api_call(provider, os.path.basename(__file__), sys._getframe(1).f_code.co_name,
+                                    str(url), None, latency_ms, False, str(e)[:500], None)
+            except Exception:
+                pass
+        raise
+
 NYSE_HOLIDAYS_2026 = {
     date(2026, 1, 1), date(2026, 1, 19), date(2026, 2, 16),
     date(2026, 4, 3), date(2026, 5, 25), date(2026, 6, 19),
@@ -55,7 +101,7 @@ def massive_get(path, params=None):
     p = params or {}
     p["apiKey"] = MASSIVE_API_KEY
     try:
-        r = requests.get(f"{MASSIVE_BASE}{path}", headers=headers, params=p, timeout=10)
+        r = _audit_get(f"{MASSIVE_BASE}{path}", headers=headers, params=p, timeout=10)
         if r.status_code == 200:
             return r.json()
     except Exception as e:
@@ -161,12 +207,16 @@ def get_positions_pnl():
             chg_per_share = close - entry
             total_pnl = chg_per_share * qty if qty else None
             pnl_str = f"  Total P&L: {pnl_arrow(total_pnl)}" if total_pnl is not None else ""
+            stop = pos.get("stop_loss")
+            stop_str = f"  Stop: ${float(stop):.2f}" if stop not in (None, "") else ""
             lines.append(
-                f"  • {ticker}  Entry: ${entry:.2f} → Close: ${close:.2f}  "
+                f"  • {ticker}  Qty: {qty}  Entry: ${entry:.2f}{stop_str} → Close: ${close:.2f}  "
                 f"{pct_arrow(pct)}{pnl_str}"
             )
         else:
-            lines.append(f"  • {ticker}  Entry: ${entry:.2f}  Close: N/A")
+            stop = pos.get("stop_loss")
+            stop_str = f"  Stop: ${float(stop):.2f}" if stop not in (None, "") else ""
+            lines.append(f"  • {ticker}  Qty: {qty}  Entry: ${entry:.2f}{stop_str}  Close: N/A")
 
     return lines
 
@@ -279,10 +329,10 @@ def _ticker_news_in_window(ticker, start_et, end_et, limit=10):
     return articles
 
 
-def get_engine_catalyst_watchlist(market_date=None, limit=40, max_hits=12):
+def get_engine_catalyst_watchlist(market_date=None, limit=40, max_hits=12, now_et=None):
     tickers = get_postmarket_catalyst_universe(market_date=market_date, limit=limit)
-    start_et, end_et = postmarket_news_window()
-    now_utc = datetime.now(timezone.utc)
+    start_et, end_et = postmarket_news_window(now_et=now_et)
+    now_utc = (now_et.astimezone(timezone.utc) if now_et else datetime.now(timezone.utc))
     lines, checked = [], []
     for ticker in tickers:
         checked.append(ticker)
@@ -378,59 +428,260 @@ def get_todays_buy_signals(market_date=None):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def generate_post_market_report(send=True):
-    now_et = datetime.now(ZoneInfo("America/New_York"))
-    today = current_et_market_date(now_et)
+def _pm_num(value, default=None):
+    try:
+        if value in (None, ""):
+            return default
+        return float(str(value).replace(',', ''))
+    except Exception:
+        return default
+
+
+def _pm_money(value):
+    n = _pm_num(value)
+    return "N/A" if n is None else f"${n:,.2f}"
+
+
+def _pm_pct(value, signed=True, width=0):
+    n = _pm_num(value)
+    if n is None:
+        out = "—"
+    elif signed:
+        out = f"{n:+.2f}%"
+    else:
+        out = f"{n:.2f}%"
+    return out.rjust(width) if width else out
+
+
+def _pm_ticker(ticker, width=6):
+    return str(ticker or "?").upper().ljust(width)
+
+
+def _parse_close_line(line):
+    m = re.search(r"•\s+(\S+)\s+Close:\s+\$([\d,.]+)\s+\(([+-]?[\d.]+)%\)", line or "")
+    if m:
+        return {"ticker": m.group(1).upper(), "close": _pm_num(m.group(2)), "pct": _pm_num(m.group(3))}
+    m = re.search(r"•\s+(\S+)\s+Close:\s+N/A", line or "")
+    if m:
+        return {"ticker": m.group(1).upper(), "close": None, "pct": None}
+    return None
+
+
+def _parse_mover_line(line):
+    m = re.search(r"•\s+(\S+)\s+\$([\d,.]+)\s+[▲▼]\s+([+-]?[\d.]+)%", line or "")
+    if m:
+        return {"ticker": m.group(1).upper(), "price": _pm_num(m.group(2)), "pct": _pm_num(m.group(3))}
+    return None
+
+
+def _parse_position_line(line):
+    m = re.search(r"•\s+(\S+)\s+Qty:\s+([\d,.]+)\s+Entry:\s+\$([\d,.]+)(?:\s+Stop:\s+\$([\d,.]+))?\s+→\s+Close:\s+\$([\d,.]+).*?Total P&L:\s+([▲▼→])\s+([+-]?\$?[\d,.]+)", line or "")
+    if m:
+        pnl = _pm_num(str(m.group(7)).replace('$', ''))
+        if m.group(6) == '▼' and pnl is not None:
+            pnl = -abs(pnl)
+        return {"ticker": m.group(1).upper(), "qty": _pm_num(m.group(2)), "entry": _pm_num(m.group(3)), "stop": _pm_num(m.group(4)), "close": _pm_num(m.group(5)), "pnl": pnl}
+    m = re.search(r"•\s+(\S+)\s+Qty:\s+([\d,.]+)\s+Entry:\s+\$([\d,.]+)(?:\s+Stop:\s+\$([\d,.]+))?.*Close:\s+N/A", line or "")
+    if m:
+        return {"ticker": m.group(1).upper(), "qty": _pm_num(m.group(2)), "entry": _pm_num(m.group(3)), "stop": _pm_num(m.group(4)), "close": None, "pnl": None}
+    m = re.search(r"•\s+(\S+)\s+Entry:\s+\$([\d,.]+)\s+→\s+Close:\s+\$([\d,.]+).*?Total P&L:\s+([▲▼→])\s+([+-]?\$?[\d,.]+)", line or "")
+    if m:
+        pnl = _pm_num(str(m.group(5)).replace('$', ''))
+        if m.group(4) == '▼' and pnl is not None:
+            pnl = -abs(pnl)
+        return {"ticker": m.group(1).upper(), "entry": _pm_num(m.group(2)), "close": _pm_num(m.group(3)), "pnl": pnl}
+    m = re.search(r"•\s+(\S+)\s+Entry:\s+\$([\d,.]+).*Close:\s+N/A", line or "")
+    if m:
+        return {"ticker": m.group(1).upper(), "entry": _pm_num(m.group(2)), "close": None, "pnl": None}
+    return None
+
+
+def _parse_decision_line(line):
+    s = (line or "").strip()
+    if not s.startswith("•"):
+        return None
+    m = re.search(r"BUY — (\S+) \((\d+)/4 Pillars\): entry \$([\d,.]+), stop \$([\d,.]+), size (\d+) sh, risk ([\d.]+)%", s)
+    if m:
+        return {"cat": "bought", "ticker": m.group(1).upper(), "score": int(m.group(2)), "entry": _pm_num(m.group(3)), "stop": _pm_num(m.group(4)), "shares": int(m.group(5)), "risk": _pm_num(m.group(6))}
+    m = re.search(r"EARNINGS\s+in\s+(\d+)d", s, re.I)
+    if "BLOCK" in s and m:
+        tm = re.search(r"(?:BLOCK|—)\s+—?\s*(\S+)", s)
+        ticker = tm.group(1).upper() if tm else "?"
+        return {"cat": "blocked", "ticker": ticker, "days": int(m.group(1))}
+    m = re.search(r"WAITING FOR PULLBACK — (\S+) \((\d+)/4 Pillars\): price \$([\d,.]+) = \+([\d.]+)% over 10-EMA\. Limit armed at \$([\d,.]+)", s)
+    if m:
+        return {"cat": "armed", "ticker": m.group(1).upper(), "score": int(m.group(2)), "price": _pm_num(m.group(3)), "over": _pm_num(m.group(4)), "limit": _pm_num(m.group(5))}
+    m = re.search(r"TOO EXTENDED — (\S+) \(\+([\d.]+)% over 10-EMA\)", s)
+    if m:
+        return {"cat": "hot", "ticker": m.group(1).upper(), "over": _pm_num(m.group(2))}
+    m = re.search(r"WAIT — (\S+) \((\d+)/4 Pillars\):\s*(.+)", s)
+    if m:
+        return {"cat": "nodata", "ticker": m.group(1).upper(), "score": int(m.group(2)), "reason": m.group(3)}
+    m = re.search(r"DECISION UNAVAILABLE|NO BUY|WAIT|SKIP|BLOCK", s)
+    if m:
+        tm = re.search(r"•\s+(?:\S+\s+—\s+)?(\S+)", s)
+        return {"cat": "nodata", "ticker": (tm.group(1).upper() if tm else "?"), "reason": s.lstrip('• ').strip()}
+    return None
+
+
+def _parse_catalyst_line(line):
+    m = re.search(r"(?:\d+\.\s*)?🔥\s+(\S+)(?:\s+🚨 JUST IN)?\s+—\s+(?:\d\d/\d\d\s+\d\d:\d\d\s+ET\s+—\s+)?(.+)", line or "")
+    if m:
+        return {"ticker": m.group(1).upper(), "reason": m.group(2).strip()}
+    return None
+
+
+def _account_snapshot_for_display():
+    conn = atlas_db.get_connection()
+    cur = conn.cursor()
+    cash = None
+    equity = None
+    try:
+        row = cur.execute("SELECT balance_after FROM cash_ledger ORDER BY id DESC LIMIT 1").fetchone()
+        if row:
+            cash = row[0]
+    except Exception:
+        pass
+    try:
+        row = cur.execute("SELECT starting_cash FROM account ORDER BY id ASC LIMIT 1").fetchone()
+        if row:
+            equity = row[0]
+            if cash is None:
+                cash = row[0]
+    except Exception:
+        pass
+    conn.close()
+    return cash, equity
+
+
+def _format_watch_close(row):
+    pct = row.get("pct")
+    icon = "⚪" if pct is None else ("🟢" if pct >= 0 else "🔴")
+    price = "N/A" if row.get("close") is None else _pm_money(row.get("close"))
+    return f"   {icon} {_pm_ticker(row.get('ticker'))} {price.rjust(10)}   {_pm_pct(pct, width=8)}"
+
+
+def _format_mover(row, up=True):
+    arrow = "▲" if up else "▼"
+    pct = row.get("pct")
+    pct_text = "—" if pct is None else f"{arrow} {pct:+.2f}%"
+    return f"      • {_pm_ticker(row.get('ticker'))} {_pm_money(row.get('price')).rjust(10)}   {pct_text.rjust(10)}"
+
+
+def generate_post_market_report(send=True, market_date=None, now_et=None):
+    now_et = now_et or datetime.now(ZoneInfo("America/New_York"))
+    if market_date is None:
+        today = current_et_market_date(now_et)
+    elif isinstance(market_date, str):
+        today = datetime.strptime(market_date, "%Y-%m-%d").date()
+    else:
+        today = market_date
 
     if today in NYSE_HOLIDAYS_2026 or today.weekday() >= 5:
         return  # Silent on holidays and weekends
 
     today_str = today.strftime("%Y-%m-%d")
-    lines = [f"📊 *Post-Market Report — {today_str}*", ""]
 
-    # BUY/WATCH close performance
-    buy_lines, watch_lines = get_handoff_close_performance(today)
-    if buy_lines:
-        lines.append("*BUY Signals — End of Day:*")
-        lines.extend(buy_lines)
-        lines.append("")
-    if watch_lines:
-        lines.append("*WATCH List — End of Day:*")
-        lines.extend(watch_lines)
-        lines.append("")
+    buy_close_lines, watch_close_lines = get_handoff_close_performance(today)
+    close_rows = []
+    seen = set()
+    for raw in (buy_close_lines or []) + (watch_close_lines or []):
+        row = _parse_close_line(raw)
+        if row and row["ticker"] not in seen:
+            seen.add(row["ticker"])
+            close_rows.append(row)
+    close_rows.sort(key=lambda r: (_pm_num(r.get("pct"), -999999), r.get("ticker", "")), reverse=True)
 
-    # Top movers
-    gainers, losers = get_top_movers()
-    lines.append("*Top Gainers Today:*")
-    lines.extend(gainers if gainers else ["  None"])
-    lines.append("")
-    lines.append("*Top Losers Today:*")
-    lines.extend(losers if losers else ["  None"])
-    lines.append("")
+    gainer_lines, loser_lines = get_top_movers()
+    gainers = [r for r in (_parse_mover_line(x) for x in (gainer_lines or [])) if r]
+    losers = [r for r in (_parse_mover_line(x) for x in (loser_lines or [])) if r]
 
-    # Open positions P&L
     pos_lines = get_positions_pnl()
-    if pos_lines:
-        lines.append("*Open Positions — P&L Snapshot:*")
-        lines.extend(pos_lines)
-        lines.append("")
-    else:
-        lines.append("*Open Positions:* None\n")
+    positions = [r for r in (_parse_position_line(x) for x in (pos_lines or [])) if r]
 
-    # Today's BUY signals from engine
-    buy_signals = get_todays_buy_signals(today)
-    if buy_signals:
-        lines.append("*Engine Entry Decisions Today:*")
-        lines.extend(buy_signals)
-        lines.append("")
+    decision_lines = get_todays_buy_signals(today)
+    decisions = [r for r in (_parse_decision_line(x) for x in (decision_lines or [])) if r]
+    bought = [d for d in decisions if d.get("cat") == "bought"]
+    blocked = [d for d in decisions if d.get("cat") == "blocked"]
+    armed = sorted([d for d in decisions if d.get("cat") == "armed"], key=lambda d: (_pm_num(d.get("over"), 999999), d.get("ticker", "")))
+    hot = sorted([d for d in decisions if d.get("cat") == "hot"], key=lambda d: (_pm_num(d.get("over"), -999999), d.get("ticker", "")), reverse=True)
+    nodata = [d for d in decisions if d.get("cat") == "nodata"]
 
-    catalyst_lines, checked, win_start, win_end = get_engine_catalyst_watchlist(today)
-    lines.append(f"*🔥 Tomorrow Catalyst Watchlist ({len(catalyst_lines)} hits / {len(checked)} checked):*")
-    lines.append(f"  Window: {win_start.strftime('%m/%d %H:%M ET')} → {win_end.strftime('%m/%d %H:%M ET')}")
-    lines.extend(catalyst_lines or ["  0. No strong per-ticker catalysts found."])
+    catalyst_lines, checked, win_start, win_end = get_engine_catalyst_watchlist(today, now_et=now_et)
+    catalysts = [r for r in (_parse_catalyst_line(x) for x in (catalyst_lines or [])) if r]
+    cash, equity = _account_snapshot_for_display()
+
+    lines = [
+        "─────────────────────────────────────────",
+        f"📊 POST-MARKET REPORT — {today_str}",
+        "═══════════════════════════════",
+        "",
+        "1️⃣ ENGINE DECISIONS",
+        f"   ✅ BOUGHT ({len(bought)})",
+    ]
+    for d in bought:
+        lines.append(f"      • {d['ticker']} — {d.get('score', 0)}/4 pillars · entry {_pm_money(d.get('entry'))} · stop {_pm_money(d.get('stop'))} · {d.get('shares', 'N/A')} sh · {_pm_pct(d.get('risk'), signed=False)} risk")
+    lines.append(f"   ⛔ BLOCKED — EARNINGS ({len(blocked)})")
+    for d in blocked:
+        lines.append(f"      • {d['ticker']} — earnings in {d.get('days', 'N/A')}d")
+    lines.append(f"   🎣 ARMED — WAITING PULLBACK ({len(armed)})")
+    for d in armed:
+        lines.append(f"      • {d['ticker']} — {_pm_money(d.get('price'))} (+{_pm_num(d.get('over'), 0):.2f}% > EMA) · limit {_pm_money(d.get('limit'))}")
+    lines.append(f"   🚀 TOO HOT — SKIPPED ({len(hot)})")
+    for d in hot:
+        lines.append(f"      • {d['ticker']} — +{_pm_num(d.get('over'), 0):.2f}% > EMA")
+    lines.append(f"   ⏸️ NO DATA ({len(nodata)})")
+    for d in nodata:
+        lines.append(f"      • {d['ticker']} — {d.get('reason') or 'N/A'}")
     lines.append("")
 
-    lines.append("_Market closed. Handoff written. See you tomorrow, Prof._")
+    if positions:
+        lines.append(f"2️⃣ OPEN POSITIONS ({len(positions)})")
+        for p in positions:
+            qty = p.get('qty', 'N/A')
+            if isinstance(qty, float) and qty.is_integer():
+                qty = int(qty)
+            base = f"   • {p['ticker']} — {qty} sh · entry {_pm_money(p.get('entry'))} · stop {_pm_money(p.get('stop'))} · close {_pm_money(p.get('close'))}"
+            if p.get("pnl") is not None:
+                pnl_pct = None
+                entry_val = p.get('entry')
+                close_val = p.get('close')
+                if entry_val not in (None, 0) and close_val is not None:
+                    pnl_pct = ((close_val - entry_val) / entry_val) * 100
+                base += f" · P/L {_pm_money(p.get('pnl'))} ({_pm_pct(pnl_pct)})"
+            lines.append(base)
+    else:
+        lines.append("2️⃣ OPEN POSITIONS — none")
+    lines.append("")
+
+    lines.append(f"3️⃣ WATCHLIST CLOSE ({len(close_rows)})")
+    lines.extend([_format_watch_close(r) for r in close_rows] or ["   ⚪ N/A    N/A        —"])
+    lines.append("")
+
+    lines.append("4️⃣ MARKET MOVERS")
+    lines.append("   🏆 Top Gainers")
+    lines.extend([_format_mover(r, up=True) for r in gainers] or ["      • None"])
+    lines.append("   💀 Top Losers")
+    lines.extend([_format_mover(r, up=False) for r in losers] or ["      • None"])
+    lines.append("")
+
+    win_start_txt = win_start.strftime('%m/%d %H:%M ET') if win_start else 'N/A'
+    win_end_txt = win_end.strftime('%m/%d %H:%M ET') if win_end else 'N/A'
+    lines.append(f"5️⃣ CATALYST WATCH — TOMORROW ({len(catalysts)} hits / {len(checked)} checked)")
+    lines.append(f"   ⏱️ Window: {win_start_txt} → {win_end_txt}")
+    if catalysts:
+        for c in catalysts:
+            lines.append(f"   • {c['ticker']} — {c['reason']}")
+    else:
+        lines.append("   • No strong per-ticker catalysts found.")
+    lines.append("")
+
+    lines.append("6️⃣ BOTTOM LINE")
+    lines.append(f"   • 📈 Decisions: {len(decisions)}  ·  ✅ Bought: {len(bought)}  ·  🎣 Armed: {len(armed)}  ·  ⛔ Blocked: {len(blocked)}")
+    lines.append(f"   • 💼 Open positions: {len(positions)}")
+    lines.append(f"   • 💰 Cash: {_pm_money(cash)}  ·  Equity: {_pm_money(equity)}")
+    lines.append("   • 🌙 Market closed. Handoff written. See you tomorrow, Prof.")
+    lines.append("─────────────────────────────────────────")
 
     message = "\n".join(lines)
     if send:

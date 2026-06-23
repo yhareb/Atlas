@@ -50,6 +50,36 @@ def upload_to_gdrive(file_path):
     except Exception as e:
         print(f"Exception during GDrive upload: {e}")
 
+def backup_atlas_ops_db():
+    """Dump the local Postgres audit DB beside the Atlas backups and verify it."""
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d")
+    dump_path = os.path.join(BACKUP_DIR, f"atlas_ops_{stamp}.sql")
+    pg_dump = "/opt/homebrew/opt/postgresql@16/bin/pg_dump"
+    if not os.path.exists(pg_dump):
+        pg_dump = "pg_dump"
+    cmd = [pg_dump, "-d", "atlas_ops", "-f", dump_path]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            msg = f"🚨 Atlas audit DB backup failed: pg_dump exit {result.returncode} {result.stderr[:160]}"
+            print(msg)
+            send_telegram(msg, label="atlas_backup")
+            return None
+        if not os.path.exists(dump_path) or os.path.getsize(dump_path) <= 0:
+            msg = f"🚨 Atlas audit DB backup failed: missing/empty dump {dump_path}"
+            print(msg)
+            send_telegram(msg, label="atlas_backup")
+            return None
+        print(f"Postgres audit DB dump created: {dump_path} ({os.path.getsize(dump_path)} bytes)")
+        return dump_path
+    except Exception as e:
+        msg = f"🚨 Atlas audit DB backup exception: {e}"
+        print(msg)
+        send_telegram(msg, label="atlas_backup")
+        return None
+
+
 def git_push():
     print("Starting GitHub push...")
     try:
@@ -74,9 +104,15 @@ if __name__ == "__main__":
     zip_path = create_zip()
     print(f"Local ZIP created: {zip_path}")
     upload_to_gdrive(zip_path)
+
+    # 1b. Local Postgres audit DB dump beside atlas.db backups.
+    atlas_ops_dump = backup_atlas_ops_db()
     
     # 2. GitHub Push
     git_push()
     
     print("Backup process complete.")
-    send_telegram(f"✅ Atlas V2 Backup complete\nLocal ZIP: {zip_path}", label="atlas_backup")
+    msg = f"✅ Atlas V2 Backup complete\nLocal ZIP: {zip_path}"
+    if atlas_ops_dump:
+        msg += f"\nAudit DB: {atlas_ops_dump}"
+    send_telegram(msg, label="atlas_backup")

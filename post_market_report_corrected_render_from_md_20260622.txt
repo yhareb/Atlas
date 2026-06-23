@@ -1,0 +1,79 @@
+─────────────────────────────────────────
+📊 POST-MARKET REPORT — 2026-06-22
+═══════════════════════════════
+
+1️⃣ ENGINE DECISIONS
+   ✅ BOUGHT (1)
+      • JBL — 3/4 pillars · entry $370.51 · stop $338.83 · 5 sh · 0.50% risk
+   ⛔ BLOCKED — EARNINGS (0)
+   🎣 ARMED — WAITING PULLBACK (8)
+      • JPM — $331.71 (+3.00% > EMA) · limit $323.77
+      • POWW — $2.10 (+3.30% > EMA) · limit $2.05
+      • PTGX — $115.49 (+5.40% > EMA) · limit $110.14
+      • TSM — $468.18 (+6.40% > EMA) · limit $442.14
+      • LRCX — $398.05 (+8.40% > EMA) · limit $369.13
+      • INTC — $139.94 (+13.00% > EMA) · limit $124.43
+      • WDC — $731.95 (+13.20% > EMA) · limit $650.09
+      • MU — $1,190.61 (+13.40% > EMA) · limit $1,055.46
+   🚀 TOO HOT — SKIPPED (3)
+      • DFTX — +40.80% > EMA
+      • APGE — +39.50% > EMA
+      • SNDK — +15.70% > EMA
+   ⏸️ NO DATA (1)
+      • SPCX — Insufficient data for EMA10
+
+2️⃣ OPEN POSITIONS — none
+
+3️⃣ WATCHLIST CLOSE (16)
+   🟢 NXTS       $15.24   +196.85%
+   🟢 DFTX       $37.13    +51.55%
+   🟢 APGE      $132.63    +46.76%
+   🟢 SNDK    $2,304.28     +5.28%
+   🟢 MU      $1,190.61     +4.92%
+   🟢 INTC      $139.94     +4.40%
+   🟢 PTGX      $115.49     +2.33%
+   🟢 LRCX      $398.05     +2.24%
+   🟢 JPM       $331.71     +1.98%
+   🟢 AMD       $544.26     +1.27%
+   🟢 TSM       $468.18     +1.26%
+   🟢 JNJ       $231.15     +1.21%
+   🔴 JBL       $370.51     -0.36%
+   🔴 NVDA      $209.74     -0.48%
+   🔴 WDC       $731.95     -2.07%
+   🔴 SPCX      $166.19    -10.17%
+
+4️⃣ MARKET MOVERS
+   🏆 Top Gainers
+      • OPI        $18.11   ▲ +8953.50%
+      • NXTS       $15.24   ▲ +200.20%
+      • EHGO        $4.00   ▲ +123.06%
+      • GETY        $1.26   ▲ +108.26%
+      • TNON        $0.69   ▲ +103.86%
+   💀 Top Losers
+      • TBLAW       $0.00    ▼ -63.33%
+      • MRNOW       $0.02    ▼ -55.00%
+      • AIXI        $3.32    ▼ -47.12%
+      • LICN        $1.28    ▼ -41.01%
+      • JLHL       $24.80    ▼ -37.52%
+
+5️⃣ CATALYST WATCH — TOMORROW (12 hits / 31 checked)
+   ⏱️ Window: N/A → N/A ET
+   • AA — Power purchase agreements boost Alcoa's prospects
+   • ABBV — $11 billion acquisition expands pipeline
+   • APGE — $11 billion acquisition by AbbVie
+   • AZN — FDA approval for targeted prostate cancer treatment
+   • CVX — Long-term power deal with Microsoft
+   • DFTX — Positive Phase 3 results announced
+   • GOOGL — Partnership with Nokia enhances AI capabilities
+   • ICLR — TD Cowen raises price target significantly
+   • JBL — Analysts raise price targets significantly.
+   • JNJ — Positive trial results for multiple myeloma
+   • LLY — Acquisition of neuroscience firm 4E Therapeutics
+   • LRCX — Price target raises from analysts
+
+6️⃣ BOTTOM LINE
+   • 📈 Decisions: 13  ·  ✅ Bought: 1  ·  🎣 Armed: 8  ·  ⛔ Blocked: 0
+   • 💼 Open positions: 0
+   • 💰 Cash: $37,000.00  ·  Equity: $37,000.00
+   • 🌙 Market closed. Handoff written. See you tomorrow, Prof.
+─────────────────────────────────────────

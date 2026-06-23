@@ -23,6 +23,69 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 MASSIVE_BASE = "https://api.massive.com"
 INDEX_ETF_BLOCKLIST = {"SPY", "QQQ", "DIA"}
 
+
+try:
+    from atlas_audit import log_api_call as _atlas_log_api_call
+except Exception:
+    _atlas_log_api_call = None
+
+import time as _audit_time
+_REQUESTS_GET = requests.get
+
+
+def _audit_provider(endpoint):
+    text = str(endpoint or "").lower()
+    if "massive.com" in text or "polygon.io" in text:
+        return "Massive"
+    if "benzinga.com" in text:
+        return "Benzinga"
+    if "eodhd.com" in text:
+        return "EODHD"
+    return None
+
+
+def _audit_get(url, *args, **kwargs):
+    provider = _audit_provider(url)
+    start = _audit_time.perf_counter()
+    try:
+        response = _REQUESTS_GET(url, *args, **kwargs)
+        if provider and _atlas_log_api_call:
+            try:
+                latency_ms = int((_audit_time.perf_counter() - start) * 1000)
+                status = getattr(response, "status_code", None)
+                _atlas_log_api_call(
+                    provider=provider,
+                    file=os.path.basename(__file__),
+                    function=sys._getframe(1).f_code.co_name,
+                    endpoint=str(url),
+                    http_status=status,
+                    latency_ms=latency_ms,
+                    ok=bool(status is not None and 200 <= int(status) < 400),
+                    error=None,
+                    metadata=None,
+                )
+            except Exception:
+                pass
+        return response
+    except Exception as e:
+        if provider and _atlas_log_api_call:
+            try:
+                latency_ms = int((_audit_time.perf_counter() - start) * 1000)
+                _atlas_log_api_call(
+                    provider=provider,
+                    file=os.path.basename(__file__),
+                    function=sys._getframe(1).f_code.co_name,
+                    endpoint=str(url),
+                    http_status=None,
+                    latency_ms=latency_ms,
+                    ok=False,
+                    error=str(e)[:500],
+                    metadata=None,
+                )
+            except Exception:
+                pass
+        raise
+
 NYSE_HOLIDAYS_2026 = {
     date(2026,1,1),date(2026,1,19),date(2026,2,16),date(2026,4,3),
     date(2026,5,25),date(2026,6,19),date(2026,7,3),date(2026,9,7),
@@ -36,7 +99,7 @@ def massive_get(path, params=None):
     p = params or {}
     p["apiKey"] = MASSIVE_API_KEY
     try:
-        r = requests.get(f"{MASSIVE_BASE}{path}", params=p, timeout=10)
+        r = _audit_get(f"{MASSIVE_BASE}{path}", params=p, timeout=10)
         if r.status_code == 200: return r.json()
     except Exception as e: print(f"[Massive error] {path}: {e}")
     return None
@@ -238,6 +301,202 @@ def get_engine_catalyst_watchlist(limit=35, max_hits=12):
             break
     return lines, checked, start_et, end_et
 
+# --- Wave F comprehensive pre-market scout helpers -------------------------
+def eodhd_get(path, params=None):
+    key = os.environ.get("EODHD_API_KEY") or os.environ.get("EODHD_TOKEN")
+    if not key:
+        return None
+    p = params or {}; p["api_token"] = key; p["fmt"] = "json"
+    try:
+        r = _audit_get(f"https://eodhd.com/api{path}", params=p, timeout=10)
+        if r.status_code == 200: return r.json()
+        print(f"[EODHD pre-market] {path} HTTP {r.status_code}: {r.text[:120]}")
+    except Exception as e: print(f"[EODHD pre-market] {path}: {e}")
+    return None
+
+
+def _sentiment_line(ticker):
+    data = eodhd_get("/sentiments", {"s": f"{ticker}.US"})
+    try:
+        rows = data.get(f"{ticker}.US") if isinstance(data, dict) else None
+        row = rows[0] if rows else None
+        val = float(row.get("normalized")) if row else None
+        return f"{'🟢' if val >= 0 else '🔴'} {ticker} sentiment {val:+.1f}" if val is not None else None
+    except Exception: return None
+
+
+def get_wavef_screener_names(limit=20):
+    import json as _json
+    try:
+        from atlas_engine import check_fundamentals
+    except Exception:
+        check_fundamentals = None
+    filters = [["refund_1d_p", ">", 3], ["avgvol_200d", ">", 1000000], ["exchange", "=", "US"], ["market_capitalization", ">", 300000000]]
+    data = eodhd_get("/screener", {"filters": _json.dumps(filters), "limit": limit, "sort": "refund_1d_p.desc"}) or {}
+    out=[]; added=0
+    for row in data.get("data") or []:
+        sym=(row.get("code") or "").upper(); price=row.get("adjusted_close")
+        if _is_tradeable_symbol(sym) and price and float(price) >= 5:
+            tag=""
+            if check_fundamentals and added < 5:
+                try:
+                    f = check_fundamentals(sym) or {}
+                    tag = f"  {f.get('tag') or f.get('note') or ''}".rstrip()
+                except Exception:
+                    tag = ""
+            out.append(f"  • {sym} ${float(price):.2f}  ▲ +{float(row.get('refund_1d_p') or 0):.1f}%  {row.get('sector','')}{tag}")
+            added += 1
+    return out
+
+
+def get_wavef_earnings(limit=8):
+    today=current_et_market_date_str(); data=massive_get("/benzinga/v1/earnings", {"date.gte":today,"date.lte":today,"limit":limit}) or {}
+    lines=[]
+    for row in data.get("results") or []:
+        t=row.get("ticker"); eps=row.get("eps_surprise_percent"); rev=row.get("revenue_surprise_percent"); bits=[]
+        if eps is not None: bits.append(f"EPS {float(eps)*100:+.0f}%")
+        if rev is not None: bits.append(f"Rev {float(rev)*100:+.0f}%")
+        if t and bits: lines.append(f"  • {t} — {' / '.join(bits)}")
+    return lines
+
+
+def get_wavef_analyst_actions(limit=8):
+    today=current_et_market_date_str(); data=massive_get("/benzinga/v1/ratings", {"date.gte":today,"limit":limit}) or {}
+    lines=[]; seen=[]
+    for row in data.get("results") or []:
+        t=(row.get("ticker") or "").upper(); firm=row.get("firm"); rating=row.get("rating"); pt=row.get("price_target") or row.get("adjusted_price_target"); act=row.get("price_target_action")
+        if t:
+            base=f"  • {t} — {firm or 'Analyst'} {rating or ''} PT {'$'+str(int(float(pt))) if pt else 'N/A'} {act or ''}"
+            lines.append(base)
+            seen.append(t)
+            try:
+                insight_data = massive_get("/benzinga/v1/analyst-insights", {"ticker": t, "limit": 3}) or {}
+                for item in insight_data.get("results") or []:
+                    insight = (item.get("insight") or item.get("headline") or item.get("title") or "").strip()
+                    insight = re.sub(r"\s+", " ", insight).replace("*", "").replace("#", "")
+                    insight = insight.split(". ")[0].strip() or insight
+                    insight_firm = item.get("firm") or firm or "Analyst"
+                    if insight and insight.lower() not in base.lower():
+                        lines.append(f"    💬 {insight[:90]} — {insight_firm}")
+                        break
+            except Exception:
+                pass
+    return lines
+
+
+def get_wavef_macro():
+    today=current_et_market_date_str(); data=eodhd_get("/economic-events", {"from":today,"to":today,"country":"US"}) or []
+    lines=[]
+    for row in data[:12] if isinstance(data, list) else []:
+        typ=row.get("type") or "Event"; when=row.get("date") or ""; flag="⚠️" if any(w in typ.lower() for w in ("fed","fomc","cpi","consumer price index")) else "•"
+        lines.append(f"  {flag} {typ} — {when}")
+    return lines
+
+
+def _fda_event_date(row):
+    for key in ("target_date", "date", "event_date"):
+        value = row.get(key)
+        if value:
+            try:
+                return date.fromisoformat(str(value)[:10])
+            except Exception:
+                pass
+    return None
+
+
+def _fda_tickers(row):
+    symbols=[]
+    for company in row.get("companies") or []:
+        for sec in company.get("securities") or []:
+            sym=str(sec.get("symbol") or "").upper().strip()
+            if sym: symbols.append(sym)
+    return sorted(set(symbols))
+
+
+def _armed_watchlist_symbols():
+    symbols=set()
+    try:
+        market_day=current_et_market_date(); today=market_day.strftime('%Y-%m-%d'); yesterday=previous_et_trading_date_str(market_day)
+        data=atlas_db.get_handoff(today) or atlas_db.get_handoff(yesterday) or {}
+        symbols.update(str(x).upper() for x in (data.get("BUY") or []) if x)
+        symbols.update(str(x).upper() for x in (data.get("WATCH") or []) if x)
+    except Exception:
+        pass
+    try:
+        symbols.update(str(r.get("ticker") or "").upper() for r in atlas_db.get_pending_pullbacks(status="WAITING") if r.get("ticker"))
+    except Exception:
+        pass
+    return symbols
+
+
+def get_wavef_fda_warnings():
+    try:
+        from atlas_engine import _load_fda_calendar_window
+        payload = _load_fda_calendar_window() or {}
+    except Exception:
+        return []
+    today = current_et_market_date(); end = today + timedelta(days=5)
+    out=[]
+    for row in payload.get("rows") or []:
+        d = _fda_event_date(row)
+        if not d or d < today or d > end:
+            continue
+        drug = row.get("drug") or {}
+        drug_name = drug.get("name") if isinstance(drug, dict) else None
+        event_type = row.get("event_type") or row.get("status") or row.get("outcome") or "FDA event"
+        for ticker in _fda_tickers(row) or [""]:
+            out.append({"ticker": ticker, "event_type": event_type, "event_date": d.isoformat(), "drug_name": drug_name})
+    return out
+
+
+def _fda_warning_lines(events):
+    armed = _armed_watchlist_symbols()
+    if not events:
+        return ["*⚕️ FDA EVENTS — none in next 5 days*"]
+    lines=["*⚕️ FDA EVENTS (next 5 days)*"]
+    for ev in events[:12]:
+        ticker=(ev.get("ticker") or "?").upper(); prefix="🚨" if ticker in armed else "-"
+        drug=f" ({ev.get('drug_name')})" if ev.get("drug_name") else ""
+        lines.append(f"{prefix} {ticker} {ev.get('event_date')} — {ev.get('event_type')}{drug}")
+    return lines
+
+
+def get_wavef_insider_buys(limit=6):
+    names=_dedupe_tickers(get_discovery_universe(limit=10), limit=10); lines=[]
+    try:
+        from atlas_engine import check_insider_buying
+        for t in names:
+            hit, detail = check_insider_buying(t)
+            if hit: lines.append(f"  • {t} — {(detail or {}).get('note') if isinstance(detail, dict) else detail}")
+            if len(lines) >= limit: break
+    except Exception as e: print(f"[pre-market] insider scan skipped: {e}")
+    return lines
+
+
+def generate_wavef_pre_market_brief(send=False):
+    today_str=current_et_market_date_str(); futures=get_futures(); gainers,losers=get_top_movers(); screen=get_wavef_screener_names(); earnings=get_wavef_earnings(); analysts=get_wavef_analyst_actions(); macro=get_wavef_macro(); fda_events=get_wavef_fda_warnings(); buy_lines,watch_lines=get_handoff_snapshot(); catalysts,checked,win_start,win_end=get_engine_catalyst_watchlist(limit=25,max_hits=8); insiders=get_wavef_insider_buys()
+    sent=[]
+    for line in (gainers[:3]+screen[:3]):
+        parts=line.replace('•','').split(); sent.append(_sentiment_line(parts[0]) if parts else None)
+    sent=[x for x in sent if x]
+    lines=[f"🌄 *PRE-MARKET BRIEF — {today_str}*", "", "*🧭 Market Sentiment Overview:*"]
+    lines.extend(futures or ["  N/A"])
+    if sent: lines.append("  News sentiment: " + " | ".join(sent[:4]))
+    lines += ["", "*🚀 Pre-Market Movers / Gappers:*"] + (gainers[:8] or ["  None yet"])
+    lines += ["", "*🧪 Screener Fresh Names:*"] + (screen or ["  None found"])
+    lines += ["", "*📰 News + Sentiment Catalysts:*"] + (catalysts or ["  No strong fresh catalysts found"])
+    lines += ["", "*📊 Overnight Earnings:*"] + (earnings or ["  No EPS/revenue surprise rows found"])
+    lines += ["", "*🏦 Analyst Actions / PT Changes:*"] + (analysts or ["  No fresh analyst rows found"])
+    lines += ["", "*🏛 Insider Buys:*"] + (insiders or ["  No notable open-market insider buys found in scanned names"])
+    lines += ["", "*⚠️ Macro Events Today:*"] + (macro or ["  No macro events returned"])
+    lines += [""] + _fda_warning_lines(fda_events)
+    if buy_lines or watch_lines: lines += ["", "*🎯 Setups Armed For The Day:*"] + (buy_lines[:6] + watch_lines[:8])
+    lines += ["", "_Scouting only — no pre-market trades._"]
+    msg="\n".join(lines)
+    if send: send_telegram(msg)
+    return msg
+# --------------------------------------------------------------------------
+
 def _llm_brief(futures, gainers, losers, buy_lines, watch_lines, headlines):
     if not OPENAI_API_KEY:
         return None
@@ -284,6 +543,8 @@ def generate_pre_market_report(send=True):
     today = current_et_market_date(now_et)
     if today in NYSE_HOLIDAYS_2026 or today.weekday() >= 5: return
     today_str = today.strftime("%Y-%m-%d")
+    # Wave F comprehensive scout replaces the older idle-style brief.
+    return generate_wavef_pre_market_brief(send=send)
     lines = [f"🌄 *Pre-Market Brief — {today_str}*", ""]
     lines.append("*Index Proxies (ETF):*"); lines.extend(get_futures() or ["  N/A"]); lines.append("")
     gainers, losers = get_top_movers()

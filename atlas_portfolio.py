@@ -53,6 +53,10 @@ from atlas_engine import (
     check_regime,
     check_earnings_context,
     check_fundamentals,
+    check_massive_indicators,
+    evaluate_indicator_confluence,
+    check_macro_context,
+    check_fda_calendar,
     MASSIVE_API_KEY,
     MASSIVE_BASE,
 )
@@ -72,6 +76,52 @@ PULLBACK_TOL = 0.02       # in-band signal threshold: close <= 10-EMA +2% buys n
 PULLBACK_FILL_TOL = 0.005  # armed pullback trigger: price <= 10-EMA +0.5%
 PENDING_PULLBACK_DAYS = 3  # valid for 3 trading days
 MAX_PULLBACK_ARM_PCT = 15.0  # >15% over EMA10 is too extended; no 3-day limit
+
+
+try:
+    from atlas_audit import log_api_call as _atlas_log_api_call
+except Exception:
+    _atlas_log_api_call = None
+
+import time as _audit_time
+_REQUESTS_GET = requests.get
+
+
+def _audit_provider(endpoint):
+    text = str(endpoint or "").lower()
+    if "massive.com" in text or "polygon.io" in text:
+        return "Massive"
+    if "benzinga.com" in text:
+        return "Benzinga"
+    if "eodhd.com" in text:
+        return "EODHD"
+    return None
+
+
+def _audit_get(url, *args, **kwargs):
+    provider = _audit_provider(url)
+    start = _audit_time.perf_counter()
+    try:
+        response = _REQUESTS_GET(url, *args, **kwargs)
+        if provider and _atlas_log_api_call:
+            try:
+                latency_ms = int((_audit_time.perf_counter() - start) * 1000)
+                status = getattr(response, "status_code", None)
+                _atlas_log_api_call(provider, os.path.basename(__file__), sys._getframe(1).f_code.co_name,
+                                    str(url), status, latency_ms,
+                                    bool(status is not None and 200 <= int(status) < 400), None, None)
+            except Exception:
+                pass
+        return response
+    except Exception as e:
+        if provider and _atlas_log_api_call:
+            try:
+                latency_ms = int((_audit_time.perf_counter() - start) * 1000)
+                _atlas_log_api_call(provider, os.path.basename(__file__), sys._getframe(1).f_code.co_name,
+                                    str(url), None, latency_ms, False, str(e)[:500], None)
+            except Exception:
+                pass
+        raise
 
 # Minimal static sector map for the common scout universe. Unknown tickers are
 # treated as their own unique sector (so they never block each other). Extend
@@ -106,7 +156,7 @@ def _live_price_lookup(ticker):
     if not MASSIVE_API_KEY:
         return None
     try:
-        r = requests.get(
+        r = _audit_get(
             f"{MASSIVE_BASE}/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}",
             params={"apiKey": MASSIVE_API_KEY}, headers={"Accept": "application/json"}, timeout=5,
         )
@@ -315,9 +365,11 @@ def evaluate_pending_pullback(ticker, dry_run=True, regime=None, pending=None, r
             row_pillars = 0
         if not fundamentals and row_pillars >= 3:
             fundamentals = check_fundamentals(ticker)
+        indicator_info = sig.get("indicator_info") or (check_massive_indicators(ticker) if row_pillars >= 3 else None)
+        fda_calendar = sig.get("fda_calendar") or (check_fda_calendar(ticker, fundamentals=fundamentals) if row_pillars >= 3 else None)
         return {"ticker": ticker, "action": "WAIT", "score": row.get("score"), "reason": detail,
                 "pending_id": row.get("id"), "wait_type": "PULLBACK_WAITING",
-                "fundamentals": fundamentals}
+                "fundamentals": fundamentals, "fda_calendar": fda_calendar, "indicator_info": indicator_info, "atr_info": sig.get("atr_info"), "sentiment_info": sig.get("sentiment_info"), "macro_context": check_macro_context()}
 
     trigger = float(row.get("trigger_price") or state["armed_trigger"])
     if state["last_close"] <= trigger:
@@ -348,6 +400,8 @@ def evaluate_pending_pullback(ticker, dry_run=True, regime=None, pending=None, r
         row_pillars = 0
     if not fundamentals and row_pillars >= 3:
         fundamentals = check_fundamentals(ticker)
+    indicator_info = sig.get("indicator_info") or (check_massive_indicators(ticker) if row_pillars >= 3 else None)
+    fda_calendar = sig.get("fda_calendar") or (check_fda_calendar(ticker, fundamentals=fundamentals) if row_pillars >= 3 else None)
     return {
         "ticker": ticker,
         "action": "WAIT",
@@ -358,6 +412,11 @@ def evaluate_pending_pullback(ticker, dry_run=True, regime=None, pending=None, r
         "entry": round(trigger, 2),
         "expires_at": row.get("expires_at"),
         "fundamentals": fundamentals,
+        "fda_calendar": fda_calendar,
+        "indicator_info": indicator_info,
+        "atr_info": sig.get("atr_info"),
+        "sentiment_info": sig.get("sentiment_info"),
+        "macro_context": check_macro_context(),
     }
 
 
@@ -424,6 +483,7 @@ def evaluate_exit(lot, dry_run=True, regime=None):
 
     regime_ok, regime_detail = regime if regime is not None else check_regime()
     earnings_ctx = check_earnings_context(ticker)
+    fda_calendar = check_fda_calendar(ticker, holding=True)
     risk_off_tightened = False
     if not regime_ok and stop < entry:
         stop = entry
@@ -451,6 +511,8 @@ def evaluate_exit(lot, dry_run=True, regime=None):
             "gain_R": round(gain_R, 2), "regime_ok": regime_ok,
             "earnings_context": earnings_ctx,
             "earnings_warning": earnings_ctx.get("holding_warning_note") if earnings_ctx.get("holding_warning") else None,
+            "fda_calendar": fda_calendar,
+            "fda_warning": fda_calendar.get("holding_warning_note") if isinstance(fda_calendar, dict) and fda_calendar.get("holding_warning") else None,
         }
 
     if not dry_run:
@@ -497,12 +559,26 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
         return {"ticker": ticker, "action": "BLOCK", "reason": why}
 
     fundamentals = signal_result.get("fundamentals") or check_fundamentals(ticker)
+    indicator_info = signal_result.get("indicator_info") or check_massive_indicators(ticker)
+    confluence = evaluate_indicator_confluence(indicator_info)
+    macro_ctx = check_macro_context()
     earnings_ctx = check_earnings_context(ticker)
+    fda_calendar = signal_result.get("fda_calendar") or check_fda_calendar(ticker, fundamentals=fundamentals)
     if earnings_ctx.get("entry_blackout"):
         return {"ticker": ticker, "action": "BLOCK", "reason": earnings_ctx.get("blackout_reason"),
                 "earnings_context": earnings_ctx, "earnings_blackout": True,
                 "earnings_note": earnings_ctx.get("blackout_reason"),
-                "fundamentals": fundamentals}
+                "fundamentals": fundamentals, "indicator_info": indicator_info, "atr_info": signal_result.get("atr_info"), "sentiment_info": signal_result.get("sentiment_info"), "indicator_confluence": confluence, "macro_context": macro_ctx,
+                "fda_calendar": fda_calendar, "insider_activity": signal_result.get("insider_activity")}
+
+    if isinstance(fda_calendar, dict) and fda_calendar.get("entry_blackout"):
+        return {"ticker": ticker, "action": "BLOCK", "reason": fda_calendar.get("blackout_reason"),
+                "fda_calendar": fda_calendar, "fda_blackout": True,
+                "fda_note": fda_calendar.get("blackout_reason"),
+                "earnings_context": earnings_ctx, "fundamentals": fundamentals,
+                "indicator_info": indicator_info, "atr_info": signal_result.get("atr_info"),
+                "sentiment_info": signal_result.get("sentiment_info"), "indicator_confluence": confluence,
+                "macro_context": macro_ctx, "insider_activity": signal_result.get("insider_activity")}
 
     if pullback_override_entry is not None:
         fill = round(float(pullback_override_entry), 2)
@@ -514,7 +590,7 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
                 atlas_db.upsert_ema_retry(ticker=ticker, score=score, signal=signal_result.get("signal", ""),
                                           signal_result=signal_result, reason=state_detail)
             return {"ticker": ticker, "action": "WAIT", "reason": state_detail, "wait_type": "EMA_RETRY",
-                    "fundamentals": fundamentals}
+                    "fundamentals": fundamentals, "fda_calendar": fda_calendar, "macro_context": check_macro_context()}
         if manage_pending:
             atlas_db.delete_ema_retry(ticker)
         if state["last_close"] <= state["inband_trigger"]:
@@ -533,6 +609,13 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
                     "price": round(state["last_close"], 2),
                     "pct_over_ema": round(state["pct_over_ema"], 1),
                     "fundamentals": fundamentals,
+                    "fda_calendar": fda_calendar,
+                    "indicator_info": indicator_info,
+                    "atr_info": signal_result.get("atr_info"),
+                    "sentiment_info": signal_result.get("sentiment_info"),
+                    "indicator_confluence": confluence,
+                    "macro_context": macro_ctx,
+                    "insider_activity": signal_result.get("insider_activity"),
                 }
             trigger = round(state["armed_trigger"], 2)
             expires = _add_trading_days(current_et_market_date(), PENDING_PULLBACK_DAYS).isoformat()
@@ -555,6 +638,13 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
                 "expires_at": expires,
                 "earnings_context": earnings_ctx,
                 "fundamentals": fundamentals,
+                "fda_calendar": fda_calendar,
+                "indicator_info": indicator_info,
+                "atr_info": signal_result.get("atr_info"),
+                "sentiment_info": signal_result.get("sentiment_info"),
+                "indicator_confluence": confluence,
+                "macro_context": macro_ctx,
+                "insider_activity": signal_result.get("insider_activity"),
                 "earnings_note": (earnings_ctx.get("earnings_momentum") or {}).get("earnings_momentum_note")
                                  or (earnings_ctx.get("earnings_miss") or {}).get("earnings_miss_note")
                                  or (earnings_ctx.get("note") if earnings_ctx.get("unknown") else None),
@@ -575,7 +665,8 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
 
     equity = acct.get_equity(price_lookup=_price_lookup)
     regime_detail = str((regime or (True, ""))[1])
-    cautious = "WEAK" in regime_detail.upper() or "UNKNOWN" in regime_detail.upper() or "UNAVAILABLE" in regime_detail.upper()
+    cautious = ("WEAK" in regime_detail.upper() or "UNKNOWN" in regime_detail.upper()
+                or "UNAVAILABLE" in regime_detail.upper() or bool((macro_ctx or {}).get("cautious")))
     half = (pillars == 3) or cautious
     shares = size_position(equity, fill, stop, half=half)
     if shares <= 0:
@@ -592,6 +683,12 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
 
     risk_distance = fill - stop
     target = round(fill + (2 * risk_distance), 2)
+    confluence_confirmed = bool(pillars == 3 and confluence.get("bullish"))
+    momentum_weak = bool(pillars == 3 and confluence.get("weak"))
+    confluence_note = confluence.get("note")
+    if confluence_confirmed:
+        trig_detail = f"{trig_detail}; RSI/MACD confluence confirmed"
+
     decision = {
         "ticker": ticker, "action": "BUY", "reason": trig_detail,
         "entry": fill, "stop": stop, "target": target, "shares": shares, "cost": cost,
@@ -603,6 +700,18 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
         "analyst_rating": signal_result.get("analyst_rating"),
         "analyst_insight": signal_result.get("analyst_insight"),
         "fundamentals": fundamentals,
+        "fda_calendar": fda_calendar,
+        "fda_note": fda_calendar.get("tag") if isinstance(fda_calendar, dict) else None,
+        "indicator_info": indicator_info,
+        "atr_info": signal_result.get("atr_info"),
+        "sentiment_info": signal_result.get("sentiment_info"),
+        "indicator_confluence": confluence,
+        "confluence_confirmed": confluence_confirmed,
+        "confluence_note": confluence_note,
+        "momentum_weak": momentum_weak,
+        "decision_quality": "CONFIRMED_ACT" if confluence_confirmed else ("MOMENTUM_WEAK_ALLOWED" if momentum_weak else "NORMAL"),
+        "insider_activity": signal_result.get("insider_activity"),
+        "macro_context": macro_ctx,
         "earnings_context": earnings_ctx,
         "earnings_note": (earnings_ctx.get("earnings_momentum") or {}).get("earnings_momentum_note")
                          or (earnings_ctx.get("earnings_miss") or {}).get("earnings_miss_note")
@@ -615,9 +724,10 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
             atlas_db.open_trade(
                 ticker, fill, shares,
                 stop_loss=stop, risk_pct=decision["risk_pct"], target_price=target,
-                notes=f"Atlas v2 entry: {trig_detail}; stop {stop}; target {target}; "
+                status="PENDING_FILL",
+                notes=f"Atlas v2 entry: {trig_detail}; score {score}; signal {signal_result.get('signal', '')}; stop {stop}; target {target}; "
                       f"{'0.5%' if half else '1%'} risk on equity ${equity:,.0f}"
-                      f"{' (cautious weak-market mode)' if cautious else ''}",
+                      f"{' (cautious weak-market/macro mode)' if cautious else ''}",
             )
         except Exception as e:
             decision["action"] = "ERROR"

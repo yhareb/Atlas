@@ -30,6 +30,69 @@ if not MASSIVE_API_KEY:
 
 MASSIVE_BASE = "https://api.massive.com"
 
+
+try:
+    from atlas_audit import log_api_call as _atlas_log_api_call
+except Exception:
+    _atlas_log_api_call = None
+
+import time as _audit_time
+_REQUESTS_GET = requests.get
+
+
+def _audit_provider(endpoint):
+    text = str(endpoint or "").lower()
+    if "massive.com" in text or "polygon.io" in text:
+        return "Massive"
+    if "benzinga.com" in text:
+        return "Benzinga"
+    if "eodhd.com" in text:
+        return "EODHD"
+    return None
+
+
+def _audit_get(url, *args, **kwargs):
+    provider = _audit_provider(url)
+    start = _audit_time.perf_counter()
+    try:
+        response = _REQUESTS_GET(url, *args, **kwargs)
+        if provider and _atlas_log_api_call:
+            try:
+                latency_ms = int((_audit_time.perf_counter() - start) * 1000)
+                status = getattr(response, "status_code", None)
+                _atlas_log_api_call(
+                    provider=provider,
+                    file=os.path.basename(__file__),
+                    function=sys._getframe(1).f_code.co_name,
+                    endpoint=str(url),
+                    http_status=status,
+                    latency_ms=latency_ms,
+                    ok=bool(status is not None and 200 <= int(status) < 400),
+                    error=None,
+                    metadata=None,
+                )
+            except Exception:
+                pass
+        return response
+    except Exception as e:
+        if provider and _atlas_log_api_call:
+            try:
+                latency_ms = int((_audit_time.perf_counter() - start) * 1000)
+                _atlas_log_api_call(
+                    provider=provider,
+                    file=os.path.basename(__file__),
+                    function=sys._getframe(1).f_code.co_name,
+                    endpoint=str(url),
+                    http_status=None,
+                    latency_ms=latency_ms,
+                    ok=False,
+                    error=str(e)[:500],
+                    metadata=None,
+                )
+            except Exception:
+                pass
+        raise
+
 # =============================================================================
 # ATLAS v2 — BACKTEST-VALIDATED PARAMETERS
 # -----------------------------------------------------------------------------
@@ -47,7 +110,7 @@ MASSIVE_BASE = "https://api.massive.com"
 # 2-3 years of data — the walk-forward test showed yearly re-tuning lifts CAGR
 # from ~6% to ~14%.
 # =============================================================================
-RVOL_MIN = 2.0            # Pillar 3 threshold (was 1.2)
+RVOL_MIN = 1.5            # Pillar 3 threshold (was 1.2)
 HIGH_52W_PROX = 0.97      # Pillar 2: within 3% of 52-week high (was 0.90 of 50D)
 ATR_STOP_MULT = 1.5       # Stop = entry - 1.5*ATR (was 2.0)
 LOOKBACK_52W = 252        # trading days in ~1 year
@@ -59,7 +122,7 @@ def get_massive_aggs(ticker, days=420):
     url = f"{MASSIVE_BASE}/v2/aggs/ticker/{ticker}/range/1/day/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
     params = {"apiKey": MASSIVE_API_KEY, "adjusted": "true", "sort": "asc"}
     try:
-        r = requests.get(url, params=params, timeout=10)
+        r = _audit_get(url, params=params, timeout=10)
         if r.status_code == 200:
             data = r.json()
             if "results" in data and data["results"]:
@@ -143,7 +206,7 @@ def check_news_catalyst(ticker):
         "limit": 5
     }
     try:
-        r = requests.get(url, params=params, headers={"Accept": "application/json"}, timeout=10)
+        r = _audit_get(url, params=params, headers={"Accept": "application/json"}, timeout=10)
         if r.status_code == 200:
             data = r.json()
             results = data.get("results", [])
@@ -240,13 +303,15 @@ def check_fundamentals(ticker):
     try:
         url = f"https://eodhd.com/api/fundamentals/{ticker}.US"
         params = {"api_token": EODHD_API_KEY, "fmt": "json"}
-        r = requests.get(url, params=params, timeout=12)
+        r = _audit_get(url, params=params, timeout=12)
         if r.status_code != 200:
             result["reason"] = f"http {r.status_code}"
         else:
             data = r.json()
             highlights = data.get("Highlights") if isinstance(data, dict) else {}
             highlights = highlights if isinstance(highlights, dict) else {}
+            general = data.get("General") if isinstance(data, dict) else {}
+            general = general if isinstance(general, dict) else {}
             financials = data.get("Financials") if isinstance(data, dict) else {}
             financials = financials if isinstance(financials, dict) else {}
             _, income = _latest_financial_row(financials.get("Income_Statement", {}))
@@ -299,15 +364,378 @@ def check_fundamentals(ticker):
                 "total_debt": debt,
                 "equity": equity,
                 "debt_to_equity_derived": debt_to_equity,
+                "sector": general.get("Sector"),
+                "industry": general.get("Industry"),
             })
     except Exception as e:
         result["reason"] = str(e)[:120]
         print(f"[atlas_engine:check_fundamentals] {ticker}: {e}")
 
+    try:
+        massive_fin = check_massive_financials(ticker)
+        result["massive_financials"] = massive_fin
+        if massive_fin and massive_fin.get("status") == "ok" and massive_fin.get("tag"):
+            result["tag"] = f"{result.get('tag') or result.get('note') or '❔ fundamentals n/a'} | {massive_fin.get('tag')}"
+            result["note"] = result["tag"]
+    except Exception as e:
+        result["massive_financials_error"] = str(e)[:120]
     _FUNDAMENTALS_CACHE_MEM[cache_key] = result
     cache[cache_key] = result
     _save_fundamentals_cache(cache)
     return result
+
+
+_ANALYST_QUALITY_CACHE = {}
+_MACRO_CACHE = {}
+_INSIDER_CACHE = {}
+
+
+def _cache_path(name):
+    return f"/tmp/atlas_{name}_cache.json"
+
+
+def _read_json_cache(name):
+    try:
+        with open(_cache_path(name)) as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_json_cache(name, data):
+    try:
+        path = _cache_path(name)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f, sort_keys=True)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"[atlas_engine:{name}_cache] {e}")
+
+
+_INDICATOR_CACHE = {}
+
+
+def _indicator_values(payload):
+    if not isinstance(payload, dict):
+        return []
+    results = payload.get("results") or payload.get("values") or []
+    if isinstance(results, dict):
+        results = [results]
+    if not results:
+        return []
+    first = results[0]
+    values = first.get("values") if isinstance(first, dict) else None
+    if isinstance(values, list):
+        return values
+    return results if isinstance(results, list) else []
+
+
+def _latest_indicator_value(payload, field="value"):
+    values = _indicator_values(payload)
+    if values and isinstance(values[0], dict):
+        return values[0].get(field)
+    return None
+
+
+def evaluate_indicator_confluence(indicator_info):
+    """Decision-context RSI/MACD confluence. Never vetoes or changes risk tiers."""
+    info = indicator_info or {}
+    def fval(key):
+        try:
+            v = info.get(key)
+            return None if v in (None, "") else float(v)
+        except Exception:
+            return None
+    rsi = fval("rsi")
+    macd = fval("macd")
+    signal = fval("macd_signal")
+    hist = fval("macd_histogram")
+    prev_hist = fval("prev_macd_histogram")
+    macd_positive_cross = bool(macd is not None and signal is not None and macd >= signal)
+    macd_turning_up = bool(hist is not None and prev_hist is not None and hist > prev_hist)
+    macd_bullish = bool(macd_positive_cross or macd_turning_up or (hist is not None and hist > 0))
+    bullish = bool(rsi is not None and rsi <= 45 and macd_bullish)
+    rolling_over = bool((hist is not None and hist < 0) or (hist is not None and prev_hist is not None and hist < prev_hist))
+    weak = bool((rsi is not None and rsi > 70) or rolling_over)
+    if bullish:
+        state, note = "bullish", "✅ RSI/MACD confirmed"
+    elif weak:
+        state, note = "weak", "⚠️ momentum weak"
+    elif rsi is None and hist is None and macd is None:
+        state, note = "na", None
+    else:
+        state, note = "neutral", None
+    return {
+        "state": state,
+        "note": note,
+        "bullish": bullish,
+        "weak": weak,
+        "rsi": rsi,
+        "macd": macd,
+        "macd_signal": signal,
+        "macd_histogram": hist,
+        "prev_macd_histogram": prev_hist,
+        "macd_turning_up": macd_turning_up,
+        "macd_positive_cross": macd_positive_cross,
+    }
+
+
+def check_massive_indicators(ticker):
+    """RSI/MACD display-only context from Massive. Never affects pillars/risk."""
+    ticker = (ticker or "").upper()
+    today = current_et_market_date().isoformat()
+    cache_key = f"{today}:{ticker}"
+    if cache_key in _INDICATOR_CACHE:
+        return _INDICATOR_CACHE[cache_key]
+    cache = _read_json_cache("indicators")
+    if cache_key in cache:
+        _INDICATOR_CACHE[cache_key] = cache[cache_key]
+        return cache[cache_key]
+    result = {"ticker": ticker, "status": "na", "tag": None}
+    if not MASSIVE_API_KEY:
+        cache[cache_key] = result; _INDICATOR_CACHE[cache_key] = result; _write_json_cache("indicators", cache); return result
+    try:
+        common = {"apiKey": MASSIVE_API_KEY, "timespan": "day", "adjusted": "true", "series_type": "close", "order": "desc", "limit": 2}
+        rsi = _audit_get(f"{MASSIVE_BASE}/v1/indicators/rsi/{ticker}", params={**common, "window": 14}, timeout=10)
+        macd = _audit_get(f"{MASSIVE_BASE}/v1/indicators/macd/{ticker}", params={**common, "short_window": 12, "long_window": 26, "signal_window": 9}, timeout=10)
+        if rsi.status_code == 200:
+            result["rsi"] = _latest_indicator_value(rsi.json(), "value")
+        if macd.status_code == 200:
+            mj = macd.json()
+            macd_values = _indicator_values(mj)
+            result["macd"] = _latest_indicator_value(mj, "value")
+            result["macd_signal"] = _latest_indicator_value(mj, "signal")
+            result["macd_histogram"] = _latest_indicator_value(mj, "histogram")
+            if len(macd_values) > 1 and isinstance(macd_values[1], dict):
+                result["prev_macd_histogram"] = macd_values[1].get("histogram")
+        bits = []
+        if result.get("rsi") is not None:
+            try: bits.append(f"📉 RSI {float(result['rsi']):.0f}")
+            except Exception: pass
+        macd_val = result.get("macd_histogram") if result.get("macd_histogram") is not None else result.get("macd")
+        if macd_val is not None:
+            try: bits.append("📈 MACD+" if float(macd_val) >= 0 else "📈 MACD–")
+            except Exception: pass
+        confluence = evaluate_indicator_confluence(result)
+        if confluence.get("note"):
+            bits.append(confluence.get("note"))
+        result.update({"status": "ok" if bits else "na", "tag": " | ".join(bits) if bits else None,
+                       "confluence": confluence, "confluence_state": confluence.get("state"),
+                       "confluence_note": confluence.get("note"),
+                       "confluence_bullish": confluence.get("bullish"),
+                       "momentum_weak": confluence.get("weak")})
+    except Exception as e:
+        result["reason"] = str(e)[:120]
+        print(f"[atlas_engine:check_massive_indicators] {ticker}: {e}")
+    cache[cache_key] = result
+    _INDICATOR_CACHE[cache_key] = result
+    _write_json_cache("indicators", cache)
+    return result
+
+
+_SENTIMENT_CACHE = {}
+_ATR_CACHE = {}
+_MASSIVE_FIN_CACHE = {}
+
+
+def _latest_list_row(data):
+    if isinstance(data, list) and data:
+        return data[0]
+    if isinstance(data, dict):
+        for v in data.values():
+            if isinstance(v, list) and v:
+                return v[0]
+    return None
+
+
+def check_news_sentiment(ticker):
+    """EODHD news/sentiment context. Confidence/display only; never blocks."""
+    ticker = (ticker or "").upper()
+    today = current_et_market_date().isoformat()
+    cache_key = f"{today}:{ticker}"
+    if cache_key in _SENTIMENT_CACHE:
+        return _SENTIMENT_CACHE[cache_key]
+    cache = _read_json_cache("news_sentiment")
+    if cache_key in cache:
+        _SENTIMENT_CACHE[cache_key] = cache[cache_key]
+        return cache[cache_key]
+    result = {"ticker": ticker, "status": "na", "tag": None}
+    if not EODHD_API_KEY:
+        cache[cache_key] = result; _SENTIMENT_CACHE[cache_key] = result; _write_json_cache("news_sentiment", cache); return result
+    try:
+        sr = _audit_get("https://eodhd.com/api/sentiments", params={"api_token": EODHD_API_KEY, "fmt": "json", "s": f"{ticker}.US"}, timeout=10)
+        if sr.status_code == 200:
+            data = sr.json()
+            row = _latest_list_row(data)
+            if isinstance(row, dict):
+                score = _to_float(row.get("normalized"))
+                result.update({"status": "ok", "normalized": score, "date": row.get("date"), "count": row.get("count")})
+                if score is not None:
+                    icon = "🟢" if score >= 0 else "🔴"
+                    result["tag"] = f"{icon} {score:+.1f}"
+                    result["strong_positive"] = score >= 0.5
+        nr = _audit_get("https://eodhd.com/api/news", params={"api_token": EODHD_API_KEY, "fmt": "json", "s": f"{ticker}.US", "limit": 3}, timeout=10)
+        if nr.status_code == 200:
+            news = nr.json()
+            result["news"] = news[:3] if isinstance(news, list) else []
+            if result.get("news") and not result.get("tag"):
+                sent = (result["news"][0].get("sentiment") or {}) if isinstance(result["news"][0], dict) else {}
+                pol = _to_float(sent.get("polarity"))
+                if pol is not None:
+                    result["tag"] = f"{'🟢' if pol >= 0 else '🔴'} {pol:+.1f}"
+    except Exception as e:
+        result["reason"] = str(e)[:120]
+        print(f"[atlas_engine:check_news_sentiment] {ticker}: {e}")
+    cache[cache_key] = result; _SENTIMENT_CACHE[cache_key] = result; _write_json_cache("news_sentiment", cache); return result
+
+
+def check_eodhd_atr(ticker):
+    """EODHD ATR display context only. Does not alter stops/exits."""
+    ticker = (ticker or "").upper(); today = current_et_market_date().isoformat(); cache_key=f"{today}:{ticker}"
+    if cache_key in _ATR_CACHE: return _ATR_CACHE[cache_key]
+    cache=_read_json_cache("eodhd_atr")
+    if cache_key in cache: _ATR_CACHE[cache_key]=cache[cache_key]; return cache[cache_key]
+    result={"ticker":ticker,"status":"na","tag":None}
+    if not EODHD_API_KEY:
+        cache[cache_key]=result; _ATR_CACHE[cache_key]=result; _write_json_cache("eodhd_atr",cache); return result
+    try:
+        start=(current_et_market_date()-timedelta(days=45)).isoformat()
+        r=_audit_get(f"https://eodhd.com/api/technical/{ticker}.US", params={"api_token":EODHD_API_KEY,"fmt":"json","function":"atr","period":14,"from":start,"to":today}, timeout=10)
+        if r.status_code==200:
+            rows=r.json()
+            row=rows[-1] if isinstance(rows,list) and rows else None
+            if isinstance(row,dict):
+                atr=_to_float(row.get("atr"))
+                result.update({"status":"ok","atr":atr,"date":row.get("date"),"tag":f"ATR ${atr:.0f}" if atr is not None else None})
+    except Exception as e:
+        result["reason"]=str(e)[:120]
+        print(f"[atlas_engine:check_eodhd_atr] {ticker}: {e}")
+    cache[cache_key]=result; _ATR_CACHE[cache_key]=result; _write_json_cache("eodhd_atr",cache); return result
+
+
+def check_massive_financials(ticker):
+    """Massive financials enrichment for soft fundamentals. Never blocks."""
+    ticker=(ticker or "").upper(); today=current_et_market_date().isoformat(); cache_key=f"{today}:{ticker}"
+    if cache_key in _MASSIVE_FIN_CACHE: return _MASSIVE_FIN_CACHE[cache_key]
+    cache=_read_json_cache("massive_financials")
+    if cache_key in cache: _MASSIVE_FIN_CACHE[cache_key]=cache[cache_key]; return cache[cache_key]
+    result={"ticker":ticker,"status":"na","tag":None}
+    if not MASSIVE_API_KEY:
+        cache[cache_key]=result; _MASSIVE_FIN_CACHE[cache_key]=result; _write_json_cache("massive_financials",cache); return result
+    try:
+        r=_audit_get(f"{MASSIVE_BASE}/vX/reference/financials", params={"apiKey":MASSIVE_API_KEY,"ticker":ticker,"timeframe":"ttm","limit":1}, timeout=10)
+        if r.status_code==200:
+            rows=(r.json().get("results") or [])
+            if rows:
+                fin=rows[0].get("financials") or {}
+                inc=fin.get("income_statement") or {}
+                bal=fin.get("balance_sheet") or {}
+                rev=((inc.get("revenues") or {}).get("value"))
+                ni=((inc.get("net_income_loss") or inc.get("net_income" ) or {}).get("value"))
+                liab=((bal.get("liabilities") or {}).get("value"))
+                equity=((bal.get("equity") or bal.get("stockholders_equity") or {}).get("value"))
+                margin=(float(ni)/float(rev)) if ni is not None and rev else None
+                de=(float(liab)/float(equity)) if liab is not None and equity not in (None,0) else None
+                result.update({"status":"ok","revenue":rev,"net_income":ni,"net_margin":margin,"debt_equity_proxy":de,
+                               "tag":f"fin margin {margin*100:.0f}%" if margin is not None else None})
+    except Exception as e:
+        result["reason"]=str(e)[:120]
+        print(f"[atlas_engine:check_massive_financials] {ticker}: {e}")
+    cache[cache_key]=result; _MASSIVE_FIN_CACHE[cache_key]=result; _write_json_cache("massive_financials",cache); return result
+
+
+def check_analyst_quality(benzinga_analyst_id, benzinga_firm_id=None):
+    """Lookup Benzinga analyst quality by ratings.benzinga_analyst_id -> analysts.benzinga_id."""
+    if not benzinga_analyst_id or not MASSIVE_API_KEY:
+        return None
+    today = current_et_market_date().isoformat()
+    cache_key = f"{today}:{benzinga_analyst_id}"
+    if cache_key in _ANALYST_QUALITY_CACHE:
+        return _ANALYST_QUALITY_CACHE[cache_key]
+    cache = _read_json_cache("analyst_quality")
+    if cache_key in cache:
+        _ANALYST_QUALITY_CACHE[cache_key] = cache[cache_key]
+        return cache[cache_key]
+    quality = None
+    try:
+        r = _audit_get(
+            f"{MASSIVE_BASE}/benzinga/v1/analysts",
+            params={"apiKey": MASSIVE_API_KEY, "benzinga_id": benzinga_analyst_id, "limit": 1},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            rows = r.json().get("results", [])
+            if rows:
+                row = dict(rows[0])
+                firm_match = True
+                if benzinga_firm_id and row.get("benzinga_firm_id"):
+                    firm_match = str(row.get("benzinga_firm_id")) == str(benzinga_firm_id)
+                success = _to_float(row.get("overall_success_rate"))
+                smart = _to_float(row.get("smart_score"))
+                top = bool((success is not None and success >= 70) or (smart is not None and smart >= 80))
+                quality = {
+                    "benzinga_id": row.get("benzinga_id"),
+                    "benzinga_firm_id": row.get("benzinga_firm_id"),
+                    "firm_name": row.get("firm_name"),
+                    "full_name": row.get("full_name"),
+                    "smart_score": smart,
+                    "overall_success_rate": success,
+                    "overall_avg_return": _to_float(row.get("overall_avg_return")),
+                    "total_ratings": _to_float(row.get("total_ratings")),
+                    "firm_match": firm_match,
+                    "top_analyst": top,
+                    "summary": f"🏅 top-analyst backed ({success:.0f}%)" if top and success is not None else None,
+                }
+    except Exception as e:
+        print(f"[atlas_engine:check_analyst_quality] {benzinga_analyst_id}: {e}")
+    cache[cache_key] = quality
+    _ANALYST_QUALITY_CACHE[cache_key] = quality
+    _write_json_cache("analyst_quality", cache)
+    return quality
+
+
+def check_macro_context():
+    """Daily EODHD US macro calendar. High-impact Fed/CPI day => cautious sizing, never a block."""
+    today = current_et_market_date()
+    cache_key = today.isoformat()
+    if cache_key in _MACRO_CACHE:
+        return _MACRO_CACHE[cache_key]
+    cache = _read_json_cache("macro")
+    if cache_key in cache:
+        _MACRO_CACHE[cache_key] = cache[cache_key]
+        return cache[cache_key]
+    ctx = {"date": cache_key, "status": "na", "cautious": False, "note": "❔ macro n/a", "events": []}
+    if not EODHD_API_KEY:
+        cache[cache_key] = ctx; _MACRO_CACHE[cache_key] = ctx; _write_json_cache("macro", cache); return ctx
+    try:
+        r = _audit_get(
+            "https://eodhd.com/api/economic-events",
+            params={"api_token": EODHD_API_KEY, "fmt": "json", "from": cache_key, "to": cache_key, "country": "US"},
+            timeout=12,
+        )
+        if r.status_code == 200:
+            rows = r.json()
+            allow = ("fed", "fomc", "federal reserve", "cpi", "consumer price index")
+            events = []
+            for row in rows if isinstance(rows, list) else []:
+                if str(row.get("country") or "").upper() != "US":
+                    continue
+                typ = str(row.get("type") or "")
+                if any(word in typ.lower() for word in allow):
+                    events.append({"type": typ, "date": row.get("date"), "country": row.get("country")})
+            ctx = {"date": cache_key, "status": "ok", "cautious": bool(events),
+                   "note": "⚠️ Fed/CPI day — cautious" if events else "", "events": events}
+        else:
+            ctx["reason"] = f"http {r.status_code}"
+    except Exception as e:
+        ctx["reason"] = str(e)[:120]
+        print(f"[atlas_engine:check_macro_context] {e}")
+    cache[cache_key] = ctx
+    _MACRO_CACHE[cache_key] = ctx
+    _write_json_cache("macro", cache)
+    return ctx
 
 
 def check_analyst_ratings(ticker):
@@ -320,7 +748,7 @@ def check_analyst_ratings(ticker):
         "limit": 3
     }
     try:
-        r = requests.get(url, params=params, timeout=10)
+        r = _audit_get(url, params=params, timeout=10)
         if r.status_code == 200:
             data = r.json()
             results = data.get("results", [])
@@ -341,8 +769,12 @@ def check_analyst_ratings(ticker):
                 note = f"{rating_action} by {firm} → PT {_fmt_pt(pt)}"
                 if pt_raised:
                     note += " (PT raised)"
+                analyst_quality = check_analyst_quality(top.get("benzinga_analyst_id"), top.get("benzinga_firm_id"))
                 meta = {
                     "firm": firm,
+                    "analyst": top.get("analyst"),
+                    "benzinga_analyst_id": top.get("benzinga_analyst_id"),
+                    "benzinga_firm_id": top.get("benzinga_firm_id"),
                     "rating": top.get("rating"),
                     "rating_action": top.get("rating_action"),
                     "price_target": pt,
@@ -351,6 +783,8 @@ def check_analyst_ratings(ticker):
                     "price_percent_change": top.get("price_percent_change"),
                     "date": top.get("date"),
                     "pt_raised": pt_raised,
+                    "analyst_quality": analyst_quality,
+                    "top_analyst_backed": bool((analyst_quality or {}).get("top_analyst")),
                     "note": note,
                 }
                 return True, note, meta
@@ -364,7 +798,7 @@ def check_analyst_insights(ticker):
     params = {"apiKey": MASSIVE_API_KEY, "ticker": ticker, "limit": 5}
     bullish = {"buy", "overweight", "outperform", "positive"}
     try:
-        r = requests.get(url, params=params, timeout=10)
+        r = _audit_get(url, params=params, timeout=10)
         if r.status_code == 200:
             data = r.json()
             results = data.get("results", [])
@@ -406,6 +840,190 @@ def check_analyst_insights(ticker):
 _EARNINGS_CACHE = {}
 
 
+def _date_range(start, end):
+    cur = start
+    while cur <= end:
+        yield cur
+        cur += datetime.timedelta(days=1)
+
+
+_FDA_CACHE_MEM = {}
+_FDA_CACHE_NAME = "fda_calendar"
+_FDA_SECTOR_CACHE_NAME = "fda_sector"
+_FDA_BIOTECH_KEYWORDS = ("HEALTHCARE", "HEALTH CARE", "BIOTECH", "BIOTECHNOLOGY", "DRUG", "PHARMA", "PHARMACEUTICAL", "MEDICAL", "THERAPEUTIC")
+_FDA_POSITIVE_WORDS = ("APPROVAL", "APPROVED", "POSITIVE FEEDBACK", "CLEARANCE", "CLEARED", "GRANTED", "ACCEPTED", "BREAKTHROUGH THERAPY", " BTD")
+_FDA_NEGATIVE_WORDS = ("COMPLETE RESPONSE LETTER", " CRL", "REJECTED", "DENIED", "NEGATIVE FEEDBACK", "FAILED")
+_FDA_UPCOMING_WORDS = ("PDUFA", "ADCOM", "ADVISORY COMMITTEE", "DECISION", "ACTION DATE", "TARGET DATE", "PENDING", "UNDER REVIEW", "NDA", "BLA")
+
+
+def _safe_date(text):
+    if not text:
+        return None
+    try:
+        return datetime.date.fromisoformat(str(text)[:10])
+    except Exception:
+        return None
+
+
+def _fda_symbols(row):
+    symbols = []
+    for company in (row.get("companies") or []):
+        for sec in (company.get("securities") or []):
+            sym = str(sec.get("symbol") or "").upper().strip()
+            if sym:
+                symbols.append(sym)
+    return sorted(set(symbols))
+
+
+def _fda_text(row):
+    drug = row.get("drug") or {}
+    bits = [row.get("event_type"), row.get("status"), row.get("outcome"), drug.get("name")]
+    ind = drug.get("indication_symptom")
+    if isinstance(ind, list):
+        bits += ind
+    elif ind:
+        bits.append(ind)
+    return " ".join(str(x) for x in bits if x).upper()
+
+
+def _classify_fda_event(row):
+    text = _fda_text(row)
+    if any(w in text for w in _FDA_NEGATIVE_WORDS):
+        return "past_negative"
+    if any(w in text for w in _FDA_POSITIVE_WORDS):
+        return "past_positive"
+    if row.get("target_date") or any(w in text for w in _FDA_UPCOMING_WORDS):
+        return "upcoming_binary"
+    return "ambiguous"
+
+
+def _fda_sector_info(ticker, fundamentals=None):
+    ticker = (ticker or "").upper()
+    if isinstance(fundamentals, dict):
+        sector = fundamentals.get("sector")
+        industry = fundamentals.get("industry")
+        if sector or industry:
+            return {"sector": sector, "industry": industry}
+    today = current_et_market_date().isoformat()
+    key = f"{today}:{ticker}"
+    cache = _read_json_cache(_FDA_SECTOR_CACHE_NAME)
+    if key in cache:
+        return cache[key]
+    info = {"sector": None, "industry": None}
+    if EODHD_API_KEY:
+        try:
+            r = _audit_get(
+                f"https://eodhd.com/api/fundamentals/{ticker}.US",
+                params={"api_token": EODHD_API_KEY, "fmt": "json"}, timeout=10,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                general = data.get("General") if isinstance(data, dict) else {}
+                if isinstance(general, dict):
+                    info = {"sector": general.get("Sector"), "industry": general.get("Industry")}
+        except Exception as e:
+            print(f"[atlas_engine:fda_sector] {ticker}: {e}")
+    cache[key] = info
+    _write_json_cache(_FDA_SECTOR_CACHE_NAME, cache)
+    return info
+
+
+def _is_biotech_sector(sector_info):
+    text = f"{(sector_info or {}).get('sector') or ''} {(sector_info or {}).get('industry') or ''}".upper()
+    return any(k in text for k in _FDA_BIOTECH_KEYWORDS)
+
+
+def _load_fda_calendar_window():
+    today = current_et_market_date()
+    start_day = today - datetime.timedelta(days=30)
+    end_day = today + datetime.timedelta(days=60)
+    key = f"{today.isoformat()}:{start_day.isoformat()}:{end_day.isoformat()}"
+    if key in _FDA_CACHE_MEM:
+        return _FDA_CACHE_MEM[key]
+    cache = _read_json_cache(_FDA_CACHE_NAME)
+    if key in cache:
+        _FDA_CACHE_MEM[key] = cache[key]
+        return cache[key]
+    rows = []
+    status = "na"
+    note = None
+    if not BENZINGA_API_KEY:
+        note = "missing Benzinga key"
+    else:
+        try:
+            r = _audit_get(
+                "https://api.benzinga.com/api/v2.1/calendar/fda",
+                params={"token": BENZINGA_API_KEY, "dateFrom": start_day.isoformat(), "dateTo": end_day.isoformat(), "limit": 200},
+                headers={"Accept": "application/json"}, timeout=15,
+            )
+            status = f"http_{r.status_code}"
+            if r.status_code == 200:
+                data = r.json()
+                raw = data.get("fda") if isinstance(data, dict) else data
+                rows = raw if isinstance(raw, list) else []
+                status = "ok"
+            else:
+                note = f"http {r.status_code}"
+        except Exception as e:
+            note = str(e)[:120]
+            print(f"[atlas_engine:fda_calendar] {e}")
+    payload = {"status": status, "note": note, "rows": rows}
+    cache[key] = payload
+    _write_json_cache(_FDA_CACHE_NAME, cache)
+    _FDA_CACHE_MEM[key] = payload
+    return payload
+
+
+def check_fda_calendar(ticker, fundamentals=None, holding=False):
+    # Benzinga FDA Calendar context. Entry blackout only; never exits/sizes/scores.
+    ticker = (ticker or "").upper()
+    sector_info = _fda_sector_info(ticker, fundamentals=fundamentals)
+    if not _is_biotech_sector(sector_info):
+        return {"ticker": ticker, "status": "skipped", "biotech": False, "tag": None,
+                "sector": sector_info.get("sector"), "industry": sector_info.get("industry")}
+
+    payload = _load_fda_calendar_window()
+    result = {"ticker": ticker, "status": payload.get("status"), "biotech": True,
+              "sector": sector_info.get("sector"), "industry": sector_info.get("industry"),
+              "events": [], "tag": None}
+    if payload.get("status") != "ok":
+        result.update({"note": "🧬 FDA date unknown", "date_unknown": True, "tag": "🧬 FDA date unknown"})
+        return result
+
+    today = current_et_market_date()
+    for row in payload.get("rows") or []:
+        symbols = _fda_symbols(row)
+        if ticker not in symbols:
+            continue
+        event_day = _safe_date(row.get("target_date") or row.get("date"))
+        cls = _classify_fda_event(row)
+        days = trading_days_between(today, event_day) if event_day else None
+        drug = row.get("drug") or {}
+        event = {
+            "event_type": row.get("event_type"), "class": cls, "date": event_day.isoformat() if event_day else None,
+            "days": days, "drug": drug.get("name"), "status": row.get("status"),
+            "outcome": row.get("outcome"), "symbols": symbols,
+        }
+        result["events"].append(event)
+        if event_day and days is not None and days > 0 and days <= 3 and cls == "upcoming_binary":
+            note = f"🧬 FDA decision in {days}d — no new entry"
+            result.update({"entry_blackout": True, "blackout_reason": note, "entry_blackout_note": note, "tag": note, "nearest_event": event})
+        elif event_day and days is not None and days > 0 and days <= 5 and cls == "upcoming_binary" and holding:
+            note = f"🧬 FDA in {days}d"
+            result.update({"holding_warning": True, "holding_warning_note": note, "tag": note, "nearest_event": event})
+        elif event_day and (today - event_day).days >= 0 and (today - event_day).days <= 14 and cls == "past_positive" and not result.get("entry_blackout"):
+            note = "🧬 FDA approval"
+            result.update({"positive_outcome": True, "positive_outcome_note": note, "tag": note, "nearest_event": event})
+        elif event_day and (today - event_day).days >= 0 and (today - event_day).days <= 14 and cls == "past_negative" and not result.get("entry_blackout") and not result.get("positive_outcome"):
+            note = "🧬 FDA caution"
+            result.update({"negative_outcome": True, "negative_outcome_note": note, "tag": note, "nearest_event": event})
+        elif (not event_day or cls == "ambiguous") and not result.get("entry_blackout") and not result.get("tag"):
+            result.update({"date_unknown": True, "note": "🧬 FDA date unknown", "tag": "🧬 FDA date unknown", "nearest_event": event})
+    if not result["events"]:
+        result.update({"status": "none", "tag": None})
+    return result
+
+
 def _parse_earnings_date(value):
     try:
         return datetime.date.fromisoformat(str(value)[:10])
@@ -422,7 +1040,7 @@ def _earnings_rows(ticker, start_day, end_day, limit=10):
         "date.lte": end_day.strftime('%Y-%m-%d'),
         "limit": limit,
     }
-    r = requests.get(url, params=params, timeout=10)
+    r = _audit_get(url, params=params, timeout=10)
     if r.status_code != 200:
         return []
     data = r.json()
@@ -493,6 +1111,23 @@ def check_earnings_context(ticker):
             elif surprise is not None:
                 row["earnings_miss_note"] = f"📊 Missed {pct:.0f}% EPS" if pct is not None else "📊 EPS missed"
                 ctx["earnings_miss"] = row
+
+            rev_surprise = row.get("revenue_surprise")
+            try:
+                rev_pct = float(row.get("revenue_surprise_percent")) * 100
+            except Exception:
+                rev_pct = None
+            row["revenue_surprise_percent_display"] = rev_pct
+            try:
+                rev_positive = float(rev_surprise) > 0
+            except Exception:
+                rev_positive = False
+            if rev_positive:
+                row["revenue_momentum_note"] = f"💰 Rev beat +{rev_pct:.0f}%" if rev_pct is not None else "💰 Rev beat"
+                ctx["revenue_momentum"] = row
+            elif rev_surprise is not None:
+                row["revenue_miss_note"] = f"💰 Rev miss {rev_pct:.0f}%" if rev_pct is not None else "💰 Rev miss"
+                ctx["revenue_miss"] = row
     except Exception as e:
         print(f"[atlas_engine:check_earnings_context:recent] {ticker}: {e}")
     _EARNINGS_CACHE[cache_key] = ctx
@@ -507,29 +1142,68 @@ def check_earnings_risk(ticker):
     return False, None
 
 def check_insider_buying(ticker):
+    """EODHD Form-4 real open-market buys only. Daily cached; confidence tag only."""
+    ticker = (ticker or "").upper()
+    today = current_et_market_date().isoformat()
+    cache_key = f"{today}:{ticker}"
+    if cache_key in _INSIDER_CACHE:
+        cached = _INSIDER_CACHE[cache_key]
+        return bool((cached or {}).get("hit")), cached
+    cache = _read_json_cache("insider_buys")
+    if cache_key in cache:
+        _INSIDER_CACHE[cache_key] = cache[cache_key]
+        cached = cache[cache_key]
+        return bool((cached or {}).get("hit")), cached
+    result = {"ticker": ticker, "hit": False, "note": None, "buys": []}
     if not EODHD_API_KEY:
-        return False, None
+        cache[cache_key] = result; _INSIDER_CACHE[cache_key] = result; _write_json_cache("insider_buys", cache); return False, result
     url = f"https://eodhd.com/api/sec-filings/{ticker}/form4"
     params = {"api_token": EODHD_API_KEY, "fmt": "json", "page[limit]": 10}
     try:
-        r = requests.get(url, params=params, timeout=10 )
+        r = _audit_get(url, params=params, timeout=12)
         if r.status_code == 200:
             data = r.json()
-            filings = data.get("data", [])
-            cutoff = datetime.date.today() - timedelta(days=30)
+            filings = data.get("data", []) if isinstance(data, dict) else []
+            cutoff = current_et_market_date() - timedelta(days=90)
             buys = []
             for filing in filings:
-                filed = datetime.date.fromisoformat(filing.get("filed_at", "2000-01-01"))
-                if filed >= cutoff:
-                    for tx in filing.get("non_derivative", []):
-                        if tx.get("transaction_code") == "P" and tx.get("acquired_or_disposed") == "A":
-                            buys.append(tx)
+                for tx in filing.get("non_derivative", []) or []:
+                    if tx.get("transaction_code") != "P" or tx.get("acquired_or_disposed") != "A":
+                        continue
+                    try:
+                        tx_date = datetime.date.fromisoformat(str(tx.get("transaction_date"))[:10])
+                    except Exception:
+                        try:
+                            tx_date = datetime.date.fromisoformat(str(filing.get("period_of_report") or filing.get("filed_at"))[:10])
+                        except Exception:
+                            continue
+                    if tx_date < cutoff:
+                        continue
+                    price = _to_float(tx.get("price_per_share")) or 0
+                    value = _to_float(tx.get("total_value")) or 0
+                    shares = _to_float(tx.get("shares_amount")) or 0
+                    if price <= 0 and value <= 0:
+                        continue
+                    role = tx.get("officer_title") or ("Director" if tx.get("is_director") else "Officer" if tx.get("is_officer") else "Insider")
+                    buys.append({
+                        "date": tx_date.isoformat(), "name": tx.get("reporting_owner_name"),
+                        "role": role, "shares": shares, "value": value,
+                        "is_officer": bool(tx.get("is_officer")), "is_director": bool(tx.get("is_director")),
+                    })
             if buys:
-                total_value = sum(b.get("total_value", 0) or 0 for b in buys)
-                return True, f"{len(buys)} open-market purchase(s), ~${total_value:,.0f} total"
-    except:
-        pass
-    return False, None
+                total_value = sum(b.get("value", 0) or 0 for b in buys)
+                notable = [b for b in buys if any(x in str(b.get("role") or "").upper() for x in ("CEO", "CFO", "CHIEF", "PRESIDENT")) or b.get("is_officer")]
+                note = f"🏦 insider buying ({len(buys)} buy, ${total_value:,.0f})"
+                if notable:
+                    note = f"🏦 insider buying ({notable[0].get('role')}, ${total_value:,.0f})"
+                result = {"ticker": ticker, "hit": True, "note": note, "buys": buys[:5], "total_value": total_value}
+    except Exception as e:
+        result["reason"] = str(e)[:120]
+        print(f"[atlas_engine:check_insider_buying] {ticker}: {e}")
+    cache[cache_key] = result
+    _INSIDER_CACHE[cache_key] = result
+    _write_json_cache("insider_buys", cache)
+    return bool(result.get("hit")), result
 
 def analyze_ticker(ticker, regime=None):
     aggs = get_massive_aggs(ticker)
@@ -610,6 +1284,13 @@ def analyze_ticker(ticker, regime=None):
     news_hit, news_title = check_news_catalyst(ticker)
     analyst_hit, analyst_detail, analyst_rating_meta = check_analyst_ratings(ticker)
     insight_hit, analyst_insight = check_analyst_insights(ticker)
+    if insight_hit and analyst_insight and (analyst_rating_meta or {}).get("top_analyst_backed"):
+        q = (analyst_rating_meta or {}).get("analyst_quality") or {}
+        qtag = q.get("summary") or "🏅 top-analyst backed"
+        analyst_insight["plain_summary"] = analyst_insight.get("summary")
+        analyst_insight["summary"] = f"{qtag} — {analyst_insight.get('summary')}"
+        analyst_insight["top_analyst_backed"] = True
+        analyst_insight["analyst_quality"] = q
     catalyst_reason = None
     if analyst_hit:
         catalyst_reason = analyst_detail
@@ -622,18 +1303,30 @@ def analyze_ticker(ticker, regime=None):
     else:
         pillar_details.append("❌ Catalyst: NO")
 
-    # Fundamentals soft flag — label only, only for 3/4 or 4/4 candidates.
+    # Fundamentals / indicators / ATR / sentiment / FDA are labels only, only for 3/4 or 4/4 candidates.
     fundamentals = check_fundamentals(ticker) if pillars_met >= 3 else None
+    indicator_info = check_massive_indicators(ticker) if pillars_met >= 3 else None
+    atr_info = check_eodhd_atr(ticker) if pillars_met >= 3 else None
+    sentiment_info = check_news_sentiment(ticker) if pillars_met >= 3 else None
+    fda_calendar = check_fda_calendar(ticker, fundamentals=fundamentals) if pillars_met >= 3 else None
+    if pillars_met >= 3 and sentiment_info and sentiment_info.get("strong_positive"):
+        warnings.append(f"{sentiment_info.get('tag')} news sentiment")
+    if pillars_met >= 3 and fda_calendar and fda_calendar.get("positive_outcome"):
+        warnings.append(fda_calendar.get("positive_outcome_note") or "🧬 FDA approval")
+    elif pillars_met >= 3 and fda_calendar and fda_calendar.get("negative_outcome"):
+        warnings.append(fda_calendar.get("negative_outcome_note") or "🧬 FDA caution")
 
     # Earnings Risk Warning
     earnings_ctx = check_earnings_context(ticker)
     if earnings_ctx.get("next"):
         warnings.append(f"⚠️ Earnings in {earnings_ctx.get('days_to_next')} trading days ({earnings_ctx['next'].get('date')}) — elevated risk")
 
-    # Insider Buying Signal
-    insider_hit, insider_detail = check_insider_buying(ticker)
-    if insider_hit:
-        warnings.append(f"🔥 Insider Buying (last 30 days): {insider_detail}")
+    # Insider Buying Signal — confidence tag only, only for 3/4+ candidates.
+    insider_activity = None
+    if pillars_met >= 3:
+        insider_hit, insider_activity = check_insider_buying(ticker)
+        if insider_hit:
+            warnings.append(str((insider_activity or {}).get("note") or "🏦 insider buying"))
 
     # v2: Market-regime gate. SPY below its 50SMA => downgrade BUYs to WATCH.
     if regime is None:
@@ -669,6 +1362,11 @@ def analyze_ticker(ticker, regime=None):
         "analyst_rating": analyst_rating_meta,
         "analyst_insight": analyst_insight if insight_hit else None,
         "fundamentals": fundamentals,
+        "indicator_info": indicator_info,
+        "atr_info": atr_info,
+        "sentiment_info": sentiment_info,
+        "fda_calendar": fda_calendar,
+        "insider_activity": insider_activity,
         "earnings_context": earnings_ctx,
         "warnings": warnings,
         "regime": {"risk_on": regime_ok, "detail": regime_detail},
