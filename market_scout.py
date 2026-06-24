@@ -36,6 +36,8 @@ EODHD_API_KEY = os.environ.get("EODHD_API_KEY") or os.environ.get("EODHD_TOKEN")
 RS_MIN_SCORE = 1.5
 RS_SCAN_UNIVERSE = 100
 RS_TOP_N = 20
+REVERSE_SPLIT_LOOKBACK_DAYS = 30
+_REVERSE_SPLIT_CACHE = {}
 
 
 try:
@@ -99,6 +101,68 @@ def _audit_get(url, *args, **kwargs):
             except Exception:
                 pass
         raise
+
+
+def _parse_split_ratio(split_value):
+    txt = str(split_value or "").strip()
+    if not txt or "/" not in txt:
+        return None
+    try:
+        left, right = txt.split("/", 1)
+        return float(left), float(right)
+    except Exception:
+        return None
+
+
+def has_recent_reverse_split(sym, days=REVERSE_SPLIT_LOOKBACK_DAYS):
+    """True if EODHD split data shows a reverse split in the recent lookback."""
+    s = (sym or "").strip().upper()
+    if not s or not EODHD_API_KEY:
+        return False
+    today = datetime.date.today()
+    cache_key = f"{s}:{today.isoformat()}:{int(days)}"
+    if cache_key in _REVERSE_SPLIT_CACHE:
+        return _REVERSE_SPLIT_CACHE[cache_key]
+    start = (today - datetime.timedelta(days=int(days))).isoformat()
+    try:
+        r = _audit_get(
+            f"https://eodhd.com/api/splits/{s}.US",
+            params={"api_token": EODHD_API_KEY, "fmt": "json", "from": start, "to": today.isoformat()},
+            headers={"Accept": "application/json"}, timeout=8,
+        )
+        if r.status_code != 200:
+            _REVERSE_SPLIT_CACHE[cache_key] = False
+            return False
+        rows = r.json()
+        if not isinstance(rows, list):
+            _REVERSE_SPLIT_CACHE[cache_key] = False
+            return False
+        for row in rows:
+            ratio = _parse_split_ratio((row or {}).get("split"))
+            if not ratio:
+                continue
+            new_shares, old_shares = ratio
+            # EODHD reverse split example: 1.000000/6.000000 = 1 new share for 6 old shares.
+            if new_shares > 0 and old_shares > 0 and new_shares < old_shares:
+                _REVERSE_SPLIT_CACHE[cache_key] = True
+                return True
+    except Exception as e:
+        print(f"[market_scout] reverse split check failed for {s}: {e}")
+    _REVERSE_SPLIT_CACHE[cache_key] = False
+    return False
+
+
+def _add_candidate(sym, tickers, mover_order=None):
+    s = (sym or "").strip().upper()
+    if not _is_tradeable_equity(s):
+        return False
+    if has_recent_reverse_split(s):
+        print(f"[market_scout] excluded {s}: reverse split within {REVERSE_SPLIT_LOOKBACK_DAYS}d")
+        return False
+    tickers.add(s)
+    if mover_order is not None and s not in mover_order:
+        mover_order.append(s)
+    return True
 
 
 def discover_rs_leaders(top_n=RS_TOP_N):
@@ -174,7 +238,7 @@ def discover_tickers():
                 for item in response.json():
                     for stock in item.get("stocks", []):
                         if stock.get("name"):
-                            tickers.add(stock["name"].upper())
+                            _add_candidate(stock["name"], tickers)
         except Exception as e:
             print(f"[market_scout] Benzinga discovery failed: {e}")
             
@@ -192,9 +256,7 @@ def discover_tickers():
                     sym = (t.get("ticker") or "").upper()
                     price = (t.get("day") or {}).get("c") or 0
                     if sym and price >= 5:
-                        tickers.add(sym)
-                        if sym not in mover_order:
-                            mover_order.append(sym)
+                        _add_candidate(sym, tickers, mover_order)
         except Exception as e:
             print(f"[market_scout] gainers feed failed: {e}")
 
@@ -220,9 +282,7 @@ def discover_tickers():
                         volume_rows.append((float(volume), t))
                 for _volume, t in sorted(volume_rows, key=lambda item: item[0], reverse=True)[:15]:
                     sym = (t.get("ticker") or "").upper()
-                    tickers.add(sym)
-                    if sym not in mover_order:
-                        mover_order.append(sym)
+                    _add_candidate(sym, tickers, mover_order)
         except Exception as e:
             print(f"[market_scout] most-active snapshot failed: {e}")
 
@@ -231,9 +291,7 @@ def discover_tickers():
         rs_leaders = discover_rs_leaders(top_n=RS_TOP_N)
         for sym in rs_leaders:
             if _is_tradeable_equity(sym):
-                tickers.add(sym)
-                if sym not in mover_order:
-                    mover_order.append(sym)
+                _add_candidate(sym, tickers, mover_order)
     except Exception:
         pass
 
@@ -252,18 +310,19 @@ def discover_tickers():
                     sym = (row.get("code") or "").upper()
                     price = row.get("adjusted_close") or 0
                     if sym and price and float(price) >= 5:
-                        tickers.add(sym)
-                        if sym not in mover_order:
-                            mover_order.append(sym)
+                        _add_candidate(sym, tickers, mover_order)
         except Exception as e:
             print(f"[market_scout] EODHD screener failed: {e}")
 
     # Fallback high-liquidity universe if no news is found (e.g. weekend/pre-market)
     if not tickers:
-        tickers = {"NVDA", "TSLA", "AAPL", "AMD", "MSFT", "META", "AMZN", "GOOGL", "NFLX", "SMCI", "PLTR", "COIN"}
+        fallback = {"NVDA", "TSLA", "AAPL", "AMD", "MSFT", "META", "AMZN", "GOOGL", "NFLX", "SMCI", "PLTR", "COIN"}
+        tickers = set()
+        for sym in fallback:
+            _add_candidate(sym, tickers)
         
-    movers_first = [t for t in mover_order if _is_tradeable_equity(t)]
-    news_rest = [t for t in tickers if _is_tradeable_equity(t) and t not in movers_first]
+    movers_first = [t for t in mover_order if _is_tradeable_equity(t) and not has_recent_reverse_split(t)]
+    news_rest = [t for t in tickers if _is_tradeable_equity(t) and not has_recent_reverse_split(t) and t not in movers_first]
     ordered = movers_first + news_rest
     return ordered[:40]   # movers guaranteed in; cap raised slightly to 40
 

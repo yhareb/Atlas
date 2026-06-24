@@ -2,9 +2,11 @@
 import os
 import sys
 import json
+import re
 import requests
 import datetime
 from datetime import timedelta
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, "/Users/yasser/scripts")
 import atlas_db
@@ -56,10 +58,17 @@ def _audit_get(url, *args, **kwargs):
     start = _audit_time.perf_counter()
     try:
         response = _REQUESTS_GET(url, *args, **kwargs)
-        if provider and _atlas_log_api_call:
+        status = getattr(response, "status_code", None)
+        endpoint_text = str(url or "").lower()
+        expected_missing_form4 = (
+            provider == "EODHD"
+            and status == 404
+            and "sec-filings" in endpoint_text
+            and "/form4" in endpoint_text
+        )
+        if provider and _atlas_log_api_call and not expected_missing_form4:
             try:
                 latency_ms = int((_audit_time.perf_counter() - start) * 1000)
-                status = getattr(response, "status_code", None)
                 _atlas_log_api_call(
                     provider=provider,
                     file=os.path.basename(__file__),
@@ -168,6 +177,20 @@ def _normal_macro_sentiment(value):
     return value if value in {"NEUTRAL", "CAUTION", "RISK_OFF"} else "NEUTRAL"
 
 
+def _sanitize_macro_reason(reason):
+    """Keep macro sentiment reason to market/regime text only; remove news-headline bleed."""
+    text = str(reason or "no data").strip()
+    # Never pass through appended headline fields or semicolon-separated news tails.
+    text = re.split(r";\s*(?:headlines?:)?", text, maxsplit=1, flags=re.I)[0].strip()
+    # Strip headline-like strings: questions, title-style colon clauses, long prose.
+    if "?" in text:
+        text = "macro caution"
+    text = re.sub(r":\s+[A-Z][a-z].*$", "", text).strip()
+    if len(text) > 120:
+        text = text[:120].rstrip()
+    return text or "macro caution"
+
+
 def _classify_macro_headlines(headlines):
     """LLM macro classifier. Fail-silent: neutral on any failure."""
     safe_default = {"sentiment": "NEUTRAL", "reason": "no data"}
@@ -201,7 +224,7 @@ def _classify_macro_headlines(headlines):
         content = r.json()["choices"][0]["message"]["content"]
         parsed = json.loads(content)
         sentiment = _normal_macro_sentiment(parsed.get("sentiment"))
-        reason = str(parsed.get("reason") or "no data").strip()[:180] or "no data"
+        reason = _sanitize_macro_reason(parsed.get("reason") or "no data")
         return {"sentiment": sentiment, "reason": reason}
     except Exception:
         return safe_default
@@ -285,6 +308,262 @@ def _snapshot_intraday_change_pct(ticker):
         return None
 
 
+
+def _snapshot_ticker_quote(ticker):
+    """Best-effort Massive snapshot fields for gap-up breakout checks."""
+    ticker = (ticker or "").upper()
+    if not MASSIVE_API_KEY:
+        return {}
+    try:
+        r = _audit_get(
+            f"{MASSIVE_BASE}/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}",
+            params={"apiKey": MASSIVE_API_KEY},
+            headers={"Accept": "application/json"},
+            timeout=6,
+        )
+        if r.status_code != 200:
+            return {}
+        t = (r.json() or {}).get("ticker") or {}
+        current = None
+        for section, key in (("lastTrade", "p"), ("min", "c"), ("day", "c")):
+            value = (t.get(section) or {}).get(key)
+            if value:
+                current = _to_float(value)
+                break
+        day = t.get("day") or {}
+        prev = t.get("prevDay") or {}
+        return {
+            "ticker": ticker,
+            "current": current,
+            "prev_close": _to_float(prev.get("c")),
+            "day_volume": _to_float(day.get("v")),
+            "day_low": _to_float(day.get("l")),
+            "day_high": _to_float(day.get("h")),
+            "day_close": _to_float(day.get("c")),
+        }
+    except Exception:
+        return {}
+
+
+def calculate_ema(prices, period):
+    vals = [float(p) for p in (prices or []) if p is not None]
+    if len(vals) < period:
+        return None
+    ema = sum(vals[:period]) / period
+    k = 2 / (period + 1)
+    for price in vals[period:]:
+        ema = (price * k) + (ema * (1 - k))
+    return ema
+
+
+def evaluate_gap_breakout(ticker, pillars=None, sentiment_info=None, closes=None, volumes=None, ema10=None, current_price=None):
+    """Return gap-up breakout qualification metadata; additive to core pillar scoring."""
+    ticker = (ticker or "").upper()
+    try:
+        pcount = int(str(pillars or 0).split("/")[0])
+    except Exception:
+        pcount = 0
+    result = {
+        "ticker": ticker,
+        "qualifies": False,
+        "reason": None,
+        "gap_min_pct": 4.0,
+        "volume_min_ratio": 1.5,
+        "too_hot_ema_pct": 20.0,
+        "fallback_stop_pct": 4.0,
+    }
+    if pcount < 3:
+        result["reason"] = "score below 3/4"
+        return result
+
+    if sentiment_info is None:
+        sentiment_info = check_news_sentiment(ticker)
+    sent_score = _to_float((sentiment_info or {}).get("normalized"))
+    result["sentiment_score"] = sent_score
+    if sent_score is None or sent_score <= 0.5:
+        result["reason"] = "news sentiment <= 0.5"
+        return result
+
+    quote = _snapshot_ticker_quote(ticker)
+    current = _to_float(quote.get("current")) or _to_float(current_price)
+    prev_close = _to_float(quote.get("prev_close"))
+    day_volume = _to_float(quote.get("day_volume"))
+
+    closes = [float(x) for x in (closes or []) if x is not None]
+    volumes = [float(x) for x in (volumes or []) if x is not None]
+    if len(closes) < 2 or not volumes:
+        aggs = get_massive_aggs(ticker, days=60) or []
+        if aggs:
+            closes = [float(row.get("c")) for row in aggs if row.get("c") is not None]
+            volumes = [float(row.get("v")) for row in aggs if row.get("v") is not None]
+    if prev_close is None and len(closes) >= 2:
+        prev_close = closes[-2]
+    if current is None and closes:
+        current = closes[-1]
+    if day_volume is None and volumes:
+        day_volume = volumes[-1]
+
+    avg_vol_base = volumes[-31:-1] if len(volumes) >= 31 else volumes[-30:]
+    avg_vol_30 = (sum(avg_vol_base) / len(avg_vol_base)) if avg_vol_base else None
+    ema_ref = _to_float(ema10) or calculate_ema(closes, 10)
+
+    result.update({
+        "current_price": current,
+        "prev_close": prev_close,
+        "intraday_volume": day_volume,
+        "avg_volume_30": avg_vol_30,
+        "ema10": ema_ref,
+    })
+
+    if not current or not prev_close or prev_close <= 0:
+        result["reason"] = "missing current/previous close"
+        return result
+    gap_pct = ((current / prev_close) - 1.0) * 100.0
+    result["gap_pct"] = gap_pct
+    if gap_pct <= 4.0:
+        result["reason"] = "gap <= 4%"
+        return result
+
+    if not day_volume or not avg_vol_30 or avg_vol_30 <= 0:
+        result["reason"] = "missing volume ratio"
+        return result
+    vol_ratio = day_volume / avg_vol_30
+    result["volume_ratio"] = vol_ratio
+    if vol_ratio <= 1.5:
+        result["reason"] = "volume ratio <= 150%"
+        return result
+
+    if not ema_ref or ema_ref <= 0:
+        result["reason"] = "missing EMA10"
+        return result
+    pct_over_ema = ((current / ema_ref) - 1.0) * 100.0
+    result["pct_over_ema10"] = pct_over_ema
+    if pct_over_ema > 20.0:
+        result["reason"] = "TOO HOT >20% above EMA10"
+        result["too_hot"] = True
+        return result
+
+    result["qualifies"] = True
+    result["reason"] = "gap-up breakout qualified"
+    result["too_hot"] = False
+    return result
+
+
+def evaluate_catalyst_override(ticker, pillars=None, rvol=None, catalyst_hit=False,
+                               sentiment_info=None, closes=None, ema10=None, current_price=None):
+    """Catalyst Override Entry: 2/4 volume+catalyst exception for major news gap-ups."""
+    ticker = (ticker or "").upper()
+    try:
+        pcount = int(str(pillars or 0).split("/")[0])
+    except Exception:
+        pcount = 0
+    rv = _to_float(rvol)
+    result = {
+        "ticker": ticker,
+        "qualifies": False,
+        "entry_type": "CATALYST_OVERRIDE",
+        "label": "CATALYST OVERRIDE",
+        "reason": None,
+        "required_score": "exactly 2/4",
+        "rvol_min": 3.0,
+        "gap_min_pct": 4.0,
+        "sentiment_min": 0.5,
+        "too_hot_ema_pct": 20.0,
+        "stop_pct": 5.0,
+        "position_size": "half_standard",
+    }
+    if pcount != 2:
+        result["reason"] = "score is not exactly 2/4"
+        return result
+    result["rvol"] = rv
+    if rv is None or rv < 1.5:
+        result["reason"] = "volume pillar failed"
+        return result
+    if not catalyst_hit:
+        result["reason"] = "catalyst pillar failed"
+        return result
+    if sentiment_info is None:
+        sentiment_info = check_news_sentiment(ticker)
+    sent_score = _to_float((sentiment_info or {}).get("normalized"))
+    result["sentiment_score"] = sent_score
+    if sent_score is None or sent_score <= 0.5:
+        result["reason"] = "news sentiment <= 0.5"
+        return result
+    if rv < 3.0:
+        result["reason"] = "RVOL < 3.0"
+        return result
+
+    quote = _snapshot_ticker_quote(ticker)
+    current = _to_float(quote.get("current")) or _to_float(current_price)
+    prev_close = _to_float(quote.get("prev_close"))
+    closes = [float(x) for x in (closes or []) if x is not None]
+    if len(closes) < 2:
+        aggs = get_massive_aggs(ticker, days=60) or []
+        if aggs:
+            closes = [float(row.get("c")) for row in aggs if row.get("c") is not None]
+    if prev_close is None and len(closes) >= 2:
+        prev_close = closes[-2]
+    if current is None and closes:
+        current = closes[-1]
+    ema_ref = _to_float(ema10) or calculate_ema(closes, 10)
+    result.update({"current_price": current, "prev_close": prev_close, "ema10": ema_ref})
+    if not current or not prev_close or prev_close <= 0:
+        result["reason"] = "missing current/previous close"
+        return result
+    gap_pct = ((current / prev_close) - 1.0) * 100.0
+    result["gap_pct"] = gap_pct
+    if gap_pct < 4.0:
+        result["reason"] = "gap < 4%"
+        return result
+    if not ema_ref or ema_ref <= 0:
+        result["reason"] = "missing EMA10"
+        return result
+    pct_over_ema = ((current / ema_ref) - 1.0) * 100.0
+    result["pct_over_ema10"] = pct_over_ema
+    if pct_over_ema > 20.0:
+        result["reason"] = "TOO HOT >20% above EMA10"
+        result["too_hot"] = True
+        return result
+    result["qualifies"] = True
+    result["reason"] = "Catalyst Override Entry qualified"
+    result["too_hot"] = False
+    return result
+
+
+def get_opening_range_low(ticker, minutes=30):
+    """Return opening-range low for the current ET market date; None if unavailable."""
+    ticker = (ticker or "").upper()
+    if not MASSIVE_API_KEY:
+        return None
+    try:
+        market_day = current_et_market_date()
+        date_s = market_day.isoformat()
+        r = _audit_get(
+            f"{MASSIVE_BASE}/v2/aggs/ticker/{ticker}/range/1/minute/{date_s}/{date_s}",
+            params={"apiKey": MASSIVE_API_KEY, "adjusted": "true", "sort": "asc", "limit": 50000},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return None
+        rows = (r.json() or {}).get("results") or []
+        if not rows:
+            return None
+        et = ZoneInfo("America/New_York")
+        start = datetime.datetime.combine(market_day, datetime.time(9, 30), tzinfo=et)
+        end = start + datetime.timedelta(minutes=int(minutes or 30))
+        lows = []
+        for row in rows:
+            ts = row.get("t")
+            low = _to_float(row.get("l"))
+            if ts is None or low is None:
+                continue
+            bar_dt = datetime.datetime.fromtimestamp(float(ts) / 1000.0, tz=datetime.timezone.utc).astimezone(et)
+            if start <= bar_dt < end:
+                lows.append(low)
+        return min(lows) if lows else None
+    except Exception:
+        return None
+
 def get_macro_sentiment():
     """Rule-based real-time macro overlay. Secondary only; never creates signals."""
     spy_pct = _snapshot_intraday_change_pct("SPY")
@@ -350,10 +629,7 @@ def get_macro_sentiment():
         sentiment = "CAUTION"
         reason = f"SPY intraday low {spy_low_pct:.1f}% vs prior close"
 
-    if sentiment in {"CAUTION", "RISK_OFF"}:
-        headlines = _get_macro_headlines(limit=3)
-        if headlines:
-            reason = f"{reason}; headlines: " + " | ".join(headlines[:3])
+    reason = _sanitize_macro_reason(reason)
     return {
         "sentiment": sentiment,
         "reason": reason,
@@ -372,6 +648,8 @@ def _llm_judge_catalyst(ticker, headlines):
         return None
     base = os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1").rstrip("/")
     joined = "\n".join(f"- {h}" for h in headlines[:5])
+    if "reverse stock split" in joined.lower() or "reverse split" in joined.lower():
+        return "NONE", "reverse stock split distress signal"
     prompt = (
         f"You are a professional equity catalyst analyst. Ticker: {ticker}.\n"
         f"Recent headlines:\n{joined}\n\n"
@@ -379,6 +657,8 @@ def _llm_judge_catalyst(ticker, headlines):
         "STRONG, WEAK, or NONE. STRONG = a concrete, material, positive, price-moving "
         "event (e.g. major product/contract, earnings blowout, FDA approval, major upgrade). "
         "Mere mentions, neutral coverage, or negative news = WEAK or NONE. "
+        "Hard rule: if any headline or content mentions a reverse stock split or reverse split, "
+        "classify it as NONE regardless of sentiment; a reverse stock split is a distress signal, not a growth catalyst. "
         "Respond in JSON: {\"rating\":\"STRONG|WEAK|NONE\",\"reason\":\"<8 words>\"}"
     )
     try:
@@ -1506,10 +1786,20 @@ def analyze_ticker(ticker, regime=None):
         pillar_details.append("❌ Catalyst: NO")
 
     # Fundamentals / indicators / ATR / sentiment / FDA are labels only, only for 3/4 or 4/4 candidates.
+    # Sentiment is also needed for the 2/4 Catalyst Override safety gate.
     fundamentals = check_fundamentals(ticker) if pillars_met >= 3 else None
     indicator_info = check_massive_indicators(ticker) if pillars_met >= 3 else None
     atr_info = check_eodhd_atr(ticker) if pillars_met >= 3 else None
-    sentiment_info = check_news_sentiment(ticker) if pillars_met >= 3 else None
+    sentiment_info = check_news_sentiment(ticker) if pillars_met >= 2 else None
+    ema10 = calculate_ema(closes, 10)
+    gap_breakout = evaluate_gap_breakout(
+        ticker, pillars=pillars_met, sentiment_info=sentiment_info,
+        closes=closes, volumes=volumes, ema10=ema10, current_price=current_price,
+    ) if pillars_met >= 3 else None
+    catalyst_override = evaluate_catalyst_override(
+        ticker, pillars=pillars_met, rvol=rvol, catalyst_hit=bool(analyst_hit or news_hit),
+        sentiment_info=sentiment_info, closes=closes, ema10=ema10, current_price=current_price,
+    ) if pillars_met == 2 else None
     fda_calendar = check_fda_calendar(ticker, fundamentals=fundamentals) if pillars_met >= 3 else None
     if pillars_met >= 3 and sentiment_info and sentiment_info.get("strong_positive"):
         warnings.append(f"{sentiment_info.get('tag')} news sentiment")
@@ -1542,6 +1832,9 @@ def analyze_ticker(ticker, regime=None):
         signal = "🟢 BUY"
     elif pillars_met == 3:
         signal = "🟡 BUY (Small)"
+    elif pillars_met == 2 and catalyst_override and catalyst_override.get("qualifies"):
+        signal = "🟠 BUY (Catalyst Override)"
+        warnings.append("🟠 CATALYST OVERRIDE — half-size, 5% stop")
     elif pillars_met == 2:
         signal = "⚪ WATCH"
     else:
@@ -1567,6 +1860,8 @@ def analyze_ticker(ticker, regime=None):
         "indicator_info": indicator_info,
         "atr_info": atr_info,
         "sentiment_info": sentiment_info,
+        "gap_breakout": gap_breakout,
+        "catalyst_override": catalyst_override,
         "fda_calendar": fda_calendar,
         "insider_activity": insider_activity,
         "earnings_context": earnings_ctx,

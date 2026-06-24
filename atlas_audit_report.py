@@ -16,6 +16,31 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, "/Users/yasser/scripts")
 
+
+def _load_atlasops_telegram_env():
+    """Force audit reports to use AtlasOps Telegram routing, not Atlas routing."""
+    env_path = Path("/Users/yasser/.hermes/profiles/atlasops/.env")
+    if not env_path.exists():
+        return
+    values = {}
+    for raw in env_path.read_text(errors="ignore").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key in {"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_ALLOWED_USERS", "TELEGRAM_HOME_CHANNEL"}:
+            values[key] = value.strip().strip('"').strip("'")
+    for key in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USERS", "TELEGRAM_HOME_CHANNEL"):
+        if values.get(key):
+            os.environ[key] = values[key]
+    chat = values.get("TELEGRAM_CHAT_ID") or values.get("TELEGRAM_ALLOWED_USERS") or values.get("TELEGRAM_HOME_CHANNEL")
+    if chat:
+        os.environ["TELEGRAM_CHAT_ID"] = chat
+
+
+_load_atlasops_telegram_env()
+
 from atlas_time import is_trading_day
 from atlas_notify import send_message
 

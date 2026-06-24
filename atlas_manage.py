@@ -379,7 +379,10 @@ def run(args):
         catalyst = _catalyst_reason(res)
         if catalyst:
             catalysts.append({"ticker": tkr.upper(), "reason": catalyst})
-        if pillars < 3:
+        catalyst_override_ok = bool(
+            pillars == 2 and isinstance(res.get("catalyst_override"), dict) and res.get("catalyst_override", {}).get("qualifies")
+        )
+        if pillars < 3 and not catalyst_override_ok:
             if "WATCH" in str(res.get("signal", "")).upper():
                 watch.append(tkr.upper())
                 if pillars == 2:

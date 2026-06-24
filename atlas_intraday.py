@@ -377,26 +377,15 @@ def _quality_tags(item, score=None):
 
 
 def _trim_macro_reason(reason):
+    """Sanitize macro caution text; news headlines must never appear here."""
     text = str(reason or "macro caution").strip()
-    base, sep, tail = text.partition("; headlines:")
-    if not sep:
-        return text
-    banned = ("investor alert", "class action", "lawsuit", "deadline", "reminder")
-    headlines = []
-    for h in tail.split("|"):
-        h = h.strip()
-        if not h:
-            continue
-        low = h.lower()
-        if any(term in low for term in banned):
-            continue
-        headlines.append(h)
-    if not headlines:
-        return base.strip()
-    preferred = ("market", "stocks", "futures", "fed", "cpi", "rates", "inflation", "semis", "soxx", "spy", "results", "earnings")
-    chosen = next((h for h in headlines if any(term in h.lower() for term in preferred)), headlines[0])
-    chosen = chosen.replace("First Quarter", "Q1")
-    return f"{base.strip()}; {chosen}"
+    text = re.split(r";\s*(?:headlines?:)?", text, maxsplit=1, flags=re.I)[0].strip()
+    if "?" in text:
+        text = "macro caution"
+    text = re.sub(r":\s+[A-Z][a-z].*$", "", text).strip()
+    if len(text) > 120:
+        text = text[:120].rstrip()
+    return text or "macro caution"
 
 
 def _header_lines(summary, hold_count):

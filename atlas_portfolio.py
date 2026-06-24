@@ -38,7 +38,8 @@ import sys
 import math
 import json
 import requests
-from datetime import datetime, timezone, date, timedelta
+from datetime import datetime, timezone, date, timedelta, time
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, "/Users/yasser/scripts")
 
@@ -57,6 +58,9 @@ from atlas_engine import (
     evaluate_indicator_confluence,
     check_macro_context,
     check_fda_calendar,
+    evaluate_gap_breakout,
+    evaluate_catalyst_override,
+    get_opening_range_low,
     MASSIVE_API_KEY,
     MASSIVE_BASE,
     EODHD_API_KEY,
@@ -77,6 +81,11 @@ PULLBACK_TOL = 0.02       # in-band signal threshold: close <= 10-EMA +2% buys n
 PULLBACK_FILL_TOL = 0.005  # armed pullback trigger: price <= 10-EMA +0.5%
 PENDING_PULLBACK_DAYS = 3  # valid for 3 trading days
 MAX_PULLBACK_ARM_PCT = 15.0  # >15% over EMA10 is too extended; no 3-day limit
+BREAKOUT_TOO_HOT_EMA_PCT = 20.0  # gap-up breakout must not be >20% above EMA10
+BREAKOUT_STOP_BUFFER_PCT = 0.005  # opening-range stop sits just below range low
+BREAKOUT_FALLBACK_STOP_PCT = 0.04  # fallback trailing stop when intraday candles unavailable
+LATE_ENTRY_CUTOFF_ET = time(14, 30)  # no new entries at/after 2:30 PM ET
+SPY_INTRADAY_DROP_VETO_PCT = -0.4  # block new entries if SPY drops more than 0.4% in 30 minutes
 
 
 try:
@@ -269,6 +278,81 @@ def check_admission(ticker, regime=None, pending=None):
     return True, "OK"
 
 
+def _late_session_entry_block(now=None):
+    """Return a BLOCK decision if new entries are past the ET cutoff; exits unaffected."""
+    now_et = (now.astimezone(ZoneInfo("America/New_York")) if now else datetime.now(ZoneInfo("America/New_York")))
+    if now_et.time() >= LATE_ENTRY_CUTOFF_ET:
+        return {
+            "action": "BLOCK",
+            "reason": f"LATE_SESSION_CUTOFF: no new entries after 14:30 ET ({now_et:%H:%M ET})",
+            "entry_guard": "LATE_SESSION_CUTOFF",
+            "now_et": now_et.isoformat(),
+        }
+    return None
+
+
+def _spy_intraday_drop_pct(minutes=30):
+    """Return SPY percent change over the last N minutes from minute aggregates."""
+    if not MASSIVE_API_KEY:
+        return None
+    try:
+        today = current_et_market_date().isoformat()
+        r = _audit_get(
+            f"{MASSIVE_BASE}/v2/aggs/ticker/SPY/range/1/minute/{today}/{today}",
+            params={"apiKey": MASSIVE_API_KEY, "adjusted": "true", "sort": "asc", "limit": 50000},
+            headers={"Accept": "application/json"},
+            timeout=8,
+        )
+        if r.status_code != 200:
+            return None
+        rows = (r.json() or {}).get("results") or []
+        if len(rows) < 2:
+            return None
+        et = ZoneInfo("America/New_York")
+        latest = rows[-1]
+        latest_ts = latest.get("t")
+        latest_px = latest.get("c")
+        if latest_ts is None or latest_px is None:
+            return None
+        latest_dt = datetime.fromtimestamp(float(latest_ts) / 1000.0, tz=timezone.utc).astimezone(et)
+        cutoff = latest_dt - timedelta(minutes=int(minutes or 30))
+        base = None
+        for row in rows:
+            ts = row.get("t")
+            close = row.get("c")
+            if ts is None or close is None:
+                continue
+            dt = datetime.fromtimestamp(float(ts) / 1000.0, tz=timezone.utc).astimezone(et)
+            if dt >= cutoff:
+                base = row
+                break
+        if not base:
+            return None
+        base_px = float(base.get("c"))
+        latest_px = float(latest_px)
+        if base_px <= 0:
+            return None
+        return ((latest_px - base_px) / base_px) * 100.0
+    except Exception:
+        return None
+
+
+def _entry_guard_block():
+    """Final guardrail before any new BUY: late cutoff + short-term SPY drop veto."""
+    late = _late_session_entry_block()
+    if late:
+        return late
+    spy_drop = _spy_intraday_drop_pct(minutes=30)
+    if spy_drop is not None and spy_drop < SPY_INTRADAY_DROP_VETO_PCT:
+        return {
+            "action": "BLOCK",
+            "reason": f"SPY_INTRADAY_DROP_VETO: SPY {spy_drop:.2f}% over last 30 min < -0.40%",
+            "entry_guard": "SPY_INTRADAY_DROP_VETO",
+            "spy_30m_change_pct": round(spy_drop, 3),
+        }
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Entry trigger: buy in-band now; arm first pullback for extended signals
 # --------------------------------------------------------------------------- #
@@ -450,11 +534,34 @@ def evaluate_pending_pullback(ticker, dry_run=True, regime=None, pending=None, r
         return decision
 
     sig = row.get("signal_result") or {}
+    sig.setdefault("ticker", ticker)
+    sig.setdefault("score", row.get("score") or "3/4 Pillars")
+    sig.setdefault("signal", row.get("signal") or "")
     fundamentals = sig.get("fundamentals")
     try:
-        row_pillars = int(str(row.get("score") or "0").split("/")[0])
+        row_pillars = int(str(row.get("score") or sig.get("score") or "0").split("/")[0])
     except Exception:
         row_pillars = 0
+    breakout_meta = evaluate_gap_breakout(
+        ticker, pillars=row_pillars, sentiment_info=sig.get("sentiment_info"),
+        current_price=state["last_close"], ema10=state["ema10"],
+    )
+    if (isinstance(breakout_meta, dict) and breakout_meta.get("qualifies")
+            and state["pct_over_ema"] <= BREAKOUT_TOO_HOT_EMA_PCT):
+        sig["gap_breakout"] = breakout_meta
+        decision = consider_buy(
+            sig, dry_run=dry_run, regime=regime, pending=pending,
+            reserved_cash=reserved_cash, manage_pending=False,
+        )
+        decision["pending_id"] = row.get("id")
+        decision["from_pending_pullback"] = True
+        decision["breakout_from_pending_pullback"] = True
+        decision.setdefault("score", sig.get("score") or row.get("score"))
+        decision.setdefault("signal", sig.get("signal") or row.get("signal"))
+        decision.setdefault("rvol", sig.get("rvol"))
+        if decision.get("action") == "BUY" and not dry_run:
+            atlas_db.mark_pending_pullback_filled(ticker)
+        return decision
     if not fundamentals and row_pillars >= 3:
         fundamentals = check_fundamentals(ticker)
     indicator_info = sig.get("indicator_info") or (check_massive_indicators(ticker) if row_pillars >= 3 else None)
@@ -473,6 +580,7 @@ def evaluate_pending_pullback(ticker, dry_run=True, regime=None, pending=None, r
         "indicator_info": indicator_info,
         "atr_info": sig.get("atr_info"),
         "sentiment_info": sig.get("sentiment_info"),
+        "gap_breakout": breakout_meta,
         "macro_context": check_macro_context(),
     }
 
@@ -513,12 +621,28 @@ def evaluate_exit(lot, dry_run=True, regime=None):
     if not aggs:
         return {"ticker": ticker, "action": "HOLD", "reason": "no price data"}
 
-    closes = [d["c"] for d in aggs]
-    highs = [d.get("h", d["c"]) for d in aggs]
+    atr = calculate_atr(aggs) or (entry * 0.05)
+    exit_aggs = aggs
+    try:
+        entry_day = date.fromisoformat(str(entry_at)[:10]) if entry_at else None
+        if entry_day:
+            scoped = []
+            for d in aggs:
+                ts = d.get("t")
+                if ts is None:
+                    continue
+                day = datetime.fromtimestamp(float(ts) / 1000.0, tz=timezone.utc).date()
+                if day >= entry_day:
+                    scoped.append(d)
+            if scoped:
+                exit_aggs = scoped
+    except Exception:
+        exit_aggs = aggs
+    closes = [d["c"] for d in exit_aggs]
+    highs = [d.get("h", d["c"]) for d in exit_aggs]
     live_last = _last_price(ticker)
     last = float(live_last if live_last is not None else closes[-1])
     persisted_stop = lot.get("stop_loss")
-    atr = calculate_atr(aggs) or (entry * 0.05)
     fallback_stop = entry - (ATR_STOP_MULT * atr)
     hard_stop = float(persisted_stop) if persisted_stop is not None else fallback_stop
     risk = max(entry - hard_stop, 0.01)
@@ -607,8 +731,12 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
     ticker = signal_result["ticker"].upper()
     score = signal_result.get("score", "0/4 Pillars")
     pillars = int(str(score).split("/")[0])
+    catalyst_override_meta = signal_result.get("catalyst_override")
+    catalyst_override_entry = bool(
+        pillars == 2 and isinstance(catalyst_override_meta, dict) and catalyst_override_meta.get("qualifies")
+    )
 
-    if pillars < 3:
+    if pillars < 3 and not catalyst_override_entry:
         return {"ticker": ticker, "action": "SKIP", "reason": f"Score {score} (need 3/4 or 4/4)"}
 
     allowed, why = check_admission(ticker, regime=regime, pending=pending)
@@ -637,7 +765,21 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
                 "sentiment_info": signal_result.get("sentiment_info"), "indicator_confluence": confluence,
                 "macro_context": macro_ctx, "insider_activity": signal_result.get("insider_activity")}
 
-    if pullback_override_entry is not None:
+    breakout_stop = None
+    catalyst_override_stop = None
+    breakout_meta = None
+
+    if catalyst_override_entry:
+        fill = round(float(catalyst_override_meta.get("current_price") or signal_result.get("entry_price")), 2)
+        catalyst_override_stop = round(fill * 0.95, 2)
+        trig_detail = (
+            f"CATALYST OVERRIDE Entry: score {score}, RVOL {float(catalyst_override_meta.get('rvol') or 0):.2f}, "
+            f"gap +{float(catalyst_override_meta.get('gap_pct') or 0):.1f}%, "
+            f"sentiment {float(catalyst_override_meta.get('sentiment_score') or 0):+.2f}; half-size, 5% stop"
+        )
+        if manage_pending and not dry_run:
+            atlas_db.delete_pending_pullback(ticker)
+    elif pullback_override_entry is not None:
         fill = round(float(pullback_override_entry), 2)
         trig_detail = pullback_override_reason or f"Pulled back to armed 10-EMA limit {fill:.2f}"
     else:
@@ -654,17 +796,72 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
             fill = round(max(min(state["last_close"], state["inband_trigger"]), state["last_low"]), 2)
             trig_detail = f"Pulled back to 10-EMA {state['ema10']:.2f} (close {state['last_close']:.2f})"
         else:
-            if state["pct_over_ema"] > MAX_PULLBACK_ARM_PCT:
+            breakout_meta = signal_result.get("gap_breakout")
+            if not isinstance(breakout_meta, dict) or not breakout_meta.get("qualifies"):
+                breakout_meta = evaluate_gap_breakout(
+                    ticker, pillars=pillars, sentiment_info=signal_result.get("sentiment_info"),
+                    current_price=state["last_close"], ema10=state["ema10"],
+                )
+            if (isinstance(breakout_meta, dict) and breakout_meta.get("qualifies")
+                    and state["pct_over_ema"] <= BREAKOUT_TOO_HOT_EMA_PCT):
+                fill = round(float(state["last_close"]), 2)
+                or_low = get_opening_range_low(ticker, minutes=30) or get_opening_range_low(ticker, minutes=15)
+                if or_low and float(or_low) < fill:
+                    breakout_stop = round(float(or_low) * (1.0 - BREAKOUT_STOP_BUFFER_PCT), 2)
+                    stop_detail = f"opening-range stop below ${float(or_low):.2f}"
+                else:
+                    breakout_stop = round(fill * (1.0 - BREAKOUT_FALLBACK_STOP_PCT), 2)
+                    stop_detail = "4% fallback trailing stop"
+                trig_detail = (
+                    f"Gap-Up Breakout Entry: gap +{float(breakout_meta.get('gap_pct') or 0):.1f}%, "
+                    f"volume {float(breakout_meta.get('volume_ratio') or 0):.1f}x 30D, "
+                    f"sentiment {float(breakout_meta.get('sentiment_score') or 0):+.2f}; {stop_detail}"
+                )
                 if manage_pending:
                     atlas_db.delete_pending_pullback(ticker)
+            else:
+                if state["pct_over_ema"] > MAX_PULLBACK_ARM_PCT:
+                    if manage_pending:
+                        atlas_db.delete_pending_pullback(ticker)
+                    return {
+                        "ticker": ticker,
+                        "action": "SKIP",
+                        "reason": _too_extended_line(ticker, state["pct_over_ema"]),
+                        "wait_type": "TOO_EXTENDED",
+                        "ema10": round(state["ema10"], 2),
+                        "price": round(state["last_close"], 2),
+                        "pct_over_ema": round(state["pct_over_ema"], 1),
+                        "fundamentals": fundamentals,
+                        "fda_calendar": fda_calendar,
+                        "indicator_info": indicator_info,
+                        "atr_info": signal_result.get("atr_info"),
+                        "sentiment_info": signal_result.get("sentiment_info"),
+                        "gap_breakout": breakout_meta,
+                        "indicator_confluence": confluence,
+                        "macro_context": macro_ctx,
+                        "insider_activity": signal_result.get("insider_activity"),
+                    }
+                trigger = round(state["armed_trigger"], 2)
+            if breakout_stop is None:
+                expires = _add_trading_days(current_et_market_date(), PENDING_PULLBACK_DAYS).isoformat()
+                if manage_pending:
+                    atlas_db.upsert_pending_pullback(
+                        ticker=ticker, score=score, signal=signal_result.get("signal", ""),
+                        signal_result=signal_result, ema10=state["ema10"], trigger_price=trigger,
+                        reference_price=state["last_close"], pct_over_ema=state["pct_over_ema"],
+                        expires_at=expires,
+                    )
                 return {
                     "ticker": ticker,
-                    "action": "SKIP",
-                    "reason": _too_extended_line(ticker, state["pct_over_ema"]),
-                    "wait_type": "TOO_EXTENDED",
+                    "action": "WAIT",
+                    "reason": _waiting_line(ticker, score, state["last_close"], state["pct_over_ema"], trigger),
+                    "wait_type": "PULLBACK_ARMED",
+                    "entry": trigger,
                     "ema10": round(state["ema10"], 2),
                     "price": round(state["last_close"], 2),
                     "pct_over_ema": round(state["pct_over_ema"], 1),
+                    "expires_at": expires,
+                    "earnings_context": earnings_ctx,
                     "fundamentals": fundamentals,
                     "fda_calendar": fda_calendar,
                     "indicator_info": indicator_info,
@@ -673,44 +870,23 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
                     "indicator_confluence": confluence,
                     "macro_context": macro_ctx,
                     "insider_activity": signal_result.get("insider_activity"),
+                    "earnings_note": (earnings_ctx.get("earnings_momentum") or {}).get("earnings_momentum_note")
+                                     or (earnings_ctx.get("earnings_miss") or {}).get("earnings_miss_note")
+                                     or (earnings_ctx.get("note") if earnings_ctx.get("unknown") else None),
                 }
-            trigger = round(state["armed_trigger"], 2)
-            expires = _add_trading_days(current_et_market_date(), PENDING_PULLBACK_DAYS).isoformat()
-            if manage_pending:
-                atlas_db.upsert_pending_pullback(
-                    ticker=ticker, score=score, signal=signal_result.get("signal", ""),
-                    signal_result=signal_result, ema10=state["ema10"], trigger_price=trigger,
-                    reference_price=state["last_close"], pct_over_ema=state["pct_over_ema"],
-                    expires_at=expires,
-                )
-            return {
-                "ticker": ticker,
-                "action": "WAIT",
-                "reason": _waiting_line(ticker, score, state["last_close"], state["pct_over_ema"], trigger),
-                "wait_type": "PULLBACK_ARMED",
-                "entry": trigger,
-                "ema10": round(state["ema10"], 2),
-                "price": round(state["last_close"], 2),
-                "pct_over_ema": round(state["pct_over_ema"], 1),
-                "expires_at": expires,
-                "earnings_context": earnings_ctx,
-                "fundamentals": fundamentals,
-                "fda_calendar": fda_calendar,
-                "indicator_info": indicator_info,
-                "atr_info": signal_result.get("atr_info"),
-                "sentiment_info": signal_result.get("sentiment_info"),
-                "indicator_confluence": confluence,
-                "macro_context": macro_ctx,
-                "insider_activity": signal_result.get("insider_activity"),
-                "earnings_note": (earnings_ctx.get("earnings_momentum") or {}).get("earnings_momentum_note")
-                                 or (earnings_ctx.get("earnings_miss") or {}).get("earnings_miss_note")
-                                 or (earnings_ctx.get("note") if earnings_ctx.get("unknown") else None),
-            }
+
+    entry_guard = _entry_guard_block()
+    if entry_guard:
+        return {"ticker": ticker, "score": score, "signal": signal_result.get("signal", ""), **entry_guard}
 
     # Stop from the engine's risk card if present, else recompute.
     stop = None
     rc = signal_result.get("risk_card") or {}
-    if rc.get("stop_loss"):
+    if catalyst_override_stop is not None:
+        stop = catalyst_override_stop
+    elif breakout_stop is not None:
+        stop = breakout_stop
+    elif rc.get("stop_loss"):
         # rescale the stop relative to the actual fill (engine stop was vs its close)
         entry_ref = signal_result.get("entry_price", fill)
         risk_ref = entry_ref - rc["stop_loss"]
@@ -724,7 +900,7 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
     regime_detail = str((regime or (True, ""))[1])
     cautious = ("WEAK" in regime_detail.upper() or "UNKNOWN" in regime_detail.upper()
                 or "UNAVAILABLE" in regime_detail.upper() or bool((macro_ctx or {}).get("cautious")))
-    half = (pillars == 3) or cautious
+    half = (pillars == 3) or cautious or catalyst_override_entry
     shares = size_position(equity, fill, stop, half=half)
     if shares <= 0:
         return {"ticker": ticker, "action": "SKIP", "reason": "Sized to 0 shares (risk/cap/cash)"}
@@ -762,11 +938,15 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
         "indicator_info": indicator_info,
         "atr_info": signal_result.get("atr_info"),
         "sentiment_info": signal_result.get("sentiment_info"),
+        "gap_breakout": breakout_meta or signal_result.get("gap_breakout"),
+        "catalyst_override": catalyst_override_meta if catalyst_override_entry else signal_result.get("catalyst_override"),
+        "entry_type": "CATALYST_OVERRIDE" if catalyst_override_entry else ("GAP_BREAKOUT" if breakout_stop is not None else "PULLBACK"),
+        "position_size_flag": "HALF_SIZE_CATALYST_OVERRIDE" if catalyst_override_entry else None,
         "indicator_confluence": confluence,
         "confluence_confirmed": confluence_confirmed,
         "confluence_note": confluence_note,
         "momentum_weak": momentum_weak,
-        "decision_quality": "CONFIRMED_ACT" if confluence_confirmed else ("MOMENTUM_WEAK_ALLOWED" if momentum_weak else "NORMAL"),
+        "decision_quality": "CATALYST_OVERRIDE" if catalyst_override_entry else ("CONFIRMED_ACT" if confluence_confirmed else ("MOMENTUM_WEAK_ALLOWED" if momentum_weak else "NORMAL")),
         "insider_activity": signal_result.get("insider_activity"),
         "macro_context": macro_ctx,
         "earnings_context": earnings_ctx,

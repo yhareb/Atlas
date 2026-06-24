@@ -31,6 +31,11 @@ except Exception:
 
 import time as _audit_time
 _REQUESTS_GET = requests.get
+PRE_MARKET_HTTP_TIMEOUT = float(os.environ.get("PRE_MARKET_HTTP_TIMEOUT", "5"))
+PRE_MARKET_CATALYST_LIMIT = int(os.environ.get("PRE_MARKET_CATALYST_LIMIT", "15"))
+PRE_MARKET_CATALYST_MAX_HITS = int(os.environ.get("PRE_MARKET_CATALYST_MAX_HITS", "6"))
+PRE_MARKET_HANDOFF_BUY_LIMIT = int(os.environ.get("PRE_MARKET_HANDOFF_BUY_LIMIT", "6"))
+PRE_MARKET_HANDOFF_WATCH_LIMIT = int(os.environ.get("PRE_MARKET_HANDOFF_WATCH_LIMIT", "8"))
 
 
 def _audit_provider(endpoint):
@@ -99,7 +104,7 @@ def massive_get(path, params=None):
     p = params or {}
     p["apiKey"] = MASSIVE_API_KEY
     try:
-        r = _audit_get(f"{MASSIVE_BASE}{path}", params=p, timeout=10)
+        r = _audit_get(f"{MASSIVE_BASE}{path}", params=p, timeout=PRE_MARKET_HTTP_TIMEOUT)
         if r.status_code == 200: return r.json()
     except Exception as e: print(f"[Massive error] {path}: {e}")
     return None
@@ -134,20 +139,21 @@ def get_top_movers():
                 lst.append(f"  • {ticker} {'$'+f'{price:.2f}' if price else 'N/A'}  {sym}{abs(pct):.2f}%")
     return gl, ll
 
-def get_handoff_snapshot():
+def get_handoff_snapshot(max_buy=PRE_MARKET_HANDOFF_BUY_LIMIT, max_watch=PRE_MARKET_HANDOFF_WATCH_LIMIT):
     market_day = current_et_market_date()
     today = market_day.strftime('%Y-%m-%d')
     yesterday = previous_et_trading_date_str(market_day)
     data = atlas_db.get_handoff(today) or atlas_db.get_handoff(yesterday)
     if not data: return [], []
     bl, wl = [], []
-    for ticker in data.get("BUY",[]):
+    # The Telegram report displays only a small armed subset; avoid snapshotting the full WATCH roster.
+    for ticker in (data.get("BUY",[]) or [])[:max_buy]:
         snap = massive_get(f"/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}")
         if snap and snap.get("ticker"):
             t = snap["ticker"]; price = (t.get("day") or {}).get("c"); pct = t.get("todaysChangePerc")
             bl.append(f"  • {ticker} {'$'+f'{price:.2f}' if price else 'N/A'}  {arrow(pct)}")
         else: bl.append(f"  • {ticker}")
-    for ticker in data.get("WATCH",[]):
+    for ticker in (data.get("WATCH",[]) or [])[:max_watch]:
         snap = massive_get(f"/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}")
         if snap and snap.get("ticker"):
             t = snap["ticker"]; price = (t.get("day") or {}).get("c"); pct = t.get("todaysChangePerc")
@@ -308,7 +314,7 @@ def eodhd_get(path, params=None):
         return None
     p = params or {}; p["api_token"] = key; p["fmt"] = "json"
     try:
-        r = _audit_get(f"https://eodhd.com/api{path}", params=p, timeout=10)
+        r = _audit_get(f"https://eodhd.com/api{path}", params=p, timeout=PRE_MARKET_HTTP_TIMEOUT)
         if r.status_code == 200: return r.json()
         print(f"[EODHD pre-market] {path} HTTP {r.status_code}: {r.text[:120]}")
     except Exception as e: print(f"[EODHD pre-market] {path}: {e}")
@@ -360,22 +366,38 @@ def get_wavef_earnings(limit=8):
     return lines
 
 
+def _normalise_analyst_firm(name):
+    value = re.sub(r"[^a-z0-9 ]+", " ", str(name or "").lower())
+    words = [w for w in value.split() if w not in {"the", "and", "co", "company", "companies", "llc", "inc", "corp", "corporation", "securities", "capital", "markets"}]
+    return "".join(words)
+
+
+def _same_analyst_firm(action_firm, quote_firm):
+    left = _normalise_analyst_firm(action_firm)
+    right = _normalise_analyst_firm(quote_firm)
+    return bool(left and right and left == right)
+
+
 def get_wavef_analyst_actions(limit=8):
     today=current_et_market_date_str(); data=massive_get("/benzinga/v1/ratings", {"date.gte":today,"limit":limit}) or {}
     lines=[]; seen=[]
     for row in data.get("results") or []:
-        t=(row.get("ticker") or "").upper(); firm=row.get("firm"); rating=row.get("rating"); pt=row.get("price_target") or row.get("adjusted_price_target"); act=row.get("price_target_action")
+        t=(row.get("ticker") or "").upper(); firm=row.get("firm") or row.get("firm_name"); rating=row.get("rating"); pt=row.get("price_target") or row.get("adjusted_price_target"); act=row.get("price_target_action")
         if t:
             base=f"  • {t} — {firm or 'Analyst'} {rating or ''} PT {'$'+str(int(float(pt))) if pt else 'N/A'} {act or ''}"
             lines.append(base)
             seen.append(t)
+            if not firm:
+                continue
             try:
-                insight_data = massive_get("/benzinga/v1/analyst-insights", {"ticker": t, "limit": 3}) or {}
+                insight_data = massive_get("/benzinga/v1/analyst-insights", {"ticker": t, "limit": 10}) or {}
                 for item in insight_data.get("results") or []:
+                    insight_firm = item.get("firm") or item.get("firm_name") or item.get("analyst_firm")
+                    if not _same_analyst_firm(firm, insight_firm):
+                        continue
                     insight = (item.get("insight") or item.get("headline") or item.get("title") or "").strip()
                     insight = re.sub(r"\s+", " ", insight).replace("*", "").replace("#", "")
                     insight = insight.split(". ")[0].strip() or insight
-                    insight_firm = item.get("firm") or firm or "Analyst"
                     if insight and insight.lower() not in base.lower():
                         lines.append(f"    💬 {insight[:90]} — {insight_firm}")
                         break
@@ -474,9 +496,30 @@ def get_wavef_insider_buys(limit=6):
 
 
 def generate_wavef_pre_market_brief(send=False):
-    today_str=current_et_market_date_str(); futures=get_futures(); gainers,losers=get_top_movers(); screen=get_wavef_screener_names(); earnings=get_wavef_earnings(); analysts=get_wavef_analyst_actions(); macro=get_wavef_macro(); fda_events=get_wavef_fda_warnings(); buy_lines,watch_lines=get_handoff_snapshot(); catalysts,checked,win_start,win_end=get_engine_catalyst_watchlist(limit=25,max_hits=8); insiders=get_wavef_insider_buys()
+    _t0 = _audit_time.perf_counter()
+    def _timed(label, fn):
+        st = _audit_time.perf_counter()
+        try:
+            return fn()
+        finally:
+            print(f"[pre-market timing] {label}: {_audit_time.perf_counter() - st:.2f}s")
+
+    today_str = current_et_market_date_str()
+    futures = _timed("futures", get_futures)
+    gainers, losers = _timed("top_movers", get_top_movers)
+    screen = _timed("screener", get_wavef_screener_names)
+    earnings = _timed("earnings", get_wavef_earnings)
+    analysts = _timed("analyst_actions", get_wavef_analyst_actions)
+    macro = _timed("macro", get_wavef_macro)
+    fda_events = _timed("fda", get_wavef_fda_warnings)
+    buy_lines, watch_lines = _timed("handoff_snapshot", get_handoff_snapshot)
+    catalysts, checked, win_start, win_end = _timed(
+        "engine_catalysts",
+        lambda: get_engine_catalyst_watchlist(limit=PRE_MARKET_CATALYST_LIMIT, max_hits=PRE_MARKET_CATALYST_MAX_HITS),
+    )
+    insiders = _timed("insider_buys", lambda: get_wavef_insider_buys(limit=4))
     sent=[]
-    for line in (gainers[:3]+screen[:3]):
+    for line in (gainers[:2]+screen[:2]):
         parts=line.replace('•','').split(); sent.append(_sentiment_line(parts[0]) if parts else None)
     sent=[x for x in sent if x]
     lines=[f"🌄 *PRE-MARKET BRIEF — {today_str}*", "", "*🧭 Market Sentiment Overview:*"]
@@ -494,7 +537,9 @@ def generate_wavef_pre_market_brief(send=False):
     lines += ["", "_Scouting only — no pre-market trades._"]
     msg="\n".join(lines)
     if send: send_telegram(msg)
+    print(f"[pre-market timing] total: {_audit_time.perf_counter() - _t0:.2f}s")
     return msg
+
 # --------------------------------------------------------------------------
 
 def _llm_brief(futures, gainers, losers, buy_lines, watch_lines, headlines):

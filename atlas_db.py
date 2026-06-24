@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import os
+import re
 from datetime import datetime
 
 DB_PATH = "/Users/yasser/scripts/atlas.db"
@@ -405,6 +406,34 @@ def _append_cash_ledger(cursor, amount, reason):
     return balance_after
 
 
+def _planned_stop_from_notes(notes):
+    """Extract the engine-planned stop from trade notes when present."""
+    if not notes:
+        return None
+    match = re.search(r"(?:^|[;|,\s])stop\s+\$?([0-9]+(?:\.[0-9]+)?)", str(notes), re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except Exception:
+        return None
+
+
+def _preserved_fill_stop(stop_loss, broker_price, notes):
+    """Preserve/correct planned stop during broker fill confirmation.
+
+    Fill confirmation may change quantity/entry/fees, but it must not turn the
+    structured stop into the broker fill price. If an existing stop is missing
+    or invalid at/above fill, recover the planned stop from the original notes.
+    """
+    planned = _planned_stop_from_notes(notes)
+    current = None if stop_loss is None else float(stop_loss)
+    price = float(broker_price)
+    if planned is not None and planned < price and (current is None or current >= price):
+        return planned
+    return current
+
+
 def confirm_trade_fill(trade_id, broker_qty, broker_price, broker_fees, broker_ref=None):
     """Flip a PENDING_FILL trade to OPEN using confirmed broker fill details."""
     trade_id = int(trade_id)
@@ -428,6 +457,7 @@ def confirm_trade_fill(trade_id, broker_qty, broker_price, broker_fees, broker_r
     if status != "PENDING_FILL":
         conn.close()
         raise ValueError(f"Trade id {trade_id} is {status}, not PENDING_FILL")
+    stop_loss = _preserved_fill_stop(stop_loss, broker_price, notes)
     if target_price is None and stop_loss is not None:
         risk = broker_price - float(stop_loss)
         if risk > 0:
@@ -438,9 +468,10 @@ def confirm_trade_fill(trade_id, broker_qty, broker_price, broker_fees, broker_r
     cursor.execute("""
         UPDATE trades
         SET status='OPEN', quantity=?, entry_price=?, entry_fees=?,
-            target_price=?, broker_ref=?, notes=?, updated_at=?
+            stop_loss=?, target_price=?, broker_ref=?, notes=?, updated_at=?
         WHERE id=? AND status='PENDING_FILL'
     """, (broker_qty, broker_price, broker_fees,
+          None if stop_loss is None else float(stop_loss),
           None if target_price is None else float(target_price),
           broker_ref or None, notes, _now(), trade_id))
     if cursor.rowcount != 1:
