@@ -114,13 +114,19 @@ def _changed_files_cached():
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def _mask_secret(text, token):
+    return (text or "").replace(token or "", "***")
+
+
 def git_push():
     print("Starting GitHub code backup push...")
     token = _github_token()
     if not token:
         raise RuntimeError("GITHUB_TOKEN/GH_TOKEN not available from environment/profile")
 
-    remote_url = f"https://{token}@{REMOTE_REPO}"
+    # GitHub HTTPS PAT auth works reliably when the token is the password.
+    # The token is read at runtime from the profile/env and is never hardcoded here.
+    remote_url = f"https://x-access-token:{token}@{REMOTE_REPO}"
     _run(["git", "remote", "set-url", "origin", remote_url])
 
     _run(["git", "add", "--all"])
@@ -131,18 +137,19 @@ def git_push():
         print("No code changes to commit.")
         push = _run(["git", "push", "origin", "main"], check=False)
         if push.returncode != 0:
-            raise RuntimeError(f"GitHub push failed: {push.stderr.strip()[:300]}")
+            raise RuntimeError(f"GitHub push failed: {_mask_secret(push.stderr.strip(), token)[:300]}")
         head = _run(["git", "rev-parse", "HEAD"]).stdout.strip()
         return head, [], removed
 
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     commit = _run(["git", "commit", "-m", f"Automated Code Backup: {timestamp}"], check=False)
     if commit.returncode != 0:
-        raise RuntimeError(f"Git commit failed: {commit.stderr.strip()[:300] or commit.stdout.strip()[:300]}")
+        err = _mask_secret(commit.stderr.strip() or commit.stdout.strip(), token)
+        raise RuntimeError(f"Git commit failed: {err[:300]}")
 
     push = _run(["git", "push", "origin", "main"], check=False)
     if push.returncode != 0:
-        raise RuntimeError(f"GitHub push failed: {push.stderr.strip()[:300]}")
+        raise RuntimeError(f"GitHub push failed: {_mask_secret(push.stderr.strip(), token)[:300]}")
 
     head = _run(["git", "rev-parse", "HEAD"]).stdout.strip()
     committed_files = _run(["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]).stdout.splitlines()
