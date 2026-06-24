@@ -62,11 +62,14 @@ def _load_env_files():
 
 def _github_token():
     _load_env_files()
-    return (
+    token = (
         os.environ.get("GITHUB_TOKEN")
         or os.environ.get("GH_TOKEN")
         or os.environ.get("GIT_TOKEN")
     )
+    if token and token.startswith("ghp_") and set(token[4:]) <= {"x", "X", "*"}:
+        raise RuntimeError("stored GitHub token appears to be a placeholder, not a valid PAT")
+    return token
 
 
 def _run(cmd, *, check=True, capture=True):
