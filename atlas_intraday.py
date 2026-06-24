@@ -376,10 +376,34 @@ def _quality_tags(item, score=None):
     return " · ".join(dict.fromkeys(tags)) if tags else "—"
 
 
+def _trim_macro_reason(reason):
+    text = str(reason or "macro caution").strip()
+    base, sep, tail = text.partition("; headlines:")
+    if not sep:
+        return text
+    banned = ("investor alert", "class action", "lawsuit", "deadline", "reminder")
+    headlines = []
+    for h in tail.split("|"):
+        h = h.strip()
+        if not h:
+            continue
+        low = h.lower()
+        if any(term in low for term in banned):
+            continue
+        headlines.append(h)
+    if not headlines:
+        return base.strip()
+    preferred = ("market", "stocks", "futures", "fed", "cpi", "rates", "inflation", "semis", "soxx", "spy", "results", "earnings")
+    chosen = next((h for h in headlines if any(term in h.lower() for term in preferred)), headlines[0])
+    chosen = chosen.replace("First Quarter", "Q1")
+    return f"{base.strip()}; {chosen}"
+
+
 def _header_lines(summary, hold_count):
     now_et = datetime.datetime.now(ZoneInfo("America/New_York")).strftime("%-I:%M %p")
     account = summary.get("account", {}) or {}
     macro = summary.get("macro_context") or {}
+    macro_sent = summary.get("macro_sentiment") or {}
     detail = str(summary.get("regime_detail") or "")
     m = re.search(r"SPY\s+([0-9.]+)", detail)
     spy = _price(m.group(1)) if m else "N/A"
@@ -390,6 +414,11 @@ def _header_lines(summary, hold_count):
     macro_note = ""
     if isinstance(macro, dict) and macro.get("cautious"):
         macro_note = f" · {macro.get('note') or '⚠️ macro caution'}"
+    if isinstance(macro_sent, dict) and macro_sent.get("active", True):
+        sent = str(macro_sent.get("sentiment") or "NEUTRAL").upper()
+        if sent in {"CAUTION", "RISK_OFF"}:
+            reason = _trim_macro_reason(macro_sent.get("reason") or "macro caution")
+            macro_note += f" · 🧠 {sent}: {reason}"
     positions = summary.get("open_positions_count", hold_count)
     return [
         f"🦅 ATLAS INTRADAY — {now_et} ET",

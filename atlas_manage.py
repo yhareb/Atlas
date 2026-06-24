@@ -45,7 +45,7 @@ import atlas_db
 import atlas_account as acct
 import atlas_portfolio as port
 from atlas_time import current_et_market_date_str
-from atlas_engine import analyze_ticker, check_regime, check_macro_context
+from atlas_engine import analyze_ticker, check_regime, check_macro_context, get_macro_sentiment
 try:
     from atlas_audit import log_signal as _atlas_log_signal
 except Exception:
@@ -168,6 +168,23 @@ def run(args):
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     market_date = current_et_market_date_str()
     LAST_RUN_SUMMARY = {"live": live, "mode": mode, "started_at": datetime.now().isoformat(), "run_id": run_id, "market_date": market_date}
+    try:
+        macro_sentiment = get_macro_sentiment()
+    except Exception:
+        macro_sentiment = {"sentiment": "NEUTRAL", "reason": "no data"}
+    if not isinstance(macro_sentiment, dict):
+        macro_sentiment = {"sentiment": "NEUTRAL", "reason": "no data"}
+    macro_label = str(macro_sentiment.get("sentiment") or "NEUTRAL").upper()
+    if macro_label not in {"NEUTRAL", "CAUTION", "RISK_OFF"}:
+        macro_label = "NEUTRAL"
+    macro_sentiment = dict(macro_sentiment)
+    macro_sentiment["sentiment"] = macro_label
+    macro_sentiment.setdefault("reason", "no data")
+    macro_active = (not live) or os.environ.get("ATLAS_MACRO_SENTIMENT_LIVE_ENABLED") == "1"
+    macro_sentiment["active"] = bool(macro_active)
+    if live and not macro_active:
+        macro_sentiment["shadow_only"] = True
+    LAST_RUN_SUMMARY["macro_sentiment"] = macro_sentiment
     print(LINE)
     print(f"  ATLAS v2 DAILY MANAGER   {datetime.now():%Y-%m-%d %H:%M}")
     print(f"  Mode: {mode}")
@@ -212,10 +229,24 @@ def run(args):
     _hdr("REGIME GATE")
     regime = check_regime()
     regime_ok, regime_detail = regime
-    LAST_RUN_SUMMARY.update({"regime_ok": regime_ok, "regime_detail": regime_detail})
+    macro_label = (LAST_RUN_SUMMARY.get("macro_sentiment") or {}).get("sentiment", "NEUTRAL")
+    macro_reason = (LAST_RUN_SUMMARY.get("macro_sentiment") or {}).get("reason", "no data")
+    macro_active = bool((LAST_RUN_SUMMARY.get("macro_sentiment") or {}).get("active", True))
+    entry_regime = regime
+    if macro_active and macro_label == "RISK_OFF":
+        # Secondary caution overlay only: does not change the regime gate, stops, targets, or signals.
+        # atlas_portfolio.consider_buy() already treats WEAK regime detail as half-size risk.
+        entry_regime = (regime_ok, f"{regime_detail} | WEAK MACRO_RISK_OFF: {macro_reason}")
+    LAST_RUN_SUMMARY.update({"regime_ok": regime_ok, "regime_detail": regime_detail, "entry_regime_detail": entry_regime[1]})
     macro_ctx = check_macro_context()
     LAST_RUN_SUMMARY.update({"macro_context": macro_ctx})
     print(f"  {'RISK-ON ' if regime_ok else 'RISK-OFF'} : {regime_detail}")
+    if macro_label in {"CAUTION", "RISK_OFF"}:
+        if macro_active:
+            risk_note = " — half-size risk" if macro_label == "RISK_OFF" else ""
+        else:
+            risk_note = " — shadow only; live overlay disabled pending review"
+        print(f"  MACRO LLM: ⚠️ {macro_label}: {macro_reason}{risk_note}")
     if macro_ctx.get("cautious"):
         print(f"  MACRO    : {macro_ctx.get('note')} ({', '.join(e.get('type','') for e in macro_ctx.get('events', [])[:3])})")
     elif macro_ctx.get("status") == "na":
@@ -246,7 +277,7 @@ def run(args):
     scan_errors = []
     for tkr in candidates:
         pending_decision = port.evaluate_pending_pullback(
-            tkr, dry_run=not live, regime=regime,
+            tkr, dry_run=not live, regime=entry_regime,
             pending=pending, reserved_cash=reserved_cash,
         )
         if pending_decision:
@@ -334,7 +365,7 @@ def run(args):
                 continue
 
         try:
-            res = analyze_ticker(tkr, regime=regime)
+            res = analyze_ticker(tkr, regime=entry_regime)
         except TypeError:
             res = analyze_ticker(tkr)  # back-compat if regime kwarg absent
         if "error" in res:
@@ -358,7 +389,7 @@ def run(args):
             continue
 
         decision = port.consider_buy(
-            res, dry_run=not live, regime=regime,
+            res, dry_run=not live, regime=entry_regime,
             pending=pending, reserved_cash=reserved_cash,
         )
         decision.setdefault("score", score)

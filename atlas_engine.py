@@ -162,6 +162,208 @@ def check_regime():
         return True, f"🟢 RISK-ON ✅; SPY {closes[-1]:.2f} > 50SMA {sma50:.2f}"
     return True, f"⚠️ WEAK — cautious (half size); SPY {closes[-1]:.2f} < 50SMA {sma50:.2f}"
 
+
+def _normal_macro_sentiment(value):
+    value = str(value or "NEUTRAL").upper().strip()
+    return value if value in {"NEUTRAL", "CAUTION", "RISK_OFF"} else "NEUTRAL"
+
+
+def _classify_macro_headlines(headlines):
+    """LLM macro classifier. Fail-silent: neutral on any failure."""
+    safe_default = {"sentiment": "NEUTRAL", "reason": "no data"}
+    headlines = [str(h).strip() for h in (headlines or []) if str(h or "").strip()]
+    if not headlines:
+        return safe_default
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return safe_default
+    base = os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1").rstrip("/")
+    prompt = (
+        "You are a macro market analyst. Based on these recent market headlines, "
+        "classify the current macro sentiment as one of: NEUTRAL, CAUTION, or RISK_OFF. "
+        "Return only a JSON object: {\"sentiment\": \"NEUTRAL\"|\"CAUTION\"|\"RISK_OFF\", "
+        "\"reason\": \"one sentence\"}. Headlines: " + json.dumps(headlines[:15])
+    )
+    try:
+        r = requests.post(
+            f"{base}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+                "response_format": {"type": "json_object"},
+            },
+            timeout=8,
+        )
+        if r.status_code != 200:
+            return safe_default
+        content = r.json()["choices"][0]["message"]["content"]
+        parsed = json.loads(content)
+        sentiment = _normal_macro_sentiment(parsed.get("sentiment"))
+        reason = str(parsed.get("reason") or "no data").strip()[:180] or "no data"
+        return {"sentiment": sentiment, "reason": reason}
+    except Exception:
+        return safe_default
+
+
+def _get_macro_headlines(limit=3):
+    """Supplementary macro context only; never drives classification."""
+    headlines = []
+    try:
+        if MASSIVE_API_KEY:
+            r = _audit_get(
+                f"{MASSIVE_BASE}/v2/reference/news",
+                params={"apiKey": MASSIVE_API_KEY, "limit": 10, "sort": "published_utc", "order": "desc"},
+                headers={"Accept": "application/json"},
+                timeout=8,
+            )
+            if r.status_code == 200:
+                for item in (r.json() or {}).get("results", [])[:10]:
+                    title = item.get("title")
+                    if title:
+                        headlines.append(str(title).strip())
+    except Exception:
+        pass
+    try:
+        if EODHD_API_KEY:
+            r = _audit_get(
+                "https://eodhd.com/api/news",
+                params={"api_token": EODHD_API_KEY, "fmt": "json", "s": "SPY.US", "limit": 5},
+                timeout=8,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list):
+                    for item in data[:5]:
+                        title = item.get("title")
+                        if title:
+                            headlines.append(str(title).strip())
+    except Exception:
+        pass
+    out, seen = [], set()
+    for h in headlines:
+        key = h.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(h)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _snapshot_intraday_change_pct(ticker):
+    """Current percent change vs previous close from Massive snapshot."""
+    if not MASSIVE_API_KEY:
+        return None
+    try:
+        r = _audit_get(
+            f"{MASSIVE_BASE}/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}",
+            params={"apiKey": MASSIVE_API_KEY},
+            headers={"Accept": "application/json"},
+            timeout=6,
+        )
+        if r.status_code != 200:
+            return None
+        t = (r.json() or {}).get("ticker") or {}
+        current = None
+        for section, key in (("lastTrade", "p"), ("min", "c"), ("day", "c")):
+            value = (t.get(section) or {}).get(key)
+            if value:
+                current = float(value)
+                break
+        # Massive snapshot exposes prior regular-session close as prevDay.c.
+        # Do not use today's open here: the macro overlay must catch overnight gap-downs.
+        prev = (t.get("prevDay") or {}).get("c")
+        if current is None or not prev:
+            return None
+        prev = float(prev)
+        if prev <= 0:
+            return None
+        return ((float(current) - prev) / prev) * 100.0
+    except Exception:
+        return None
+
+
+def get_macro_sentiment():
+    """Rule-based real-time macro overlay. Secondary only; never creates signals."""
+    spy_pct = _snapshot_intraday_change_pct("SPY")
+    soxx_pct = _snapshot_intraday_change_pct("SOXX")
+    spy_low_pct = None
+    vix_change_pct = None
+
+    try:
+        if MASSIVE_API_KEY:
+            r = _audit_get(
+                f"{MASSIVE_BASE}/v2/snapshot/locale/us/markets/stocks/tickers/SPY",
+                params={"apiKey": MASSIVE_API_KEY},
+                headers={"Accept": "application/json"},
+                timeout=6,
+            )
+            if r.status_code == 200:
+                t = (r.json() or {}).get("ticker") or {}
+                spy_low = (t.get("day") or {}).get("l")
+                spy_prev = (t.get("prevDay") or {}).get("c")
+                if spy_low is not None and spy_prev:
+                    spy_prev = float(spy_prev)
+                    if spy_prev > 0:
+                        spy_low_pct = ((float(spy_low) - spy_prev) / spy_prev) * 100.0
+    except Exception:
+        pass
+
+    try:
+        if EODHD_API_KEY:
+            r = _audit_get(
+                "https://eodhd.com/api/eod/VIX.INDX",
+                params={"api_token": EODHD_API_KEY, "fmt": "json", "limit": 2},
+                timeout=8,
+            )
+            if r.status_code == 200:
+                rows = r.json()
+                if isinstance(rows, list) and len(rows) >= 2:
+                    rows = sorted(rows, key=lambda x: str(x.get("date") or ""))
+                    prev_close = float(rows[-2].get("close"))
+                    today_close = float(rows[-1].get("close"))
+                    if prev_close > 0:
+                        vix_change_pct = ((today_close - prev_close) / prev_close) * 100.0
+    except Exception:
+        pass
+
+    if spy_pct is None and soxx_pct is None and vix_change_pct is None and spy_low_pct is None:
+        return {"sentiment": "NEUTRAL", "reason": "no data"}
+
+    sentiment = "NEUTRAL"
+    reason = "market stable"
+    if spy_pct is not None and spy_pct <= -1.25:
+        sentiment = "RISK_OFF"
+        reason = f"SPY down {spy_pct:.1f}% intraday"
+    if vix_change_pct is not None and vix_change_pct >= 8.0:
+        sentiment = "RISK_OFF"
+        reason = f"VIX up {vix_change_pct:.1f}%"
+    if sentiment == "NEUTRAL" and ((spy_pct is not None and spy_pct <= -0.5) or (soxx_pct is not None and soxx_pct <= -2.0)):
+        sentiment = "CAUTION"
+        reason = "broad market/semis pressure"
+    if sentiment == "NEUTRAL" and vix_change_pct is not None and vix_change_pct >= 4.0:
+        sentiment = "CAUTION"
+        reason = f"VIX up {vix_change_pct:.1f}%"
+    if sentiment == "NEUTRAL" and spy_low_pct is not None and spy_low_pct <= -0.4:
+        sentiment = "CAUTION"
+        reason = f"SPY intraday low {spy_low_pct:.1f}% vs prior close"
+
+    if sentiment in {"CAUTION", "RISK_OFF"}:
+        headlines = _get_macro_headlines(limit=3)
+        if headlines:
+            reason = f"{reason}; headlines: " + " | ".join(headlines[:3])
+    return {
+        "sentiment": sentiment,
+        "reason": reason,
+        "spy_intraday_pct": round(spy_pct, 2) if spy_pct is not None else None,
+        "soxx_intraday_pct": round(soxx_pct, 2) if soxx_pct is not None else None,
+        "spy_low_pct": round(spy_low_pct, 2) if spy_low_pct is not None else None,
+        "vix_change_pct": round(vix_change_pct, 2) if vix_change_pct is not None else None,
+    }
+
+
 def _llm_judge_catalyst(ticker, headlines):
     """Ask the LLM if the headlines are a genuinely STRONG, tradeable bullish catalyst.
     Fails safe: on any error returns None so caller uses fallback logic."""

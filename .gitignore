@@ -1,0 +1,22 @@
+# Atlas GitHub backup exclusions
+*.db
+*.log
+*.zip
+*.tar.gz
+*.bak
+.env
+pycache/
+__pycache__/
+staging/
+/Users/yasser/backups/
+
+# Extra operational noise/backups
+*.err
+*.out
+*.tmp
+.DS_Store
+backups/
+*_backup_*.py
+*_backup_*.sh
+*_wo[0-9]*_*.py
+*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9].py

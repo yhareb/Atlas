@@ -1,118 +1,169 @@
-import os
-import zipfile
 import datetime
+import fnmatch
+import os
+import re
 import subprocess
 import sys
+from pathlib import Path
+
 from atlas_notify import send_telegram
 
-# Configuration
-BACKUP_DIR = "/Users/yasser/backups"
 SCRIPTS_DIR = "/Users/yasser/scripts"
-HERMES_DIR = os.path.expanduser("~/.hermes/profiles/atlas")
-GDRIVE_FOLDER = "Atlas_V2_Backups"
+REMOTE_REPO = "github.com/yhareb/Atlas.git"
+ENV_PATHS = [
+    Path("/Users/yasser/.hermes/profiles/atlas/.env"),
+    Path("/Users/yasser/.hermes/.env"),
+    Path("/Users/yasser/.hermes/profiles/atlasops/.env"),
+]
 
-def create_zip():
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    zip_name = f"atlas_v2_backup_{timestamp}.zip"
-    zip_path = os.path.join(BACKUP_DIR, zip_name)
-    
-    if not os.path.exists(BACKUP_DIR):
-        os.makedirs(BACKUP_DIR)
-        
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        # Backup Scripts
-        for root, dirs, files in os.walk(SCRIPTS_DIR):
-            if ".git" in dirs:
-                dirs.remove(".git") # Skip git history in zip
-            for file in files:
-                if file.endswith(".db"): continue # Skip live DB in zip, handle separately if needed
-                zipf.write(os.path.join(root, file), 
-                           os.path.relpath(os.path.join(root, file), os.path.join(SCRIPTS_DIR, '..')))
-        
-        # Backup Hermes Profile (Skills, SOUL, etc.)
-        for root, dirs, files in os.walk(HERMES_DIR):
-            if "logs" in dirs:
-                dirs.remove("logs") # Skip logs
-            for file in files:
-                zipf.write(os.path.join(root, file), 
-                           os.path.relpath(os.path.join(root, file), os.path.join(HERMES_DIR, '..')))
-                
-    return zip_path
+DISALLOWED_PATTERNS = [
+    "*.db",
+    "*.log",
+    "*.zip",
+    "*.tar.gz",
+    "*.bak",
+    ".env",
+    "*.err",
+    "*.out",
+    "*.tmp",
+]
 
-def upload_to_gdrive(file_path):
-    try:
-        cmd = ["gws", "drive", "files", "upload", file_path, "--params", f'{{"name": "{os.path.basename(file_path)}"}}']
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            print(f"Backup uploaded to GDrive: {os.path.basename(file_path)}")
-        else:
-            print(f"Error uploading to GDrive: {result.stderr}")
-    except Exception as e:
-        print(f"Exception during GDrive upload: {e}")
 
-def backup_atlas_ops_db():
-    """Dump the local Postgres audit DB beside the Atlas backups and verify it."""
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    stamp = datetime.datetime.now().strftime("%Y%m%d")
-    dump_path = os.path.join(BACKUP_DIR, f"atlas_ops_{stamp}.sql")
-    pg_dump = "/opt/homebrew/opt/postgresql@16/bin/pg_dump"
-    if not os.path.exists(pg_dump):
-        pg_dump = "pg_dump"
-    cmd = [pg_dump, "-d", "atlas_ops", "-f", dump_path]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            msg = f"🚨 Atlas audit DB backup failed: pg_dump exit {result.returncode} {result.stderr[:160]}"
-            print(msg)
-            send_telegram(msg, label="atlas_backup")
-            return None
-        if not os.path.exists(dump_path) or os.path.getsize(dump_path) <= 0:
-            msg = f"🚨 Atlas audit DB backup failed: missing/empty dump {dump_path}"
-            print(msg)
-            send_telegram(msg, label="atlas_backup")
-            return None
-        print(f"Postgres audit DB dump created: {dump_path} ({os.path.getsize(dump_path)} bytes)")
-        return dump_path
-    except Exception as e:
-        msg = f"🚨 Atlas audit DB backup exception: {e}"
-        print(msg)
-        send_telegram(msg, label="atlas_backup")
-        return None
+def _load_env_files():
+    """Load env assignments and locate a stored GitHub PAT without printing secrets."""
+    token_pattern = re.compile(r"(github_pat_[A-Za-z0-9_]+|ghp_[A-Za-z0-9_]+|gho_[A-Za-z0-9_]+)")
+    discovered_token = None
+
+    for path in ENV_PATHS:
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(errors="ignore")
+        except Exception:
+            continue
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+            if discovered_token is None:
+                match = token_pattern.search(line)
+                if match:
+                    discovered_token = match.group(1)
+
+    if not os.environ.get("GITHUB_TOKEN") and discovered_token:
+        os.environ["GITHUB_TOKEN"] = discovered_token
+
+
+def _github_token():
+    _load_env_files()
+    return (
+        os.environ.get("GITHUB_TOKEN")
+        or os.environ.get("GH_TOKEN")
+        or os.environ.get("GIT_TOKEN")
+    )
+
+
+def _run(cmd, *, check=True, capture=True):
+    return subprocess.run(
+        cmd,
+        cwd=SCRIPTS_DIR,
+        check=check,
+        capture_output=capture,
+        text=True,
+    )
+
+
+def _is_disallowed(path):
+    normalized = path.replace("\\", "/")
+    base = normalized.rsplit("/", 1)[-1]
+    if "__pycache__/" in normalized or normalized.startswith("__pycache__/"):
+        return True
+    if "pycache/" in normalized or normalized.startswith("pycache/"):
+        return True
+    if "staging/" in normalized or normalized.startswith("staging/"):
+        return True
+    if "/backups/" in normalized or normalized.startswith("backups/"):
+        return True
+    if re.search(r"_20\d{6}_\d{6}\.py$", base):
+        return True
+    if re.search(r"_wo\d+[A-Za-z]*_20\d{6}_\d{6}\.py$", base):
+        return True
+    if any(fnmatch.fnmatch(base, pattern) or fnmatch.fnmatch(normalized, pattern) for pattern in DISALLOWED_PATTERNS):
+        return True
+    return False
+
+
+def _remove_disallowed_from_index():
+    result = _run(["git", "ls-files", "-z"])
+    tracked = [p for p in result.stdout.split("\0") if p]
+    disallowed = [p for p in tracked if _is_disallowed(p)]
+    for i in range(0, len(disallowed), 100):
+        chunk = disallowed[i:i + 100]
+        _run(["git", "rm", "--cached", "--ignore-unmatch", "--", *chunk], check=False)
+    return disallowed
+
+
+def _changed_files_cached():
+    result = _run(["git", "diff", "--cached", "--name-only"])
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
 def git_push():
-    print("Starting GitHub push...")
-    try:
-        # Add all changes
-        subprocess.run(["git", "-C", SCRIPTS_DIR, "add", "."], check=True)
-        # Commit with timestamp
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        subprocess.run(["git", "-C", SCRIPTS_DIR, "commit", "-m", f"Automated Backup: {timestamp}"], capture_output=True)
-        # Push to origin main
-        result = subprocess.run(["git", "-C", SCRIPTS_DIR, "push", "origin", "main"], capture_output=True, text=True)
-        if result.returncode == 0:
-            print("GitHub push successful.")
-        else:
-            print(f"GitHub push failed: {result.stderr}")
-    except Exception as e:
-        print(f"Exception during GitHub push: {e}")
+    print("Starting GitHub code backup push...")
+    token = _github_token()
+    if not token:
+        raise RuntimeError("GITHUB_TOKEN/GH_TOKEN not available from environment/profile")
+
+    remote_url = f"https://{token}@{REMOTE_REPO}"
+    _run(["git", "remote", "set-url", "origin", remote_url])
+
+    _run(["git", "add", "--all"])
+    removed = _remove_disallowed_from_index()
+    changed = _changed_files_cached()
+
+    if not changed:
+        print("No code changes to commit.")
+        push = _run(["git", "push", "origin", "main"], check=False)
+        if push.returncode != 0:
+            raise RuntimeError(f"GitHub push failed: {push.stderr.strip()[:300]}")
+        head = _run(["git", "rev-parse", "HEAD"]).stdout.strip()
+        return head, [], removed
+
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    commit = _run(["git", "commit", "-m", f"Automated Code Backup: {timestamp}"], check=False)
+    if commit.returncode != 0:
+        raise RuntimeError(f"Git commit failed: {commit.stderr.strip()[:300] or commit.stdout.strip()[:300]}")
+
+    push = _run(["git", "push", "origin", "main"], check=False)
+    if push.returncode != 0:
+        raise RuntimeError(f"GitHub push failed: {push.stderr.strip()[:300]}")
+
+    head = _run(["git", "rev-parse", "HEAD"]).stdout.strip()
+    committed_files = _run(["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]).stdout.splitlines()
+    return head, committed_files, removed
+
 
 if __name__ == "__main__":
-    print(f"Starting Atlas V2 Backup at {datetime.datetime.now()}")
-    
-    # 1. Local ZIP & GDrive Upload
-    zip_path = create_zip()
-    print(f"Local ZIP created: {zip_path}")
-    upload_to_gdrive(zip_path)
-
-    # 1b. Local Postgres audit DB dump beside atlas.db backups.
-    atlas_ops_dump = backup_atlas_ops_db()
-    
-    # 2. GitHub Push
-    git_push()
-    
-    print("Backup process complete.")
-    msg = f"✅ Atlas V2 Backup complete\nLocal ZIP: {zip_path}"
-    if atlas_ops_dump:
-        msg += f"\nAudit DB: {atlas_ops_dump}"
-    send_telegram(msg, label="atlas_backup")
+    print(f"Starting Atlas GitHub code backup at {datetime.datetime.now()}")
+    try:
+        commit_hash, files, removed = git_push()
+        print("GitHub push successful.")
+        print(f"Commit: {commit_hash}")
+        if files:
+            print("Files included:")
+            for name in files:
+                print(f"- {name}")
+        if removed:
+            print(f"Disallowed tracked files removed from Git index: {len(removed)}")
+        msg = f"✅ Atlas GitHub code backup complete\nCommit: {commit_hash}\nFiles included: {len(files)}"
+        send_telegram(msg, label="atlas_backup")
+    except Exception as exc:
+        print(f"GitHub backup failed: {exc}")
+        send_telegram(f"🚨 Atlas GitHub code backup failed: {exc}", label="atlas_backup")
+        sys.exit(1)

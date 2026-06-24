@@ -59,6 +59,7 @@ from atlas_engine import (
     check_fda_calendar,
     MASSIVE_API_KEY,
     MASSIVE_BASE,
+    EODHD_API_KEY,
 )
 
 # =============================================================================
@@ -283,10 +284,66 @@ def _parse_day(value):
     return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
 
 
+def _clean_daily_aggs(aggs):
+    """Return daily bars with valid positive closes only."""
+    clean = []
+    for d in aggs or []:
+        try:
+            close = float(d.get("c"))
+        except Exception:
+            continue
+        if close <= 0:
+            continue
+        item = dict(d)
+        item["c"] = close
+        try:
+            low = float(item.get("l", close))
+            item["l"] = low if low > 0 else close
+        except Exception:
+            item["l"] = close
+        clean.append(item)
+    return clean
+
+
+def _get_eodhd_pullback_aggs(ticker, days=90):
+    """Fallback daily EOD bars for new/short-history tickers; preserves EMA math."""
+    if not EODHD_API_KEY:
+        return []
+    end_day = current_et_market_date()
+    start_day = end_day - timedelta(days=days)
+    try:
+        r = _audit_get(
+            f"https://eodhd.com/api/eod/{ticker}.US",
+            params={
+                "api_token": EODHD_API_KEY,
+                "fmt": "json",
+                "from": start_day.isoformat(),
+                "to": end_day.isoformat(),
+            },
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return []
+        rows = r.json()
+        if not isinstance(rows, list):
+            return []
+        out = []
+        for row in rows:
+            close = row.get("adjusted_close", row.get("close"))
+            out.append({"c": close, "l": row.get("low", close), "date": row.get("date")})
+        return out
+    except Exception:
+        return []
+
+
 def _pullback_state(ticker):
-    aggs = get_massive_aggs(ticker, days=60)
-    if not aggs or len(aggs) < EMA_PERIOD + 1:
-        return None, "Insufficient data for EMA10"
+    aggs = _clean_daily_aggs(get_massive_aggs(ticker, days=60))
+    if len(aggs) < EMA_PERIOD:
+        fallback = _clean_daily_aggs(_get_eodhd_pullback_aggs(ticker, days=120))
+        if len(fallback) > len(aggs):
+            aggs = fallback
+    if len(aggs) < EMA_PERIOD:
+        return None, f"Insufficient data for EMA10 ({len(aggs)}/{EMA_PERIOD})"
     closes = [float(d["c"]) for d in aggs]
     ema10 = _ema(closes, EMA_PERIOD)
     if ema10 is None:
