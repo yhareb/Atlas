@@ -1,9 +1,11 @@
 import os, sys, re, requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from atlas_notify import send_telegram as _send_telegram
 from datetime import datetime, timedelta, date, time, timezone
 from zoneinfo import ZoneInfo
 sys.path.insert(0, "/Users/yasser/scripts")
 import atlas_db
+from atlas_symbol_meta import normalize_price, normalize_snapshot_fields, ticker_label
 from atlas_time import current_et_market_date, current_et_market_date_str, previous_et_trading_date_str
 from atlas_engine import _llm_judge_catalyst
 
@@ -17,6 +19,7 @@ if os.path.exists(_env_path):
                 os.environ.setdefault(_k.strip(), _v.strip())
 
 MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY")
+BENZINGA_API_KEY = os.environ.get("BENZINGA_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -133,10 +136,12 @@ def get_top_movers():
         data = massive_get(f"/v2/snapshot/locale/us/markets/stocks/{direction}")
         if data and data.get("tickers"):
             for t in data["tickers"][:5]:
-                ticker = t.get("ticker","?"); pct = t.get("todaysChangePerc",0)
-                price = (t.get("day") or {}).get("c")
+                ticker = t.get("ticker", "?")
+                label = ticker_label(ticker, t)
+                pct = t.get("todaysChangePerc", 0)
+                price = normalize_price(ticker, (t.get("day") or {}).get("c"))
                 sym = "▲ +" if direction == "gainers" else "▼ "
-                lst.append(f"  • {ticker} {'$'+f'{price:.2f}' if price else 'N/A'}  {sym}{abs(pct):.2f}%")
+                lst.append(f"  • {label} {'$'+f'{price:.2f}' if price else 'N/A'}  {sym}{abs(pct):.2f}%")
     return gl, ll
 
 def get_handoff_snapshot(max_buy=PRE_MARKET_HANDOFF_BUY_LIMIT, max_watch=PRE_MARKET_HANDOFF_WATCH_LIMIT):
@@ -150,23 +155,116 @@ def get_handoff_snapshot(max_buy=PRE_MARKET_HANDOFF_BUY_LIMIT, max_watch=PRE_MAR
     for ticker in (data.get("BUY",[]) or [])[:max_buy]:
         snap = massive_get(f"/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}")
         if snap and snap.get("ticker"):
-            t = snap["ticker"]; price = (t.get("day") or {}).get("c"); pct = t.get("todaysChangePerc")
-            bl.append(f"  • {ticker} {'$'+f'{price:.2f}' if price else 'N/A'}  {arrow(pct)}")
+            t = normalize_snapshot_fields(ticker, snap["ticker"]); price = (t.get("day") or {}).get("c"); pct = t.get("todaysChangePerc")
+            bl.append(f"  • {ticker_label(ticker, t)} {'$'+f'{price:.2f}' if price else 'N/A'}  {arrow(pct)}")
         else: bl.append(f"  • {ticker}")
     for ticker in (data.get("WATCH",[]) or [])[:max_watch]:
         snap = massive_get(f"/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}")
         if snap and snap.get("ticker"):
-            t = snap["ticker"]; price = (t.get("day") or {}).get("c"); pct = t.get("todaysChangePerc")
-            wl.append(f"  • {ticker} {'$'+f'{price:.2f}' if price else 'N/A'}  {arrow(pct)}")
+            t = normalize_snapshot_fields(ticker, snap["ticker"]); price = (t.get("day") or {}).get("c"); pct = t.get("todaysChangePerc")
+            wl.append(f"  • {ticker_label(ticker, t)} {'$'+f'{price:.2f}' if price else 'N/A'}  {arrow(pct)}")
         else: wl.append(f"  • {ticker}")
     return bl, wl
 
-def get_benzinga_headlines():
-    since = (datetime.utcnow()-timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S")
-    data = massive_get("/v2/reference/news", {"published_utc.gte": since, "limit": 5, "sort": "published_utc", "order": "desc"})
-    if data and data.get("results"):
-        return [f"  • {a.get('title','No title')}" for a in data["results"][:5]]
-    return []
+def _parse_benzinga_dt(value):
+    if not value:
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, timezone.utc)
+    txt = str(value).strip()
+    for parser in (
+        lambda x: datetime.fromisoformat(x.replace("Z", "+00:00")),
+        lambda x: datetime.strptime(x, "%Y-%m-%d %H:%M:%S"),
+        lambda x: datetime.strptime(x, "%Y-%m-%dT%H:%M:%S"),
+    ):
+        try:
+            dt = parser(txt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=ZoneInfo("America/New_York"))
+            return dt.astimezone(timezone.utc)
+        except Exception:
+            pass
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(txt)
+        if dt and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("America/New_York"))
+        return dt.astimezone(timezone.utc) if dt else None
+    except Exception:
+        return None
+
+
+def _headline_score(item):
+    if isinstance(item, dict):
+        title = str(item.get("title") or "")
+        teaser = str(item.get("teaser") or "")
+        channels = [str(c.get("name") if isinstance(c, dict) else c).lower() for c in (item.get("channels") or [])]
+        tags = [str(t.get("name") if isinstance(t, dict) else t).lower() for t in (item.get("tags") or [])]
+        rank = item.get("importance_rank")
+    else:
+        title, teaser, channels, tags, rank = str(item or ""), "", [], [], None
+    text = f"{title} {teaser}".lower()
+    keywords = (
+        "fed", "fomc", "rate", "yield", "treasury", "inflation", "cpi", "pce", "jobs", "gdp",
+        "stress test", "earnings", "guidance", "tariff", "china", "oil", "opec",
+        "geopolitical", "war", "israel", "iran", "russia", "ukraine", "premarket",
+        "futures", "nasdaq", "s&p", "dow", "chips", "chip", "semiconductor", "nvidia", "micron",
+        "buyback", "dividend", "shares rise", "shares are trading", "soaring", "higher", "lower",
+    )
+    score = sum(1 for word in keywords if word in text)
+    if any(c in {"movers", "top stories", "wiim", "after-hours center", "economics", "equities"} for c in channels):
+        score += 5
+    if any("why it's moving" in t for t in tags):
+        score += 4
+    try:
+        score += max(0, 3 - int(rank or 3))
+    except Exception:
+        pass
+    if any(c in {"analyst ratings", "price target"} for c in channels):
+        score -= 3
+    if "exploring the competitive space" in text:
+        score -= 4
+    return score
+
+
+def get_benzinga_headlines(limit=5, hours=12):
+    if not BENZINGA_API_KEY:
+        return []
+    now_utc = datetime.now(timezone.utc)
+    since_utc = now_utc - timedelta(hours=hours)
+    url = "https://api.benzinga.com/api/v2/news"
+    params = {
+        "token": BENZINGA_API_KEY,
+        "dateFrom": since_utc.astimezone(ZoneInfo("America/New_York")).date().isoformat(),
+        "dateTo": now_utc.astimezone(ZoneInfo("America/New_York")).date().isoformat(),
+        "pageSize": 50,
+        "displayOutput": "full",
+        "sort": "created",
+        "sortDir": "desc",
+    }
+    try:
+        r = _audit_get(url, params=params, headers={"Accept": "application/json"}, timeout=PRE_MARKET_HTTP_TIMEOUT)
+        if r.status_code != 200:
+            print(f"[Benzinga headlines] HTTP {r.status_code}: {r.text[:120]}")
+            return []
+        rows = r.json() or []
+    except Exception as e:
+        print(f"[Benzinga headlines] failed: {e}")
+        return []
+    candidates, seen = [], set()
+    for item in rows if isinstance(rows, list) else []:
+        title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip()
+        if not title or title.lower() in seen:
+            continue
+        published = _parse_benzinga_dt(item.get("created") or item.get("updated") or item.get("published"))
+        if published and published < since_utc:
+            continue
+        seen.add(title.lower())
+        candidates.append((published or now_utc, _headline_score(item), title))
+    candidates.sort(key=lambda x: (x[1], x[0]), reverse=True)
+    strong = [c for c in candidates if c[1] >= 4]
+    selected = strong if len(strong) >= 3 else candidates
+    return [f"  • {title}" for _published, _score, title in selected[:limit]]
 
 
 def _is_tradeable_symbol(sym):
@@ -248,6 +346,26 @@ def _fmt_et(dt_utc):
     return dt_utc.astimezone(ZoneInfo("America/New_York")).strftime('%m/%d %H:%M ET')
 
 
+def _parse_event_datetime_et(value):
+    if not value:
+        return None
+    txt = str(value).strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(txt)
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        # EODHD economic-event timestamps are delivered in UTC; convert before display/filtering.
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(ZoneInfo("America/New_York"))
+
+
+def _is_briefing_hours_et(dt_et):
+    if not dt_et:
+        return False
+    return time(4, 0) <= dt_et.time() <= time(16, 0)
+
+
 def _previous_trading_day(day):
     d = day - timedelta(days=1)
     while d.weekday() >= 5 or d in NYSE_HOLIDAYS_2026:
@@ -302,7 +420,7 @@ def get_engine_catalyst_watchlist(limit=35, max_hits=12):
             rating, reason = verdict
             if str(rating).upper() == "STRONG":
                 published = articles[0]["published_utc"]
-                lines.append(f"  {len(lines)+1}. 🔥 {ticker} — {_fmt_et(published)} — {_clean_catalyst_reason(reason)}")
+                lines.append(f"  {len(lines)+1}. 🔥 {ticker_label(ticker)} — {_fmt_et(published)} — {_clean_catalyst_reason(reason)}")
         if len(lines) >= max_hits:
             break
     return lines, checked, start_et, end_et
@@ -327,7 +445,7 @@ def _sentiment_line(ticker):
         rows = data.get(f"{ticker}.US") if isinstance(data, dict) else None
         row = rows[0] if rows else None
         val = float(row.get("normalized")) if row else None
-        return f"{'🟢' if val >= 0 else '🔴'} {ticker} sentiment {val:+.1f}" if val is not None else None
+        return f"{'🟢' if val >= 0 else '🔴'} {ticker_label(ticker)} sentiment {val:+.1f}" if val is not None else None
     except Exception: return None
 
 
@@ -380,39 +498,32 @@ def _same_analyst_firm(action_firm, quote_firm):
 
 def get_wavef_analyst_actions(limit=8):
     today=current_et_market_date_str(); data=massive_get("/benzinga/v1/ratings", {"date.gte":today,"limit":limit}) or {}
-    lines=[]; seen=[]
+    lines=[]
     for row in data.get("results") or []:
         t=(row.get("ticker") or "").upper(); firm=row.get("firm") or row.get("firm_name"); rating=row.get("rating"); pt=row.get("price_target") or row.get("adjusted_price_target"); act=row.get("price_target_action")
         if t:
-            base=f"  • {t} — {firm or 'Analyst'} {rating or ''} PT {'$'+str(int(float(pt))) if pt else 'N/A'} {act or ''}"
-            lines.append(base)
-            seen.append(t)
-            if not firm:
-                continue
             try:
-                insight_data = massive_get("/benzinga/v1/analyst-insights", {"ticker": t, "limit": 10}) or {}
-                for item in insight_data.get("results") or []:
-                    insight_firm = item.get("firm") or item.get("firm_name") or item.get("analyst_firm")
-                    if not _same_analyst_firm(firm, insight_firm):
-                        continue
-                    insight = (item.get("insight") or item.get("headline") or item.get("title") or "").strip()
-                    insight = re.sub(r"\s+", " ", insight).replace("*", "").replace("#", "")
-                    insight = insight.split(". ")[0].strip() or insight
-                    if insight and insight.lower() not in base.lower():
-                        lines.append(f"    💬 {insight[:90]} — {insight_firm}")
-                        break
+                pt_txt = "$" + str(int(float(pt))) if pt is not None and str(pt).strip() != "" else "N/A"
             except Exception:
-                pass
+                pt_txt = "$" + str(pt).strip() if str(pt or "").strip() else "N/A"
+            firm_txt = re.sub(r"\s+", " ", str(firm or "Analyst")).strip()
+            rating_txt = re.sub(r"\s+", " ", str(rating or act or "Rating")).strip()
+            lines.append(f"  • {t} - {firm_txt} {rating_txt} PT {pt_txt}")
     return lines
 
 
 def get_wavef_macro():
     today=current_et_market_date_str(); data=eodhd_get("/economic-events", {"from":today,"to":today,"country":"US"}) or []
-    lines=[]
-    for row in data[:12] if isinstance(data, list) else []:
-        typ=row.get("type") or "Event"; when=row.get("date") or ""; flag="⚠️" if any(w in typ.lower() for w in ("fed","fomc","cpi","consumer price index")) else "•"
-        lines.append(f"  {flag} {typ} — {when}")
-    return lines
+    events=[]
+    for row in data if isinstance(data, list) else []:
+        typ=row.get("type") or "Event"
+        when_et = _parse_event_datetime_et(row.get("date"))
+        if when_et is None or not _is_briefing_hours_et(when_et):
+            continue
+        flag="⚠️" if any(w in typ.lower() for w in ("fed","fomc","cpi","consumer price index")) else "•"
+        events.append((when_et, f"  {flag} {when_et.strftime('%H:%M ET')} — {typ}"))
+    events.sort(key=lambda item: item[0])
+    return [line for _when_et, line in events[:12]]
 
 
 def _fda_event_date(row):
@@ -484,7 +595,21 @@ def _fda_warning_lines(events):
 
 
 def get_wavef_insider_buys(limit=6):
-    names=_dedupe_tickers(get_discovery_universe(limit=10), limit=10); lines=[]
+    names=[]
+    try:
+        market_day=current_et_market_date(); today=market_day.strftime('%Y-%m-%d'); yesterday=previous_et_trading_date_str(market_day)
+        data=atlas_db.get_handoff(today) or atlas_db.get_handoff(yesterday) or {}
+        names.extend(data.get("BUY", []) or [])
+        names.extend(data.get("WATCH", []) or [])
+    except Exception:
+        pass
+    names.extend(_recent_signal_tickers(days=2))
+    try:
+        from atlas_manage import DEFAULT_UNIVERSE
+        names.extend(DEFAULT_UNIVERSE)
+    except Exception:
+        pass
+    names=_dedupe_tickers(names, limit=max(limit, 4)); lines=[]
     try:
         from atlas_engine import check_insider_buying
         for t in names:
@@ -495,8 +620,289 @@ def get_wavef_insider_buys(limit=6):
     return lines
 
 
+
+def _to_float(value, default=None):
+    try:
+        if value in (None, ""):
+            return default
+        return float(str(value).replace("$", "").replace(",", ""))
+    except Exception:
+        return default
+
+
+def _fmt_price(value):
+    val = _to_float(value)
+    return "N/A" if val is None else f"${val:,.2f}"
+
+
+def _fmt_pct(value, decimals=1, signed=True):
+    val = _to_float(value)
+    if val is None:
+        return "N/A"
+    sign = "+" if signed and val >= 0 else ""
+    return f"{sign}{val:.{decimals}f}%"
+
+
+def _section(title):
+    return f"━━━ {title} ━━━"
+
+
+def _yahoo_vix_quote():
+    """Fallback quote for VIX only when Polygon/Massive I:VIX is unavailable."""
+    try:
+        r = requests.get(
+            "https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX",
+            params={"range": "5d", "interval": "1d"},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=5,
+        )
+        if r.status_code != 200:
+            return None
+        payload = r.json() or {}
+        result = ((payload.get("chart") or {}).get("result") or [])
+        if not result:
+            return None
+        meta = result[0].get("meta") or {}
+        price = _to_float(meta.get("regularMarketPrice"))
+        prev_close = _to_float(meta.get("chartPreviousClose") or meta.get("previousClose"))
+        if not prev_close:
+            closes = (((result[0].get("indicators") or {}).get("quote") or [{}])[0].get("close") or [])
+            valid = [_to_float(x) for x in closes if _to_float(x) is not None]
+            if len(valid) >= 2:
+                prev_close = valid[-2]
+        pct = ((price / prev_close) - 1.0) * 100.0 if price and prev_close else None
+        return {"ticker": "^VIX", "price": price, "prev_close": prev_close, "pct": pct, "volume": None, "prev_volume": None}
+    except Exception:
+        return None
+
+
+def _snapshot_quote(sym):
+    sym = (sym or "").upper()
+    if sym in {"VIX", "I:VIX"}:
+        # Polygon/Massive VIX is an index ticker. Stock snapshots 404; use I:VIX prev close.
+        data = massive_get("/v2/aggs/ticker/I:VIX/prev", {"adjusted": "true"}) or {}
+        rows = data.get("results") or []
+        row = rows[0] if rows else {}
+        price = _to_float(row.get("c"))
+        open_price = _to_float(row.get("o"))
+        pct = ((price / open_price) - 1.0) * 100.0 if price and open_price else None
+        if price:
+            return {"ticker": "I:VIX", "price": price, "prev_close": open_price, "pct": pct, "volume": _to_float(row.get("v")), "prev_volume": None}
+        return _yahoo_vix_quote() or {"ticker": "^VIX", "price": None, "prev_close": None, "pct": None, "volume": None, "prev_volume": None}
+
+    data = massive_get(f"/v2/snapshot/locale/us/markets/stocks/tickers/{sym}") or {}
+    t = normalize_snapshot_fields(sym, data.get("ticker") or {})
+    day = t.get("day") or {}
+    prev = t.get("prevDay") or {}
+    last_trade = t.get("lastTrade") or {}
+    price = _to_float(day.get("c")) or _to_float(last_trade.get("p")) or _to_float(prev.get("c"))
+    prev_close = _to_float(prev.get("c"))
+    pct = _to_float(t.get("todaysChangePerc"))
+    if pct is None and price and prev_close:
+        pct = ((price / prev_close) - 1.0) * 100.0
+    volume = _to_float(day.get("v")) or _to_float(t.get("volume"))
+    prev_volume = _to_float(prev.get("v"))
+    return {"ticker": sym, "price": price, "prev_close": prev_close, "pct": pct, "volume": volume, "prev_volume": prev_volume}
+
+
+def _sentiment_value(ticker):
+    data = eodhd_get("/sentiments", {"s": f"{ticker}.US"})
+    try:
+        rows = data.get(f"{ticker}.US") if isinstance(data, dict) else None
+        row = rows[0] if rows else None
+        return float(row.get("normalized")) if row else None
+    except Exception:
+        return None
+
+
+def _latest_signal_score(ticker):
+    conn = atlas_db.get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT score FROM signals WHERE ticker=? ORDER BY timestamp DESC, id DESC LIMIT 1", ((ticker or "").upper(),))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def _macro_relevant_note(ticker, macro_lines):
+    text = " ".join(str(x).lower() for x in (macro_lines or []))
+    ticker = (ticker or "").upper()
+    semis = {"LRCX", "NVDA", "AMD", "MU", "TSM", "AVGO", "SMCI", "ASML", "AMAT"}
+    banks = {"JPM", "BAC", "WFC", "C", "GS", "MS", "XLF"}
+    if ticker in semis and any(k in text for k in ("semi", "chip", "semiconductor")):
+        return "semis macro sensitivity"
+    if ticker in banks and any(k in text for k in ("fed", "stress", "bank", "fomc", "rate")):
+        return "banks/Fed macro sensitivity"
+    if any(k in text for k in ("fed", "fomc", "cpi", "consumer price index")):
+        return "watch macro event risk"
+    return None
+
+
+def _open_position_lines(macro_lines):
+    rows = atlas_db.get_open_positions()
+    lines = []
+    for row in rows:
+        ticker = str(row.get("ticker") or "?").upper()
+        shares = int(_to_float(row.get("quantity"), 0) or 0)
+        entry = _to_float(row.get("price"))
+        now = _snapshot_quote(ticker).get("price") or entry
+        stop = row.get("stop_loss")
+        target = row.get("target_price")
+        value = shares * (now or 0)
+        pnl = ((now or 0) - (entry or 0)) * shares
+        pct = (((now or 0) / entry - 1.0) * 100.0) if entry else 0
+        icon = "🟢" if pnl >= 0 else "🔴"
+        sign_money = f"+${abs(pnl):,.0f}" if pnl >= 0 else f"−${abs(pnl):,.0f}"
+        lines.append(f"{icon} {ticker_label(ticker, row)} ~${value:,.0f}  {_fmt_price(entry)} → {_fmt_price(now)}  {_fmt_pct(pct)} ({sign_money})")
+        lines.append(f"   🛑 {_fmt_price(stop)}  🎯 {_fmt_price(target)}")
+        note = _macro_relevant_note(ticker, macro_lines)
+        if note:
+            lines.append(f"   ⚠️ Watch: {note}")
+    return lines
+
+
+def _overnight_headlines(limit=5):
+    return [re.sub(r"^\s*•\s*", "", str(x)).strip() for x in get_benzinga_headlines()[:limit] if str(x).strip()]
+
+
+def _gapper_candidates(limit=6):
+    data = massive_get("/v2/snapshot/locale/us/markets/stocks/gainers") or {}
+    start_et, end_et = premarket_news_window()
+    try:
+        from market_scout import has_recent_reverse_split
+    except Exception:
+        has_recent_reverse_split = lambda _ticker: False
+
+    base_rows = []
+    for row in data.get("tickers") or []:
+        ticker = (row.get("ticker") or "").upper()
+        if not _is_tradeable_symbol(ticker):
+            continue
+        day = row.get("day") or {}
+        prev = row.get("prevDay") or {}
+        price = normalize_price(ticker, _to_float(day.get("c")) or _to_float((row.get("lastTrade") or {}).get("p")))
+        if not price or price < 5:
+            continue
+        prev_close = normalize_price(ticker, _to_float(prev.get("c")))
+        gap = _to_float(row.get("todaysChangePerc"))
+        if gap is None and price and prev_close:
+            gap = ((price / prev_close) - 1.0) * 100.0
+        if gap is None or gap <= 4:
+            continue
+        vol = _to_float(day.get("v"))
+        prev_vol = _to_float(prev.get("v"))
+        rvol = (vol / prev_vol) if vol and prev_vol else None
+        if rvol is None or rvol <= 1.5:
+            continue
+        base_rows.append({"ticker": ticker, "price": price, "gap": gap, "rvol": rvol, "trigger": price})
+        if len(base_rows) >= max(limit * 2, limit):
+            break
+
+    def _enrich(c):
+        ticker = c["ticker"]
+        try:
+            if has_recent_reverse_split(ticker):
+                return None
+        except Exception:
+            return None
+        sent = _sentiment_value(ticker)
+        articles = _ticker_news_in_window(ticker, start_et, end_et, limit=1)
+        catalyst = (articles[0].get("title") if articles else None) or "fresh catalyst pending"
+        c.update({"sentiment": sent, "catalyst": catalyst, "score": _latest_signal_score(ticker)})
+        return c
+
+    out = []
+    with ThreadPoolExecutor(max_workers=min(6, max(1, len(base_rows)))) as pool:
+        future_map = {pool.submit(_enrich, dict(c)): c for c in base_rows}
+        for fut in as_completed(future_map):
+            item = fut.result()
+            if item:
+                out.append(item)
+    order = {c["ticker"]: i for i, c in enumerate(base_rows)}
+    out.sort(key=lambda c: order.get(c["ticker"], 999))
+    return out[:limit]
+
+
+def _gap_breakout_lines(candidates):
+    lines = []
+    for c in candidates:
+        if (c.get("gap") or 0) > 4 and (c.get("rvol") or 0) > 1.5 and (c.get("sentiment") or 0) > 0.5:
+            score = str(c.get("score") or "")
+            if score.startswith("2/"):
+                continue
+            lines.append(
+                f"🔹 {ticker_label(c['ticker'], c)} Gap {_fmt_pct(c.get('gap'))} · RVOL {c.get('rvol'):.1f}x · Sentiment {c.get('sentiment'):.1f} · Trigger {_fmt_price(c.get('trigger'))}"
+            )
+            lines.append(f"   Catalyst: {_clean_catalyst_reason(c.get('catalyst'))}")
+    return lines
+
+
+def _catalyst_override_lines(candidates):
+    lines = []
+    for c in candidates:
+        score = str(c.get("score") or "")
+        if not score.startswith("2/"):
+            continue
+        if (c.get("gap") or 0) > 4 and (c.get("rvol") or 0) > 3 and (c.get("sentiment") or 0) > 0.5:
+            lines.append(
+                f"🔸 {ticker_label(c['ticker'], c)} Gap {_fmt_pct(c.get('gap'))} · RVOL {c.get('rvol'):.1f}x · Sentiment {c.get('sentiment'):.1f} · Trigger {_fmt_price(c.get('trigger'))} · 5% stop"
+            )
+            lines.append(f"   Catalyst: {_clean_catalyst_reason(c.get('catalyst'))}")
+    return lines
+
+
+def _pullback_and_hot_lines():
+    pullbacks, hot = [], []
+    for row in atlas_db.get_pending_pullbacks(status="WAITING"):
+        ticker = str(row.get("ticker") or "?").upper()
+        trigger = _to_float(row.get("trigger_price"))
+        now = _snapshot_quote(ticker).get("price") or _to_float(row.get("reference_price"))
+        pct = (((now / trigger) - 1.0) * 100.0) if now and trigger else None
+        score = row.get("score") or "?/4"
+        sig = row.get("signal_result") or {}
+        flags = []
+        if sig.get("catalyst_reason"):
+            flags.append("catalyst")
+        if sig.get("warnings"):
+            flags.append("warnings")
+        if sig.get("fundamentals"):
+            flags.append((sig.get("fundamentals") or {}).get("tag") or "fundamentals")
+        flag_txt = " · ".join([str(x) for x in flags if x]) or "—"
+        if pct is not None and pct > 10:
+            hot.append(f"{ticker_label(ticker, row)} +{pct:.0f}%")
+            continue
+        pullbacks.append(f"🔸 {ticker_label(ticker, row)} Trigger {_fmt_price(trigger)} · Now {_fmt_price(now)} ({_fmt_pct(pct)}) · {score} · {flag_txt}")
+    return pullbacks, hot
+
+
+def _sector_pulse_lines():
+    labels = {"XLF":"financials", "XLK":"technology", "XLE":"energy", "XLV":"healthcare", "XLI":"industrials"}
+    rows = []
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        future_map = {pool.submit(_snapshot_quote, sym): sym for sym in labels}
+        for fut in as_completed(future_map):
+            sym = future_map[fut]
+            q = fut.result()
+            if q.get("pct") is not None:
+                rows.append((sym, q["pct"], labels.get(sym, "sector")))
+    rows.sort(key=lambda x: abs(x[1]), reverse=True)
+    lines = []
+    for sym, pct, label in rows[:4]:
+        reason = f"{label} leading" if pct >= 0 else f"{label} under pressure"
+        lines.append(f"{sym} {_fmt_pct(pct)} — {reason}")
+    return lines
+
+
+def _first_compact(items, fallback="none"):
+    if not items:
+        return fallback
+    cleaned = [re.sub(r"^\s*[•\-]\s*", "", str(x)).strip() for x in items if str(x).strip()]
+    return " | ".join(cleaned[:3]) if cleaned else fallback
+
+
 def generate_wavef_pre_market_brief(send=False):
     _t0 = _audit_time.perf_counter()
+
     def _timed(label, fn):
         st = _audit_time.perf_counter()
         try:
@@ -504,39 +910,113 @@ def generate_wavef_pre_market_brief(send=False):
         finally:
             print(f"[pre-market timing] {label}: {_audit_time.perf_counter() - st:.2f}s")
 
-    today_str = current_et_market_date_str()
-    futures = _timed("futures", get_futures)
-    gainers, losers = _timed("top_movers", get_top_movers)
-    screen = _timed("screener", get_wavef_screener_names)
-    earnings = _timed("earnings", get_wavef_earnings)
-    analysts = _timed("analyst_actions", get_wavef_analyst_actions)
-    macro = _timed("macro", get_wavef_macro)
-    fda_events = _timed("fda", get_wavef_fda_warnings)
-    buy_lines, watch_lines = _timed("handoff_snapshot", get_handoff_snapshot)
-    catalysts, checked, win_start, win_end = _timed(
-        "engine_catalysts",
-        lambda: get_engine_catalyst_watchlist(limit=PRE_MARKET_CATALYST_LIMIT, max_hits=PRE_MARKET_CATALYST_MAX_HITS),
-    )
-    insiders = _timed("insider_buys", lambda: get_wavef_insider_buys(limit=4))
-    sent=[]
-    for line in (gainers[:2]+screen[:2]):
-        parts=line.replace('•','').split(); sent.append(_sentiment_line(parts[0]) if parts else None)
-    sent=[x for x in sent if x]
-    lines=[f"🌄 *PRE-MARKET BRIEF — {today_str}*", "", "*🧭 Market Sentiment Overview:*"]
-    lines.extend(futures or ["  N/A"])
-    if sent: lines.append("  News sentiment: " + " | ".join(sent[:4]))
-    lines += ["", "*🚀 Pre-Market Movers / Gappers:*"] + (gainers[:8] or ["  None yet"])
-    lines += ["", "*🧪 Screener Fresh Names:*"] + (screen or ["  None found"])
-    lines += ["", "*📰 News + Sentiment Catalysts:*"] + (catalysts or ["  No strong fresh catalysts found"])
-    lines += ["", "*📊 Overnight Earnings:*"] + (earnings or ["  No EPS/revenue surprise rows found"])
-    lines += ["", "*🏦 Analyst Actions / PT Changes:*"] + (analysts or ["  No fresh analyst rows found"])
-    lines += ["", "*🏛 Insider Buys:*"] + (insiders or ["  No notable open-market insider buys found in scanned names"])
-    lines += ["", "*⚠️ Macro Events Today:*"] + (macro or ["  No macro events returned"])
-    lines += [""] + _fda_warning_lines(fda_events)
-    if buy_lines or watch_lines: lines += ["", "*🎯 Setups Armed For The Day:*"] + (buy_lines[:6] + watch_lines[:8])
-    lines += ["", "_Scouting only — no pre-market trades._"]
-    msg="\n".join(lines)
-    if send: send_telegram(msg)
+    market_day = current_et_market_date()
+    date_label = market_day.strftime("%B %-d, %Y")
+    tasks = {
+        "spy_snapshot": lambda: _snapshot_quote("SPY"),
+        "qqq_snapshot": lambda: _snapshot_quote("QQQ"),
+        "vix_snapshot": lambda: _snapshot_quote("VIX"),
+        "macro": get_wavef_macro,
+        "overnight_headlines": _overnight_headlines,
+        "top_movers": get_top_movers,
+        "gapper_candidates": _gapper_candidates,
+        "earnings": get_wavef_earnings,
+        "analyst_actions": lambda: get_wavef_analyst_actions(limit=4),
+        "insider_buys": lambda: get_wavef_insider_buys(limit=2),
+        "fda": get_wavef_fda_warnings,
+        "pullbacks": _pullback_and_hot_lines,
+        "sector_pulse": _sector_pulse_lines,
+    }
+    results = {}
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        future_map = {pool.submit(_timed, label, fn): label for label, fn in tasks.items()}
+        for fut in as_completed(future_map):
+            label = future_map[fut]
+            results[label] = fut.result()
+
+    spy = results.get("spy_snapshot") or {}
+    qqq = results.get("qqq_snapshot") or {}
+    vix = results.get("vix_snapshot") or {}
+    macro = results.get("macro") or []
+    headlines = results.get("overnight_headlines") or []
+    gainers, losers = results.get("top_movers") or ([], [])
+    gappers = results.get("gapper_candidates") or []
+    earnings = results.get("earnings") or []
+    analysts = results.get("analyst_actions") or []
+    insiders = results.get("insider_buys") or []
+    fda_events = results.get("fda") or []
+    pullbacks, too_hot = results.get("pullbacks") or ([], [])
+    sectors = results.get("sector_pulse") or []
+    open_positions = _timed("open_positions", lambda: _open_position_lines(macro))
+    gap_breakouts = _timed("gap_breakouts", lambda: _gap_breakout_lines(gappers))
+    catalyst_overrides = _timed("catalyst_overrides", lambda: _catalyst_override_lines(gappers))
+
+    avg_idx = sum(x for x in [spy.get("pct"), qqq.get("pct")] if x is not None)
+    idx_count = len([x for x in [spy.get("pct"), qqq.get("pct")] if x is not None])
+    avg_idx = avg_idx / idx_count if idx_count else 0
+    if avg_idx > 0.3:
+        sentiment = "risk-on tone"
+    elif avg_idx < -0.3:
+        sentiment = "risk-off tone"
+    else:
+        sentiment = "mixed/neutral tone"
+    if macro:
+        sentiment += "; macro events on deck"
+
+    lines = [
+        f"🦅 ATLAS PRE-MARKET BRIEF — {date_label} · SPY {_fmt_price(spy.get('price'))} ({_fmt_pct(spy.get('pct'))}) | QQQ {_fmt_price(qqq.get('price'))} ({_fmt_pct(qqq.get('pct'))}) | VIX {_fmt_price(vix.get('price'))} ({_fmt_pct(vix.get('pct'))}) · {sentiment}",
+        "",
+        _section("MACRO BRIEFING"),
+    ]
+    lines.append("Overnight Headlines")
+    if headlines:
+        for item in headlines[:5]:
+            lines.append(f"📰 {item}")
+    else:
+        lines.append("No overnight Benzinga headlines returned")
+    lines.append("Scheduled Events (4 AM–4 PM ET)")
+    lines.extend(macro[:8] if macro else ["No scheduled macro events returned"])
+
+    if open_positions:
+        lines += ["", _section("OPEN POSITIONS")]
+        lines.extend(open_positions)
+
+    if gap_breakouts:
+        lines += ["", _section("GAP-UP BREAKOUTS")]
+        lines.extend(gap_breakouts)
+
+    if pullbacks:
+        lines += ["", _section("PULLBACK CANDIDATES")]
+        lines.extend(pullbacks)
+
+    if catalyst_overrides:
+        lines += ["", _section("CATALYST OVERRIDES — HALF SIZE")]
+        lines.extend(catalyst_overrides)
+
+    if too_hot:
+        lines += ["", _section("TOO HOT SKIP"), " | ".join(too_hot[:12])]
+
+    if sectors:
+        lines += ["", _section("SECTOR PULSE")]
+        lines.extend(sectors)
+
+    scouting = []
+    if earnings:
+        scouting.append("Earnings tonight: " + _first_compact(earnings))
+    if analysts:
+        scouting.append("Analyst actions: " + _first_compact(analysts))
+    if insiders:
+        scouting.append("Insider buys: " + _first_compact(insiders))
+    if fda_events:
+        fda_bits = [f"{(ev.get('ticker') or '?').upper()} {ev.get('event_date')} {ev.get('event_type')}" for ev in fda_events[:3]]
+        scouting.append("FDA calendar: " + " | ".join(fda_bits))
+    if scouting:
+        lines += ["", _section("SCOUTING")]
+        lines.extend(scouting)
+
+    msg = "\n".join(lines)
+    if send:
+        send_telegram(msg)
     print(f"[pre-market timing] total: {_audit_time.perf_counter() - _t0:.2f}s")
     return msg
 

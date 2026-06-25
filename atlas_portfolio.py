@@ -46,6 +46,7 @@ sys.path.insert(0, "/Users/yasser/scripts")
 import atlas_db
 import atlas_account as acct
 from atlas_time import current_et_market_date, add_trading_days
+from atlas_symbol_meta import normalize_price, normalize_snapshot_fields
 
 # Reuse the engine's data + indicator helpers so prices/ATR match exactly.
 from atlas_engine import (
@@ -71,6 +72,7 @@ from atlas_engine import (
 # =============================================================================
 RISK_PCT_FULL = 0.01      # 1% equity risk for 4/4 BUY
 RISK_PCT_HALF = 0.005     # 0.5% equity risk for 3/4 BUY (Small)
+RISK_PCT_GAP_BREAKOUT = 0.0025  # 0.25% equity risk for opening gap-up breakout
 MAX_POS_PCT = 0.20        # cap any single position at 20% of equity
 MAX_POSITIONS = 10        # max concurrent open positions
 MAX_PER_SECTOR = 3        # max concurrent open positions per sector
@@ -86,6 +88,8 @@ BREAKOUT_STOP_BUFFER_PCT = 0.005  # opening-range stop sits just below range low
 BREAKOUT_FALLBACK_STOP_PCT = 0.04  # fallback trailing stop when intraday candles unavailable
 LATE_ENTRY_CUTOFF_ET = time(14, 30)  # no new entries at/after 2:30 PM ET
 SPY_INTRADAY_DROP_VETO_PCT = -0.4  # block new entries if SPY drops more than 0.4% in 30 minutes
+LIVE_PRICE_CACHE_TTL_SEC = 300  # pending-pullback live quote cache; 5 minutes
+_LIVE_PRICE_CACHE = {}
 
 
 try:
@@ -163,8 +167,13 @@ def sector_of(ticker):
 # --------------------------------------------------------------------------- #
 def _live_price_lookup(ticker):
     """Return current/last intraday price from Massive snapshot; None if unavailable."""
-    if not MASSIVE_API_KEY:
+    ticker = (ticker or "").upper()
+    if not MASSIVE_API_KEY or not ticker:
         return None
+    now_ts = _audit_time.time()
+    cached = _LIVE_PRICE_CACHE.get(ticker)
+    if cached and (now_ts - float(cached.get("ts", 0))) <= LIVE_PRICE_CACHE_TTL_SEC:
+        return cached.get("price")
     try:
         r = _audit_get(
             f"{MASSIVE_BASE}/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}",
@@ -172,11 +181,13 @@ def _live_price_lookup(ticker):
         )
         if r.status_code != 200:
             return None
-        t = (r.json() or {}).get("ticker") or {}
+        t = normalize_snapshot_fields(ticker, (r.json() or {}).get("ticker") or {})
         for section, key in (("lastTrade", "p"), ("min", "c"), ("day", "c")):
             value = (t.get(section) or {}).get(key)
             if value:
-                return float(value)
+                price = float(value)
+                _LIVE_PRICE_CACHE[ticker] = {"ts": now_ts, "price": price}
+                return price
     except Exception:
         return None
     return None
@@ -189,7 +200,21 @@ def _last_price(ticker):
     aggs = get_massive_aggs(ticker, days=30)
     if not aggs:
         return None
-    return float(aggs[-1]["c"])
+    fixed_last = normalize_price(ticker, aggs[-1]["c"])
+    return float(fixed_last if fixed_last is not None else aggs[-1]["c"])
+
+
+def _normalize_price_bars(ticker, aggs):
+    out = []
+    for row in aggs or []:
+        item = dict(row)
+        for key in ("c", "h", "l", "o"):
+            if item.get(key) not in (None, ""):
+                fixed = normalize_price(ticker, item.get(key))
+                if fixed is not None:
+                    item[key] = fixed
+        out.append(item)
+    return out
 
 
 def _ema(values, period):
@@ -216,11 +241,16 @@ def size_position(equity, entry, stop, half=False):
     Capped so that entry*shares <= MAX_POS_PCT * equity.
     Returns 0 if the math is invalid (stop >= entry, etc.).
     """
+    risk_pct = RISK_PCT_HALF if half else RISK_PCT_FULL
+    return size_position_for_risk(equity, entry, stop, risk_pct)
+
+
+def size_position_for_risk(equity, entry, stop, risk_pct):
+    """Return integer share count for an explicit equity-risk fraction."""
     risk_per_share = entry - stop
     if risk_per_share <= 0 or equity <= 0 or entry <= 0:
         return 0
-    risk_pct = RISK_PCT_HALF if half else RISK_PCT_FULL
-    dollar_risk = equity * risk_pct
+    dollar_risk = equity * float(risk_pct or 0)
     shares = math.floor(dollar_risk / risk_per_share)
 
     # Cap by max position value.
@@ -421,9 +451,9 @@ def _get_eodhd_pullback_aggs(ticker, days=90):
 
 
 def _pullback_state(ticker):
-    aggs = _clean_daily_aggs(get_massive_aggs(ticker, days=60))
+    aggs = _clean_daily_aggs(_normalize_price_bars(ticker, get_massive_aggs(ticker, days=60)))
     if len(aggs) < EMA_PERIOD:
-        fallback = _clean_daily_aggs(_get_eodhd_pullback_aggs(ticker, days=120))
+        fallback = _clean_daily_aggs(_normalize_price_bars(ticker, _get_eodhd_pullback_aggs(ticker, days=120)))
         if len(fallback) > len(aggs):
             aggs = fallback
     if len(aggs) < EMA_PERIOD:
@@ -510,6 +540,8 @@ def evaluate_pending_pullback(ticker, dry_run=True, regime=None, pending=None, r
         fda_calendar = sig.get("fda_calendar") or (check_fda_calendar(ticker, fundamentals=fundamentals) if row_pillars >= 3 else None)
         return {"ticker": ticker, "action": "WAIT", "score": row.get("score"), "reason": detail,
                 "pending_id": row.get("id"), "wait_type": "PULLBACK_WAITING",
+                "entry": row.get("trigger_price"), "price": row.get("reference_price"),
+                "pct_over_ema": row.get("pct_over_ema"), "price_source": "pending_pullback_reference",
                 "fundamentals": fundamentals, "fda_calendar": fda_calendar, "indicator_info": indicator_info, "atr_info": sig.get("atr_info"), "sentiment_info": sig.get("sentiment_info"), "macro_context": check_macro_context()}
 
     trigger = float(row.get("trigger_price") or state["armed_trigger"])
@@ -617,7 +649,7 @@ def evaluate_exit(lot, dry_run=True, regime=None):
     entry = float(lot["entry_price"])
     entry_at = lot.get("entry_at")
 
-    aggs = get_massive_aggs(ticker, days=90)
+    aggs = _normalize_price_bars(ticker, get_massive_aggs(ticker, days=90))
     if not aggs:
         return {"ticker": ticker, "action": "HOLD", "reason": "no price data"}
 
@@ -713,6 +745,176 @@ def run_exits(dry_run=True):
     for lot in _open_positions():
         results.append(evaluate_exit(lot, dry_run=dry_run, regime=regime))
     return results
+
+
+# --------------------------------------------------------------------------- #
+# Gap-up breakout entry (opening 9:30-10:00 ET window only)
+# --------------------------------------------------------------------------- #
+def _gap_breakout_window_open(now=None):
+    now_et = now.astimezone(ZoneInfo("America/New_York")) if now else datetime.now(ZoneInfo("America/New_York"))
+    start = time(9, 30)
+    end = time(10, 0)
+    return start <= now_et.time() < end
+
+
+def _gap_breakout_snapshot(ticker):
+    if not MASSIVE_API_KEY:
+        return {}
+    try:
+        r = _audit_get(
+            f"{MASSIVE_BASE}/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}",
+            params={"apiKey": MASSIVE_API_KEY}, headers={"Accept": "application/json"}, timeout=5,
+        )
+        if r.status_code != 200:
+            return {}
+        t = normalize_snapshot_fields(ticker, (r.json() or {}).get("ticker") or {})
+        day = t.get("day") or {}
+        prev = t.get("prevDay") or {}
+        last_trade = t.get("lastTrade") or {}
+        current = day.get("c") or last_trade.get("p") or prev.get("c")
+        return {
+            "current": float(current) if current else None,
+            "prev_close": float(prev.get("c")) if prev.get("c") else None,
+            "day_volume": float(day.get("v") or day.get("volume") or 0),
+        }
+    except Exception:
+        return {}
+
+
+def _avg_daily_volume(ticker, days=30):
+    aggs = get_massive_aggs(ticker, days=max(int(days or 30) + 5, 35)) or []
+    vols = []
+    for row in aggs[-int(days or 30):]:
+        try:
+            v = float(row.get("v") or 0)
+            if v > 0:
+                vols.append(v)
+        except Exception:
+            pass
+    return (sum(vols) / len(vols)) if vols else None
+
+
+def _recent_gap_catalyst(ticker, now=None):
+    """True if Benzinga news or earnings beat exists within the last 24 hours."""
+    ticker = (ticker or "").upper()
+    now_utc = (now.astimezone(timezone.utc) if now else datetime.now(timezone.utc))
+    since_utc = now_utc - timedelta(hours=24)
+    if MASSIVE_API_KEY:
+        try:
+            r = _audit_get(
+                f"{MASSIVE_BASE}/v2/reference/news",
+                params={
+                    "apiKey": MASSIVE_API_KEY,
+                    "ticker": ticker,
+                    "published_utc.gte": since_utc.isoformat().replace("+00:00", "Z"),
+                    "published_utc.lte": now_utc.isoformat().replace("+00:00", "Z"),
+                    "limit": 5,
+                    "sort": "published_utc",
+                    "order": "desc",
+                },
+                headers={"Accept": "application/json"}, timeout=8,
+            )
+            rows = (r.json() or {}).get("results") if r.status_code == 200 else []
+            if rows:
+                title = (rows[0].get("title") or "Recent Benzinga news").strip()
+                return True, title
+        except Exception:
+            pass
+        try:
+            start = since_utc.date().isoformat()
+            end = now_utc.date().isoformat()
+            r = _audit_get(
+                f"{MASSIVE_BASE}/benzinga/v1/earnings",
+                params={"apiKey": MASSIVE_API_KEY, "ticker": ticker, "date.gte": start, "date.lte": end, "limit": 10},
+                headers={"Accept": "application/json"}, timeout=8,
+            )
+            rows = (r.json() or {}).get("results") if r.status_code == 200 else []
+            for row in rows or []:
+                eps = row.get("eps_surprise_percent")
+                rev = row.get("revenue_surprise_percent")
+                try:
+                    eps_hit = eps is not None and float(eps) > 0
+                    rev_hit = rev is not None and float(rev) > 0
+                except Exception:
+                    eps_hit = rev_hit = False
+                if eps_hit or rev_hit:
+                    return True, "Benzinga earnings beat"
+        except Exception:
+            pass
+    return False, None
+
+
+def consider_gap_up_breakout(signal_result, dry_run=True, regime=None, pending=None, reserved_cash=0.0, now=None):
+    ticker = signal_result["ticker"].upper()
+    score = signal_result.get("score", "0/4 Pillars")
+    try:
+        pillars = int(str(score).split("/")[0])
+    except Exception:
+        pillars = 0
+    if not _gap_breakout_window_open(now=now):
+        return {"ticker": ticker, "action": "SKIP", "reason": "GAP_BREAKOUT_WINDOW_CLOSED"}
+    if pillars < 3:
+        return {"ticker": ticker, "action": "SKIP", "reason": "GAP_BREAKOUT_SCORE_LT_3"}
+    allowed, why = check_admission(ticker, regime=regime, pending=pending)
+    if not allowed:
+        return {"ticker": ticker, "action": "BLOCK", "reason": why}
+
+    snap = _gap_breakout_snapshot(ticker)
+    entry = snap.get("current")
+    prev_close = snap.get("prev_close")
+    if not entry or not prev_close or prev_close <= 0:
+        return {"ticker": ticker, "action": "SKIP", "reason": "GAP_BREAKOUT_PRICE_UNAVAILABLE"}
+    gap_pct = ((entry / prev_close) - 1.0) * 100.0
+    if gap_pct <= 4.0:
+        return {"ticker": ticker, "action": "SKIP", "reason": "GAP_BREAKOUT_GAP_LE_4", "gap_pct": round(gap_pct, 2)}
+    avg_vol = _avg_daily_volume(ticker, days=30)
+    day_vol = snap.get("day_volume")
+    if not avg_vol or not day_vol:
+        return {"ticker": ticker, "action": "SKIP", "reason": "GAP_BREAKOUT_RVOL_UNAVAILABLE", "gap_pct": round(gap_pct, 2)}
+    rvol = day_vol / avg_vol
+    if rvol <= 1.5:
+        return {"ticker": ticker, "action": "SKIP", "reason": "GAP_BREAKOUT_RVOL_LE_1_5", "gap_pct": round(gap_pct, 2), "gap_rvol": round(rvol, 2)}
+    catalyst_ok, catalyst_note = _recent_gap_catalyst(ticker, now=now)
+    if not catalyst_ok:
+        return {"ticker": ticker, "action": "SKIP", "reason": "GAP_BREAKOUT_NO_24H_BENZINGA_CATALYST", "gap_pct": round(gap_pct, 2), "gap_rvol": round(rvol, 2)}
+
+    stop = round(entry * 0.95, 2)
+    target = round(entry + (2 * (entry - stop)), 2)
+    equity = acct.get_equity(price_lookup=_price_lookup)
+    shares = size_position_for_risk(equity, entry, stop, RISK_PCT_GAP_BREAKOUT)
+    if shares <= 0:
+        return {"ticker": ticker, "action": "SKIP", "reason": "GAP_BREAKOUT_SIZED_TO_ZERO"}
+    cost = round(shares * entry, 2)
+    cash = acct.get_cash() - float(reserved_cash or 0)
+    if cost > cash:
+        shares = math.floor(cash / entry) if entry > 0 else 0
+        cost = round(shares * entry, 2)
+        if shares <= 0:
+            return {"ticker": ticker, "action": "SKIP", "reason": f"Insufficient cash (free ${cash:,.0f})"}
+    decision = {
+        "ticker": ticker,
+        "action": "BUY",
+        "reason": f"GAP-UP BREAKOUT: gap +{gap_pct:.1f}%, RVOL {rvol:.1f}x, catalyst: {catalyst_note}",
+        "entry": round(entry, 2), "stop": stop, "target": target,
+        "shares": shares, "cost": cost,
+        "risk_pct": RISK_PCT_GAP_BREAKOUT * 100,
+        "score": score, "signal": signal_result.get("signal", ""),
+        "entry_type": "GAP_UP_BREAKOUT",
+        "gap_pct": round(gap_pct, 2), "gap_rvol": round(rvol, 2),
+        "catalyst": catalyst_note,
+        "equity": equity,
+    }
+    if not dry_run:
+        try:
+            atlas_db.open_trade(
+                ticker, round(entry, 2), shares, stop_loss=stop, risk_pct=decision["risk_pct"], target_price=target,
+                status="PENDING_FILL",
+                notes=f"Atlas gap-up breakout: gap +{gap_pct:.1f}%, RVOL {rvol:.1f}x; catalyst {catalyst_note}; stop {stop}; target {target}; 0.25% risk on equity ${equity:,.0f}",
+            )
+        except Exception as e:
+            decision["action"] = "ERROR"
+            decision["reason"] = str(e)
+    return decision
 
 
 # --------------------------------------------------------------------------- #

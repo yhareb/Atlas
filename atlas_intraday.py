@@ -12,6 +12,7 @@ except Exception:
 SCRIPTS_DIR = "/Users/yasser/scripts"
 sys.path.insert(0, SCRIPTS_DIR)
 import atlas_db
+from atlas_symbol_meta import ticker_label
 
 _ENV_PATH = os.path.expanduser("~/.hermes/profiles/atlas/.env")
 if os.path.exists(_ENV_PATH):
@@ -191,6 +192,10 @@ def _unique(items, key="ticker"):
         seen.add(t)
         out.append(item)
     return out
+
+
+def _ticker_label(ticker, item=None):
+    return ticker_label(ticker, item=item)
 
 
 def _market_line(summary):
@@ -433,9 +438,11 @@ def _actions_lines(buys, sells):
             win_pct = ((target - entry) / entry * 100) if entry else 0
             loss_pct = ((entry - stop) / entry * 100) if entry else 0
             risk_txt = "N/A" if risk in (None, "") else f"{_num(risk):.1f}%"
+            live_price = b.get("live_price") or b.get("current_price") or b.get("price") or entry
+            label = _ticker_label(ticker, b)
             lines += [
                 "",
-                f"🟢 {ticker:<5} buy {_price(entry)} · stop {_price(stop)} · target {_price(target)} · {risk_txt} risk",
+                f"🟢 {label} Buy at {_price(entry)} - currently trading at {_price(live_price)} · stop {_price(stop)} · target {_price(target)} · {risk_txt} risk",
                 f"   ~{_money(cost)} · win +{win_pct:.0f}% / loss −{loss_pct:.0f}%",
                 f"   {_register_buy_line(ticker, shares, entry)}",
             ]
@@ -452,9 +459,10 @@ def _actions_lines(buys, sells):
             pnl = (out - entry) * shares
             roi = ((out - entry) / entry * 100) if entry else 0
             icon = "✅" if pnl >= 0 else "❌"
+            label = _ticker_label(ticker, s)
             lines += [
                 "",
-                f"🔴 {ticker:<5} sell ~{_money(proceeds)} · {_price(entry)} → {_price(out)}  {_fmt_pct(roi, signed=True)} ({_signed_money(pnl)}) {icon}",
+                f"🔴 {label} sell ~{_money(proceeds)} · {_price(entry)} → {_price(out)}  {_fmt_pct(roi, signed=True)} ({_signed_money(pnl)}) {icon}",
                 f"   💡 {_short_reason(s.get('reason'))}",
                 f"   {_register_sell_line(ticker, shares, out)}",
             ]
@@ -476,8 +484,9 @@ def _pending_confirmation_lines():
         shares = int(_num(row.get("quantity")))
         risk_pct = row.get("risk_pct")
         risk_txt = "N/A" if risk_pct in (None, "") else f"{_num(risk_pct):.1f}%"
+        label = _ticker_label(ticker, row)
         lines += [
-            f"⏳ {ticker:<5} buy {_price(entry)} · stop {_price(stop)} · target {_price(target)} · {risk_txt} risk",
+            f"⏳ {label} buy {_price(entry)} · stop {_price(stop)} · target {_price(target)} · {risk_txt} risk",
             f"   {_register_buy_line(ticker, shares, entry)}",
             "",
         ]
@@ -499,11 +508,34 @@ def _holding_lines(summary):
         pnl = (now - entry) * shares
         roi = ((now - entry) / entry * 100) if entry else 0
         icon = "🟢" if pnl >= 0 else "🔴"
+        label = _ticker_label(ticker, h)
         lines += [
             "",
-            f"{icon} {ticker:<5} ~{_money(value)}  {_price(entry)} → {_price(now)}  {_fmt_pct(roi, signed=True)} ({_signed_money(pnl)})",
+            f"{icon} {label} ~{_money(value)}  {_price(entry)} → {_price(now)}  {_fmt_pct(roi, signed=True)} ({_signed_money(pnl)})",
             f"   🛑 {_price(h.get('stop'))}  🎯 {_price(h.get('target'))}",
         ]
+    return lines
+
+
+def _gap_breakout_lines(summary):
+    items = []
+    for source in ((summary.get("buys", []) or []), (summary.get("high_candidates", []) or [])):
+        for item in source:
+            if str(item.get("entry_type") or "").upper() == "GAP_UP_BREAKOUT":
+                items.append(item)
+    items = _unique(items)
+    lines = ["", f"━━━ 🚀 GAP-UP BREAKOUTS ({len(items)}) ━━━", ""]
+    if not items:
+        lines.append("✅ none")
+        return lines
+    for item in items:
+        ticker = str(item.get("ticker") or item.get("symbol") or "?").upper()
+        gap = _num(item.get("gap_pct"))
+        rvol = _num(item.get("gap_rvol") or item.get("rvol"))
+        label = _ticker_label(ticker, item)
+        lines.append(
+            f"🔹 {label} | Gap +{gap:.1f}% | RVOL {rvol:.1f}x | entry {_price(item.get('entry'))} | stop {_price(item.get('stop'))} | target {_price(item.get('target'))}"
+        )
     return lines
 
 
@@ -525,8 +557,9 @@ def _waiting_lines(high):
             m = re.search(r"\+([0-9.]+)%", str(h.get("reason", "")))
             pct = m.group(1) if m else 0
         limit = h.get("entry")
+        label = _ticker_label(ticker, h)
         lines += [
-            f"🔸 {ticker:<5} buy {_price(limit)} · now {_price(now)} (+{_num(pct):.0f}%)",
+            f"🔸 {label} buy {_price(limit)} · now {_price(now)} (+{_num(pct):.0f}%)",
             f"   {_quality_tags(h, score)}",
             "",
         ]
@@ -543,7 +576,8 @@ def _gates_lines(high):
     for i, h in enumerate(hot, 1):
         m = re.search(r"\+([0-9.]+)%", str(h.get("reason", "")))
         pct = m.group(1) if m else h.get("pct_over_ema", 0)
-        lines += [f"{i}. {str(h.get('ticker')).upper():<5} +{_num(pct):.0f}% over EMA", ""]
+        label = _ticker_label(str(h.get('ticker')).upper(), h)
+        lines += [f"{i}. {label} +{_num(pct):.0f}% over EMA", ""]
     return lines
 
 
@@ -552,7 +586,7 @@ def _watch_lines(summary):
     for t in summary.get("watch_2", []) or []:
         s = str(t).upper()
         if s and s not in {"SPY", "QQQ", "DIA"}:
-            watch.append(s)
+            watch.append(_ticker_label(s))
     return ["", "👀 Watching: " + (" · ".join(dict.fromkeys(watch)) if watch else "none")]
 
 
@@ -564,7 +598,7 @@ def _news_lines(summary):
     for c in summary.get("catalysts", []) or []:
         t = str(c.get("ticker", "")).upper()
         if t and t not in {"SPY", "QQQ", "DIA"} and (not candidate_tickers or t in candidate_tickers):
-            news.append(f"{t} — {_short_reason(c.get('reason', 'Recent news'))}")
+            news.append(f"{_ticker_label(t, c)} — {_short_reason(c.get('reason', 'Recent news'))}")
     news = list(dict.fromkeys(news))
     if not news:
         return []
@@ -587,6 +621,7 @@ def _build_report(summary):
     lines += _actions_lines(buys, sells)
     lines += _pending_confirmation_lines()
     lines += _holding_lines(summary)
+    lines += _gap_breakout_lines(summary)
     lines += _waiting_lines(high)
     lines += _gates_lines(high)
     lines += _watch_lines(summary)

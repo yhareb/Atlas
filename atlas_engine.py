@@ -1320,6 +1320,8 @@ def check_analyst_insights(ticker):
     return False, None
 
 _EARNINGS_CACHE = {}
+_EARNINGS_ROWS_CACHE = {}
+EARNINGS_ROWS_CACHE_TTL_SEC = 4 * 60 * 60
 
 
 def _date_range(start, end):
@@ -1514,19 +1516,51 @@ def _parse_earnings_date(value):
 
 
 def _earnings_rows(ticker, start_day, end_day, limit=10):
+    """Return Benzinga earnings rows with a 4-hour per-ticker in-memory cache.
+
+    The cache stores a broad ticker window and filters locally for requested
+    ranges. Earnings data is not intraday-sensitive, and this avoids the common
+    two-call pattern per ticker (upcoming + recent) during each scan process.
+    """
+    ticker = (ticker or "").upper()
+    start_iso = start_day.strftime('%Y-%m-%d')
+    end_iso = end_day.strftime('%Y-%m-%d')
+    now_ts = _audit_time.time()
+    cached = _EARNINGS_ROWS_CACHE.get(ticker)
+    if cached and (now_ts - float(cached.get("ts", 0))) <= EARNINGS_ROWS_CACHE_TTL_SEC:
+        if cached.get("start") <= start_iso and cached.get("end") >= end_iso:
+            rows = []
+            for row in cached.get("rows", []) or []:
+                d = str((row or {}).get("date") or "")[:10]
+                if start_iso <= d <= end_iso:
+                    rows.append(row)
+            return rows[:int(limit or 10)]
+
+    today = current_et_market_date()
+    broad_start = min(start_day, today - timedelta(days=30))
+    broad_end = max(end_day, today + timedelta(days=180))
+    broad_start_iso = broad_start.strftime('%Y-%m-%d')
+    broad_end_iso = broad_end.strftime('%Y-%m-%d')
     url = f"{MASSIVE_BASE}/benzinga/v1/earnings"
     params = {
         "apiKey": MASSIVE_API_KEY,
         "ticker": ticker,
-        "date.gte": start_day.strftime('%Y-%m-%d'),
-        "date.lte": end_day.strftime('%Y-%m-%d'),
-        "limit": limit,
+        "date.gte": broad_start_iso,
+        "date.lte": broad_end_iso,
+        "limit": max(int(limit or 10), 50),
     }
     r = _audit_get(url, params=params, timeout=10)
     if r.status_code != 200:
         return []
     data = r.json()
-    return data.get("results", []) or data.get("earnings", []) or []
+    all_rows = data.get("results", []) or data.get("earnings", []) or []
+    _EARNINGS_ROWS_CACHE[ticker] = {"ts": now_ts, "start": broad_start_iso, "end": broad_end_iso, "rows": all_rows}
+    rows = []
+    for row in all_rows:
+        d = str((row or {}).get("date") or "")[:10]
+        if start_iso <= d <= end_iso:
+            rows.append(row)
+    return rows[:int(limit or 10)]
 
 
 def check_earnings_context(ticker):

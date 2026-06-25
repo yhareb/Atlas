@@ -53,6 +53,21 @@ ET = ZoneInfo("America/New_York")
 WINDOW_MINUTES = 30
 PROVIDERS = ("Massive", "EODHD", "Benzinga")
 KEY_DB_TABLES = {"trades", "pending_pullbacks", "ema_retry_candidates"}
+TRANSIENT_API_ERROR_MARKERS = (
+    "read timed out",
+    "connection reset",
+    "connection aborted",
+    "remote end closed connection",
+    "remotedisconnected",
+    "max retries exceeded",
+)
+TRANSIENT_ALERT_MIN_ERRORS = 3
+TRANSIENT_ALERT_MIN_ERROR_RATE = 0.01
+
+
+def _is_transient_api_error(error):
+    text = str(error or "").lower()
+    return any(marker in text for marker in TRANSIENT_API_ERROR_MARKERS)
 
 
 def _in_market_hours(now_et):
@@ -150,6 +165,8 @@ def build_report(now_et=None):
     counts = _atlas_counts()
 
     provider_counts = {p: {"calls": 0, "errors": 0} for p in PROVIDERS}
+    provider_transient_errors = defaultdict(int)
+    provider_transient_examples = {}
     alerts = []
 
     for provider, endpoint, http_status, ok, error in data["api"]:
@@ -162,7 +179,17 @@ def build_report(now_et=None):
         elif ok is False:
             provider_counts[p]["errors"] += 1
             if error:
-                alerts.append(f"{p} error: {str(error)[:70]}")
+                if _is_transient_api_error(error):
+                    provider_transient_errors[p] += 1
+                    provider_transient_examples.setdefault(p, str(error)[:70])
+                else:
+                    alerts.append(f"{p} error: {str(error)[:70]}")
+
+    for p, transient_errors in provider_transient_errors.items():
+        calls = max(provider_counts.get(p, {}).get("calls", 0), 1)
+        error_rate = transient_errors / calls
+        if transient_errors >= TRANSIENT_ALERT_MIN_ERRORS or error_rate >= TRANSIENT_ALERT_MIN_ERROR_RATE:
+            alerts.append(f"{p} transient errors: {transient_errors}/{calls} ({error_rate:.1%}) e.g. {provider_transient_examples.get(p, '')}")
 
     for p in PROVIDERS:
         if provider_counts.get(p, {}).get("calls", 0) == 0:
@@ -230,7 +257,7 @@ def main():
     message, counts = build_report(now_et=now_et)
     print(message)
     if not args.no_send:
-        send_message(message, label="atlas_audit", print_fallback=True)
+        send_message(message, label="atlas_audit", parse_mode="", print_fallback=True)
     return 0
 
 

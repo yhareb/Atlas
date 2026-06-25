@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, "/Users/yasser/scripts")
 import atlas_db
 import atlas_portfolio as port
+from atlas_symbol_meta import normalize_snapshot_fields, ticker_label
 from atlas_time import current_et_market_date, previous_et_trading_date_str
 from atlas_engine import _llm_judge_catalyst
 
@@ -129,7 +130,7 @@ def pct_arrow(pct):
 def get_close_price(ticker):
     snap = massive_get(f"/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}")
     if snap and snap.get("ticker"):
-        t = snap["ticker"]
+        t = normalize_snapshot_fields(ticker, snap["ticker"])
         close = (t.get("day") or {}).get("c")
         pct = t.get("todaysChangePerc")
         return close, pct
@@ -176,6 +177,7 @@ def get_top_movers():
     if gainers_data and gainers_data.get("tickers"):
         for t in gainers_data["tickers"][:5]:
             ticker = t.get("ticker", "?")
+            t = normalize_snapshot_fields(ticker, t)
             pct = t.get("todaysChangePerc", 0)
             price = (t.get("day") or {}).get("c")
             price_str = f"${price:.2f}" if price else "N/A"
@@ -184,6 +186,7 @@ def get_top_movers():
     if losers_data and losers_data.get("tickers"):
         for t in losers_data["tickers"][:5]:
             ticker = t.get("ticker", "?")
+            t = normalize_snapshot_fields(ticker, t)
             pct = t.get("todaysChangePerc", 0)
             price = (t.get("day") or {}).get("c")
             price_str = f"${price:.2f}" if price else "N/A"
@@ -558,14 +561,14 @@ def _format_watch_close(row):
     pct = row.get("pct")
     icon = "⚪" if pct is None else ("🟢" if pct >= 0 else "🔴")
     price = "N/A" if row.get("close") is None else _pm_money(row.get("close"))
-    return f"   {icon} {_pm_ticker(row.get('ticker'))} {price.rjust(10)}   {_pm_pct(pct, width=8)}"
+    return f"   {icon} {ticker_label(row.get('ticker')).ljust(32)} {price.rjust(10)}   {_pm_pct(pct, width=8)}"
 
 
 def _format_mover(row, up=True):
     arrow = "▲" if up else "▼"
     pct = row.get("pct")
     pct_text = "—" if pct is None else f"{arrow} {pct:+.2f}%"
-    return f"      • {_pm_ticker(row.get('ticker'))} {_pm_money(row.get('price')).rjust(10)}   {pct_text.rjust(10)}"
+    return f"      • {ticker_label(row.get('ticker')).ljust(32)} {_pm_money(row.get('price')).rjust(10)}   {pct_text.rjust(10)}"
 
 
 def generate_post_market_report(send=True, market_date=None, now_et=None):
@@ -620,19 +623,19 @@ def generate_post_market_report(send=True, market_date=None, now_et=None):
         f"   ✅ BOUGHT ({len(bought)})",
     ]
     for d in bought:
-        lines.append(f"      • {d['ticker']} — {d.get('score', 0)}/4 pillars · entry {_pm_money(d.get('entry'))} · stop {_pm_money(d.get('stop'))} · {d.get('shares', 'N/A')} sh · {_pm_pct(d.get('risk'), signed=False)} risk")
+        lines.append(f"      • {ticker_label(d['ticker'])} — {d.get('score', 0)}/4 pillars · entry {_pm_money(d.get('entry'))} · stop {_pm_money(d.get('stop'))} · {d.get('shares', 'N/A')} sh · {_pm_pct(d.get('risk'), signed=False)} risk")
     lines.append(f"   ⛔ BLOCKED — EARNINGS ({len(blocked)})")
     for d in blocked:
-        lines.append(f"      • {d['ticker']} — earnings in {d.get('days', 'N/A')}d")
+        lines.append(f"      • {ticker_label(d['ticker'])} — earnings in {d.get('days', 'N/A')}d")
     lines.append(f"   🎣 ARMED — WAITING PULLBACK ({len(armed)})")
     for d in armed:
-        lines.append(f"      • {d['ticker']} — {_pm_money(d.get('price'))} (+{_pm_num(d.get('over'), 0):.2f}% > EMA) · limit {_pm_money(d.get('limit'))}")
+        lines.append(f"      • {ticker_label(d['ticker'])} — {_pm_money(d.get('price'))} (+{_pm_num(d.get('over'), 0):.2f}% > EMA) · limit {_pm_money(d.get('limit'))}")
     lines.append(f"   🚀 TOO HOT — SKIPPED ({len(hot)})")
     for d in hot:
-        lines.append(f"      • {d['ticker']} — +{_pm_num(d.get('over'), 0):.2f}% > EMA")
+        lines.append(f"      • {ticker_label(d['ticker'])} — +{_pm_num(d.get('over'), 0):.2f}% > EMA")
     lines.append(f"   ⏸️ NO DATA ({len(nodata)})")
     for d in nodata:
-        lines.append(f"      • {d['ticker']} — {d.get('reason') or 'N/A'}")
+        lines.append(f"      • {ticker_label(d['ticker'])} — {d.get('reason') or 'N/A'}")
     lines.append("")
 
     if positions:
@@ -641,7 +644,7 @@ def generate_post_market_report(send=True, market_date=None, now_et=None):
             qty = p.get('qty', 'N/A')
             if isinstance(qty, float) and qty.is_integer():
                 qty = int(qty)
-            base = f"   • {p['ticker']} — {qty} sh · entry {_pm_money(p.get('entry'))} · stop {_pm_money(p.get('stop'))} · close {_pm_money(p.get('close'))}"
+            base = f"   • {ticker_label(p['ticker'])} — {qty} sh · entry {_pm_money(p.get('entry'))} · stop {_pm_money(p.get('stop'))} · close {_pm_money(p.get('close'))}"
             if p.get("pnl") is not None:
                 pnl_pct = None
                 entry_val = p.get('entry')
@@ -671,7 +674,7 @@ def generate_post_market_report(send=True, market_date=None, now_et=None):
     lines.append(f"   ⏱️ Window: {win_start_txt} → {win_end_txt}")
     if catalysts:
         for c in catalysts:
-            lines.append(f"   • {c['ticker']} — {c['reason']}")
+            lines.append(f"   • {ticker_label(c['ticker'])} — {c['reason']}")
     else:
         lines.append("   • No strong per-ticker catalysts found.")
     lines.append("")

@@ -44,6 +44,7 @@ sys.path.insert(0, "/Users/yasser/scripts")
 import atlas_db
 import atlas_account as acct
 import atlas_portfolio as port
+from atlas_symbol_meta import company_name
 from atlas_time import current_et_market_date_str
 from atlas_engine import analyze_ticker, check_regime, check_macro_context, get_macro_sentiment
 try:
@@ -109,6 +110,21 @@ def _scan_source(ticker, pending_scan, ema_retry_scan):
     if t in set(pending_scan or []):
         return "pending_pullback"
     return "normal_scan"
+
+
+def _attach_live_signal_price(decision, ticker):
+    """Attach the current live price at BUY-signal time for intraday reporting."""
+    if not isinstance(decision, dict):
+        return decision
+    try:
+        live_price = port._price_lookup(ticker)
+    except Exception:
+        live_price = None
+    if live_price is None:
+        live_price = decision.get("price") or decision.get("current_price") or decision.get("entry")
+    decision["live_price"] = live_price
+    decision.setdefault("current_price", live_price)
+    return decision
 
 
 def _audit_action(decision, live):
@@ -285,6 +301,7 @@ def run(args):
             pscore = pending_decision.get("score") or "?"
             _audit_signal_decision(tkr, pending_decision, pscore, _pillar_count(pscore), live, "pending_pullback", market_date, run_id)
             if pact == "BUY":
+                _attach_live_signal_price(pending_decision, tkr)
                 buys.append(pending_decision)
                 pending.append(tkr.upper())
                 reserved_cash += pending_decision["cost"]
@@ -294,6 +311,7 @@ def run(args):
                     "reason": pending_decision.get("reason", ""),
                     "entry": pending_decision.get("entry"), "stop": pending_decision.get("stop"),
                     "target": pending_decision.get("target"), "rvol": pending_decision.get("rvol"),
+                    "live_price": pending_decision.get("live_price"),
                     "cost": pending_decision.get("cost"), "shares": pending_decision.get("shares"),
                     "analyst_rating": pending_decision.get("analyst_rating"),
                     "analyst_insight": pending_decision.get("analyst_insight"),
@@ -379,6 +397,38 @@ def run(args):
         catalyst = _catalyst_reason(res)
         if catalyst:
             catalysts.append({"ticker": tkr.upper(), "reason": catalyst})
+        gap_decision = None
+        if tkr.upper() not in set(pending_scan):
+            try:
+                gap_decision = port.consider_gap_up_breakout(
+                    res, dry_run=not live, regime=entry_regime,
+                    pending=pending, reserved_cash=reserved_cash,
+                )
+            except Exception as e:
+                gap_decision = {"ticker": tkr.upper(), "action": "ERROR", "reason": f"gap-up breakout check failed: {e}"}
+        if isinstance(gap_decision, dict) and gap_decision.get("action") == "BUY":
+            _attach_live_signal_price(gap_decision, tkr)
+            gap_decision.setdefault("score", score)
+            gap_decision.setdefault("signal", res.get("signal", ""))
+            _audit_signal_decision(tkr, gap_decision, score, pillars, live, "gap_up_breakout", market_date, run_id)
+            buys.append(gap_decision)
+            pending.append(tkr.upper())
+            reserved_cash += gap_decision["cost"]
+            high_candidates.append({
+                "ticker": tkr.upper(), "score": score, "pillars": pillars,
+                "signal": res.get("signal", ""), "action": "BUY",
+                "reason": gap_decision.get("reason", ""),
+                "entry": gap_decision.get("entry"), "stop": gap_decision.get("stop"),
+                "target": gap_decision.get("target"), "cost": gap_decision.get("cost"),
+                "shares": gap_decision.get("shares"), "rvol": res.get("rvol"),
+                "gap_pct": gap_decision.get("gap_pct"), "gap_rvol": gap_decision.get("gap_rvol"),
+                "entry_type": "GAP_UP_BREAKOUT", "catalyst": gap_decision.get("catalyst"),
+                "live_price": gap_decision.get("live_price"),
+            })
+            print(f"  🚀 GAP BUY {tkr:<6} {gap_decision['shares']} sh @ {gap_decision['entry']} "
+                  f"(stop {gap_decision['stop']}, {gap_decision['risk_pct']:.2f}% risk, "
+                  f"${gap_decision['cost']:,.0f}) — {gap_decision['reason']}")
+            continue
         catalyst_override_ok = bool(
             pillars == 2 and isinstance(res.get("catalyst_override"), dict) and res.get("catalyst_override", {}).get("qualifies")
         )
@@ -412,6 +462,8 @@ def run(args):
         decision.setdefault("fda_note", decision.get("fda_note") or ((decision.get("fda_calendar") or {}).get("tag") if isinstance(decision.get("fda_calendar"), dict) else None))
         act = decision["action"]
         _audit_signal_decision(tkr, decision, score, pillars, live, _scan_source(tkr, pending_scan, ema_retry_scan), market_date, run_id)
+        if act == "BUY":
+            _attach_live_signal_price(decision, tkr)
         high_candidates.append({
             "ticker": tkr.upper(),
             "score": score,
@@ -425,6 +477,7 @@ def run(args):
             "cost": decision.get("cost"),
             "shares": decision.get("shares"),
             "rvol": res.get("rvol"),
+            "live_price": decision.get("live_price"),
             "price": decision.get("price"),
             "pct_over_ema": decision.get("pct_over_ema"),
             "analyst_rating": decision.get("analyst_rating"),
