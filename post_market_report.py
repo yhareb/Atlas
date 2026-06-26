@@ -582,8 +582,11 @@ def generate_post_market_report(send=True, market_date=None, now_et=None):
 
     if today in NYSE_HOLIDAYS_2026 or today.weekday() >= 5:
         return  # Silent on holidays and weekends
-
-    today_str = today.strftime("%Y-%m-%d")
+    from atlas_report_handoff import build_atlas_handoff_report
+    message = build_atlas_handoff_report(context="post_market", report_date=today)
+    if send:
+        send_telegram(message)
+    return message
 
     buy_close_lines, watch_close_lines = get_handoff_close_performance(today)
     close_rows = []

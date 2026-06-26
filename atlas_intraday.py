@@ -1,4 +1,4 @@
-import os, sys, datetime, contextlib, io, re, time, errno, signal
+import os, sys, datetime, contextlib, io, re, time, errno, signal, threading, subprocess
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -8,6 +8,12 @@ try:
     import atlas_stream
 except Exception:
     atlas_stream = None
+
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
 
 SCRIPTS_DIR = "/Users/yasser/scripts"
 sys.path.insert(0, SCRIPTS_DIR)
@@ -32,6 +38,20 @@ MARKET_CLOSE_ET = datetime.time(16, 0)
 
 
 LOCK_PATH = "/tmp/atlas_intraday.lock"
+MAX_INTRADAY_RUNTIME_SECONDS = int(os.environ.get("ATLAS_INTRADAY_MAX_RUNTIME_SECONDS", "540"))
+
+
+def _hard_timeout_handler(signum, frame):
+    try:
+        print(f"[intraday] HARD TIMEOUT after {MAX_INTRADAY_RUNTIME_SECONDS}s; sending status and exiting so launchd can run next cycle.", flush=True)
+        _send_telegram_async(_quick_status_report(f"hard timeout after {MAX_INTRADAY_RUNTIME_SECONDS}s"), label="atlas_hard_timeout")
+        time.sleep(2)
+    except Exception as e:
+        print(f"[intraday] hard-timeout status failed: {e}", flush=True)
+    raise SystemExit(124)
+
+
+signal.signal(signal.SIGALRM, _hard_timeout_handler)
 
 
 def _pid_running(pid):
@@ -539,6 +559,30 @@ def _gap_breakout_lines(summary):
     return lines
 
 
+def _intraday_breakout_lines(summary):
+    items = []
+    for source in ((summary.get("buys", []) or []), (summary.get("high_candidates", []) or [])):
+        for item in source:
+            if str(item.get("entry_type") or "").upper() == "INTRADAY_BREAKOUT_CONTINUATION":
+                items.append(item)
+    items = _unique(items)
+    lines = ["", f"━━━ 📈 INTRADAY BREAKOUTS ({len(items)}) ━━━", ""]
+    if not items:
+        lines.append("✅ none")
+        return lines
+    for item in items:
+        ticker = str(item.get("ticker") or item.get("symbol") or "?").upper()
+        label = _ticker_label(ticker, item)
+        rvol = _num(item.get("breakout_rvol") or item.get("rvol"))
+        suffix = ""
+        if item.get("sector_sweep"):
+            suffix = f" | sweep {item.get('sector_sweep_trigger') or '?'}"
+        lines.append(
+            f"🔷 {label} | break {_price(item.get('breakout_level'))} | RVOL {rvol:.1f}x | entry {_price(item.get('entry'))} | stop {_price(item.get('stop'))} | target {_price(item.get('target'))}{suffix}"
+        )
+    return lines
+
+
 def _waiting_lines(high):
     waits = _unique([h for h in high if str(h.get("action", "")).upper() == "WAIT" and "PULLBACK" in str(h.get("reason", "")).upper()])
     lines = ["", f"━━━ 🎣 WAITING FOR DIP ({len(waits)}) ━━━", ""]
@@ -622,13 +666,60 @@ def _build_report(summary):
     lines += _pending_confirmation_lines()
     lines += _holding_lines(summary)
     lines += _gap_breakout_lines(summary)
+    lines += _intraday_breakout_lines(summary)
     lines += _waiting_lines(high)
     lines += _gates_lines(high)
     lines += _watch_lines(summary)
-    lines += _news_lines(summary)
-    confirm_bit = f" · {pending_count} to confirm" if pending_count else ""
-    lines += ["", f"🏁 Bought {len(_unique(buys))} · Sold {len(_unique(sells))} · Holding {hold_count} · {waiting_count} armed{confirm_bit}"]
     return "\n".join(lines)
+
+
+def _quick_status_report(reason="scan in progress"):
+    """Fast no-provider Telegram body for long scans/overlap. Avoids price APIs."""
+    open_rows = atlas_db.get_open_positions()
+    pending_rows = atlas_db.get_pending_pullbacks(status="WAITING")
+    fill_rows = atlas_db.get_pending_fill_trades()
+    lines = [
+        f"⏳ ATLAS INTRADAY STATUS — {reason}",
+        "",
+        f"💼 Holding: {len(open_rows)}",
+    ]
+    for row in open_rows[:6]:
+        t = str(row.get("ticker") or "?").upper()
+        lines.append(f"   • {t} entry {_price(row.get('price') or row.get('entry_price'))} stop {_price(row.get('stop_loss'))}")
+    if fill_rows:
+        lines += ["", f"🔔 Confirm at broker: {len(fill_rows)}"]
+        for row in fill_rows[:4]:
+            t = str(row.get("ticker") or "?").upper()
+            lines.append(f"   • {t} buy {_price(row.get('entry_price'))}")
+    lines += ["", f"🎣 Waiting for dip: {len(pending_rows)}"]
+    for row in pending_rows[:8]:
+        t = str(row.get("ticker") or "?").upper()
+        lines.append(f"   • {t} trigger {_price(row.get('trigger_price'))}")
+    lines += ["", "Full scan still running; this status is intentionally no-provider/no-handoff."]
+    return "\n".join(lines)
+
+def _send_telegram_async(message, label="atlas"):
+    """Spawn an independent sender so Telegram/network latency cannot block scan/import."""
+    msg_path = f"/tmp/atlas_intraday_msg_{os.getpid()}_{int(time.time() * 1000)}.txt"
+    with open(msg_path, "w") as f:
+        f.write(str(message or ""))
+    code = (
+        "import os,sys; sys.path.insert(0, '/Users/yasser/scripts'); "
+        "from atlas_notify import send_telegram; "
+        "p=sys.argv[1]; label=sys.argv[2]; "
+        "msg=open(p).read(); "
+        "ok=send_telegram(msg,label=label,parse_mode='',print_fallback=True); "
+        "print(f'[{label}] subprocess_send_ok={ok}'); "
+        "os.unlink(p) if os.path.exists(p) else None"
+    )
+    subprocess.Popen(
+        [sys.executable, "-c", code, msg_path, label],
+        stdout=open("/Users/yasser/scripts/atlas_intraday.log", "a"),
+        stderr=open("/Users/yasser/scripts/atlas_intraday.err.log", "a"),
+        close_fds=True,
+    )
+    return None
+
 
 def run_intraday():
     now = datetime.datetime.now()
@@ -636,11 +727,18 @@ def run_intraday():
 
     lock_fd = _acquire_run_lock()
     if lock_fd is None:
-        print(f"[intraday] overlap guard: another atlas_intraday run is still active ({LOCK_PATH}); exiting cleanly.")
+        print(f"[intraday] overlap guard: another atlas_intraday run is still active ({LOCK_PATH}); sending status and exiting cleanly.")
+        try:
+            _send_telegram_async(_quick_status_report("previous scan still running"), label="atlas_overlap_status")
+            print("[intraday] overlap status telegram queued")
+        except Exception as e:
+            print(f"[intraday] overlap status telegram failed (non-fatal): {e}")
         return {"skipped": True, "reason": "previous intraday run still active"}
     try:
+        signal.alarm(MAX_INTRADAY_RUNTIME_SECONDS)
         return _run_intraday_locked(now)
     finally:
+        signal.alarm(0)
         _release_run_lock(lock_fd)
 
 
@@ -650,9 +748,14 @@ def _run_intraday_locked(now):
         print(f"[intraday] market-hours gate: {gate_detail}; exiting cleanly with no scan/trade/Telegram.")
         return {"skipped": True, "reason": gate_detail}
     print(f"[intraday] market-hours gate: {gate_detail}")
+    try:
+        _send_telegram_async(_quick_status_report("scan starting"), label="atlas_start_status")
+        print("[intraday] start status telegram subprocess queued")
+    except Exception as e:
+        print(f"[intraday] start status telegram failed (non-fatal): {e}")
 
     stream_status = None
-    if atlas_stream is not None:
+    if False and atlas_stream is not None:
         try:
             stream_status = atlas_stream.start_background(max_reconnects=3)
             print(f"[intraday] stream status: {stream_status}")
@@ -661,11 +764,47 @@ def _run_intraday_locked(now):
             print(f"[intraday] stream unavailable; polling continues: {e}")
 
     import atlas_manage
+    # Report-first safety: the full intraday Telegram report must be generated from
+    # the base scan before sector-sweep peer enrichment can consume the launchd
+    # window. This does not modify sector-sweep logic; it disables the sweep trigger
+    # for this report-producing run so peer enrichment can be run later/skipped.
+    restore_sector_sweep_trigger = None
+    if os.environ.get("ATLAS_INTRADAY_REPORT_FIRST", "1") != "0":
+        try:
+            original_sector_sweep_trigger = getattr(atlas_manage.port, "sector_catalyst_sweep_trigger", None)
+            if callable(original_sector_sweep_trigger):
+                restore_sector_sweep_trigger = original_sector_sweep_trigger
+                atlas_manage.port.sector_catalyst_sweep_trigger = lambda *args, **kwargs: None
+                print("[intraday] report-first mode: sector sweep peer enrichment deferred until after Telegram report")
+        except Exception as e:
+            print(f"[intraday] report-first sector-sweep deferral unavailable (non-fatal): {e}")
     args = SimpleNamespace(tickers=[], file=None, live=True, exits_only=False, json=False)
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
-    with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-        summary = atlas_manage.run(args)
+    scan_done = {"done": False}
+
+    def _send_interim_report_if_slow():
+        if scan_done.get("done"):
+            return
+        try:
+            interim = _quick_status_report("full scan still running >60s")
+            _send_telegram_async(interim, label="atlas_interim_status")
+            print("[intraday] interim telegram report queued")
+        except Exception as e:
+            print(f"[intraday] interim telegram report failed (non-fatal): {e}")
+
+    interim_timer = threading.Timer(60.0, _send_interim_report_if_slow)
+    interim_timer.daemon = True
+    interim_timer.start()
+    try:
+        with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+            summary = atlas_manage.run(args)
+    finally:
+        scan_done["done"] = True
+        try:
+            interim_timer.cancel()
+        except Exception:
+            pass
 
     out = stdout_buf.getvalue()
     err = stderr_buf.getvalue()

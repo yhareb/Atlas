@@ -37,6 +37,8 @@ import os
 import sys
 import json
 import argparse
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 sys.path.insert(0, "/Users/yasser/scripts")
@@ -64,6 +66,40 @@ DEFAULT_UNIVERSE = [
 LINE = "=" * 68
 THIN = "-" * 68
 LAST_RUN_SUMMARY = {}
+
+
+def _timing_log(section, event, start=None, ticker=None, extra=""):
+    elapsed = "" if start is None else f" elapsed={time.perf_counter() - start:.3f}s"
+    symbol = f" ticker={str(ticker).upper()}" if ticker else ""
+    detail = f" {extra}" if extra else ""
+    print(f"[TIMING] {datetime.now().isoformat(timespec='seconds')} section={section} event={event}{symbol}{elapsed}{detail}", flush=True)
+
+
+def _analyze_ticker_worker(ticker, regime):
+    tkr = str(ticker or "").upper()
+    pillar_start = time.perf_counter()
+    _timing_log("pillar_checks", "start", ticker=tkr)
+    try:
+        res = analyze_ticker(tkr, regime=regime)
+    except TypeError:
+        res = analyze_ticker(tkr)  # back-compat if regime kwarg absent
+    _timing_log("pillar_checks", "end", pillar_start, tkr)
+    return tkr, res
+
+
+def _run_parallel_pillar_checks(tickers, regime, max_workers=8):
+    unique = [str(t or "").upper() for t in dict.fromkeys(tickers or []) if str(t or "").strip()]
+    workers = max(1, int(max_workers or 8))
+    parallel_start = time.perf_counter()
+    _timing_log("pillar_checks_parallel", "start", extra=f"tickers={len(unique)} workers={workers}")
+    results = {}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_ticker = {executor.submit(_analyze_ticker_worker, tkr, regime): tkr for tkr in unique}
+        for future in as_completed(future_to_ticker):
+            tkr, res = future.result()
+            results[tkr] = res
+    _timing_log("pillar_checks_parallel", "end", parallel_start, extra=f"tickers={len(results)} workers={workers}")
+    return results
 
 
 def _hdr(title):
@@ -116,10 +152,13 @@ def _attach_live_signal_price(decision, ticker):
     """Attach the current live price at BUY-signal time for intraday reporting."""
     if not isinstance(decision, dict):
         return decision
+    live_price_start = time.perf_counter()
+    _timing_log("live_price_fetch", "start", ticker=ticker)
     try:
         live_price = port._price_lookup(ticker)
     except Exception:
         live_price = None
+    _timing_log("live_price_fetch", "end", live_price_start, ticker, extra=f"price={'yes' if live_price is not None else 'fallback'}")
     if live_price is None:
         live_price = decision.get("price") or decision.get("current_price") or decision.get("entry")
     decision["live_price"] = live_price
@@ -279,7 +318,8 @@ def run(args):
     pending_scan = [r.get("ticker", "").upper() for r in pending_rows if r.get("ticker")]
     ema_retry_rows = atlas_db.get_ema_retry_candidates(status="WAITING")
     ema_retry_scan = [r.get("ticker", "").upper() for r in ema_retry_rows if r.get("ticker")]
-    candidates = list(dict.fromkeys(pending_scan + ema_retry_scan + [t.upper() for t in candidates]))
+    held_scan = [r.get("ticker", "").upper() for r in atlas_db.get_trades(status="OPEN") if r.get("ticker")]
+    candidates = list(dict.fromkeys(pending_scan + ema_retry_scan + held_scan + [t.upper() for t in candidates]))
     _hdr(f"SCAN & ENTRIES  ({len(candidates)} candidates)")
     buys = []
     watch = []
@@ -291,11 +331,27 @@ def run(args):
     watch_2 = []
     catalysts = []
     scan_errors = []
-    for tkr in candidates:
+    sector_sweep_triggers = []
+    sector_sweep_context = {}
+    sector_sweep_requeued = set()
+    processed_scan = set()
+    idx = 0
+    ticker_loop_start = time.perf_counter()
+    _timing_log("ticker_loop", "start", extra=f"candidates={len(candidates)}")
+    pillar_results = _run_parallel_pillar_checks(candidates, entry_regime, max_workers=8)
+    while idx < len(candidates):
+        tkr = candidates[idx]
+        idx += 1
+        ticker_start = time.perf_counter()
+        _timing_log("ticker", "start", ticker=tkr, extra=f"idx={idx}/{len(candidates)}")
+        processed_scan.add(str(tkr or "").upper())
+        pending_pullback_start = time.perf_counter()
+        _timing_log("pending_pullback", "start", ticker=tkr)
         pending_decision = port.evaluate_pending_pullback(
             tkr, dry_run=not live, regime=entry_regime,
             pending=pending, reserved_cash=reserved_cash,
         )
+        _timing_log("pending_pullback", "end", pending_pullback_start, tkr)
         if pending_decision:
             pact = pending_decision.get("action")
             pscore = pending_decision.get("score") or "?"
@@ -382,10 +438,12 @@ def run(args):
                 print(f"  {pact.lower():<5} {tkr:<6} ({pscore}) {pending_decision.get('reason','')}")
                 continue
 
-        try:
-            res = analyze_ticker(tkr, regime=entry_regime)
-        except TypeError:
-            res = analyze_ticker(tkr)  # back-compat if regime kwarg absent
+        res = pillar_results.get(tkr.upper())
+        if res is None:
+            # Dynamic additions, e.g. sector-sweep peers, are analyzed only if they
+            # were not present in the original base batch.
+            _, res = _analyze_ticker_worker(tkr, entry_regime)
+            pillar_results[tkr.upper()] = res
         if "error" in res:
             scan_errors.append({"ticker": tkr.upper(), "error": res["error"]})
             _audit_signal_decision(tkr, {"action": "SKIP", "reason": res.get("error"), "signal": res.get("signal")}, "0/4 Pillars", 0, live, _scan_source(tkr, pending_scan, ema_retry_scan), market_date, run_id)
@@ -394,9 +452,53 @@ def run(args):
         scanned_count += 1
         score = res.get("score", "0/4 Pillars")
         pillars = _pillar_count(score)
+        analyst_start = time.perf_counter()
+        _timing_log("analyst_ratings_check", "start", ticker=tkr)
+        _timing_log("analyst_ratings_check", "end", analyst_start, tkr, extra=f"rating={res.get('analyst_rating') or 'none'}")
+        news_start = time.perf_counter()
+        _timing_log("news_catalyst_check", "start", ticker=tkr)
         catalyst = _catalyst_reason(res)
+        _timing_log("news_catalyst_check", "end", news_start, tkr, extra=f"catalyst={'yes' if catalyst else 'no'}")
         if catalyst:
             catalysts.append({"ticker": tkr.upper(), "reason": catalyst})
+        sector_sweep_start = time.perf_counter()
+        _timing_log("sector_sweep_trigger", "start", ticker=tkr)
+        try:
+            sweep_meta = port.sector_catalyst_sweep_trigger(res)
+            _timing_log("sector_sweep_trigger", "end", sector_sweep_start, tkr, extra=f"peers={len((sweep_meta or {}).get('peers') or []) if isinstance(sweep_meta, dict) else 0}")
+        except Exception as e:
+            sweep_meta = None
+            _timing_log("sector_sweep_trigger", "end", sector_sweep_start, tkr, extra=f"error={str(e)[:80]}")
+            scan_errors.append({"ticker": tkr.upper(), "error": f"sector catalyst sweep trigger failed: {e}"})
+        if isinstance(sweep_meta, dict) and sweep_meta.get("peers"):
+            sector_sweep_triggers.append({
+                "ticker": tkr.upper(),
+                "move_pct": sweep_meta.get("move_pct"),
+                "rvol": sweep_meta.get("rvol"),
+                "catalyst": sweep_meta.get("catalyst"),
+                "peer_count": sweep_meta.get("peer_count"),
+                "classification": sweep_meta.get("classification"),
+            })
+            queued = set(candidates)
+            added_peers = []
+            for peer in sweep_meta.get("peers") or []:
+                peer = str(peer or "").upper()
+                if not peer or peer == tkr.upper():
+                    continue
+                sector_sweep_context.setdefault(peer, sweep_meta)
+                if peer in queued:
+                    if peer in processed_scan and peer not in sector_sweep_requeued:
+                        candidates.append(peer)
+                        sector_sweep_requeued.add(peer)
+                        added_peers.append(peer)
+                    continue
+                candidates.append(peer)
+                queued.add(peer)
+                added_peers.append(peer)
+            if added_peers:
+                cls = sweep_meta.get("classification") or {}
+                label = cls.get("gic_subindustry") or cls.get("industry") or cls.get("sic_description") or "peer group"
+                print(f"  🧲 SECTOR SWEEP {tkr:<6} +{sweep_meta.get('move_pct'):.1f}% RVOL {sweep_meta.get('rvol'):.1f}x — queued {len(added_peers)} {label} peers")
         gap_decision = None
         if tkr.upper() not in set(pending_scan):
             try:
@@ -428,6 +530,70 @@ def run(args):
             print(f"  🚀 GAP BUY {tkr:<6} {gap_decision['shares']} sh @ {gap_decision['entry']} "
                   f"(stop {gap_decision['stop']}, {gap_decision['risk_pct']:.2f}% risk, "
                   f"${gap_decision['cost']:,.0f}) — {gap_decision['reason']}")
+            continue
+        intraday_breakout_decision = None
+        if tkr.upper() not in set(pending_scan) and tkr.upper() not in set(pending):
+            try:
+                intraday_breakout_decision = port.consider_intraday_breakout_continuation(
+                    res, dry_run=not live, regime=entry_regime,
+                    pending=pending, reserved_cash=reserved_cash,
+                )
+            except Exception as e:
+                intraday_breakout_decision = {"ticker": tkr.upper(), "action": "ERROR", "reason": f"intraday breakout check failed: {e}"}
+        if isinstance(intraday_breakout_decision, dict) and intraday_breakout_decision.get("action") == "BUY":
+            _attach_live_signal_price(intraday_breakout_decision, tkr)
+            intraday_breakout_decision.setdefault("score", score)
+            intraday_breakout_decision.setdefault("signal", res.get("signal", ""))
+            _audit_signal_decision(tkr, intraday_breakout_decision, score, pillars, live, "intraday_breakout_continuation", market_date, run_id)
+            buys.append(intraday_breakout_decision)
+            pending.append(tkr.upper())
+            reserved_cash += intraday_breakout_decision["cost"]
+            high_candidates.append({
+                "ticker": tkr.upper(), "score": score, "pillars": pillars,
+                "signal": res.get("signal", ""), "action": "BUY",
+                "reason": intraday_breakout_decision.get("reason", ""),
+                "entry": intraday_breakout_decision.get("entry"), "stop": intraday_breakout_decision.get("stop"),
+                "target": intraday_breakout_decision.get("target"), "cost": intraday_breakout_decision.get("cost"),
+                "shares": intraday_breakout_decision.get("shares"), "rvol": res.get("rvol"),
+                "breakout_level": intraday_breakout_decision.get("breakout_level"),
+                "breakout_rvol": intraday_breakout_decision.get("breakout_rvol"),
+                "entry_type": "INTRADAY_BREAKOUT_CONTINUATION", "catalyst": intraday_breakout_decision.get("catalyst"),
+                "live_price": intraday_breakout_decision.get("live_price"),
+            })
+            print(f"  📈 INTRADAY BREAKOUT {tkr:<6} {intraday_breakout_decision['shares']} sh @ {intraday_breakout_decision['entry']} "
+                  f"(break {intraday_breakout_decision['breakout_level']}, stop {intraday_breakout_decision['stop']}, {intraday_breakout_decision['risk_pct']:.2f}% risk, "
+                  f"${intraday_breakout_decision['cost']:,.0f}) — {intraday_breakout_decision['reason']}")
+            continue
+        sector_peer_decision = None
+        if tkr.upper() in sector_sweep_context and tkr.upper() not in set(pending_scan) and tkr.upper() not in set(pending):
+            try:
+                sector_peer_decision = port.consider_sector_catalyst_peer_breakout(
+                    res, sector_sweep_context.get(tkr.upper()), dry_run=not live, regime=entry_regime,
+                    pending=pending, reserved_cash=reserved_cash,
+                )
+            except Exception as e:
+                sector_peer_decision = {"ticker": tkr.upper(), "action": "ERROR", "reason": f"sector catalyst peer check failed: {e}"}
+        if isinstance(sector_peer_decision, dict) and sector_peer_decision.get("action") == "CANDIDATE":
+            sector_peer_decision.setdefault("score", score)
+            sector_peer_decision.setdefault("signal", res.get("signal", ""))
+            _audit_signal_decision(tkr, sector_peer_decision, score, pillars, live, "sector_catalyst_sweep", market_date, run_id)
+            high_candidates.append({
+                "ticker": tkr.upper(), "score": score, "pillars": pillars,
+                "signal": res.get("signal", ""), "action": "CANDIDATE",
+                "reason": sector_peer_decision.get("reason", ""),
+                "entry": sector_peer_decision.get("entry"), "stop": sector_peer_decision.get("stop"),
+                "target": sector_peer_decision.get("target"), "cost": sector_peer_decision.get("cost"),
+                "shares": sector_peer_decision.get("shares"), "rvol": sector_peer_decision.get("breakout_rvol") or res.get("rvol"),
+                "breakout_level": sector_peer_decision.get("breakout_level"),
+                "breakout_rvol": sector_peer_decision.get("breakout_rvol"),
+                "entry_type": "INTRADAY_BREAKOUT_CONTINUATION",
+                "sector_sweep": True,
+                "sector_sweep_trigger": sector_peer_decision.get("sector_sweep_trigger"),
+                "sector_sweep_trigger_move_pct": sector_peer_decision.get("sector_sweep_trigger_move_pct"),
+                "sector_sweep_trigger_rvol": sector_peer_decision.get("sector_sweep_trigger_rvol"),
+                "catalyst": sector_peer_decision.get("sector_sweep_catalyst"),
+            })
+            print(f"  🧲 SECTOR CANDIDATE {tkr:<6} ({score}) RVOL {sector_peer_decision.get('breakout_rvol'):.1f}x — trigger {sector_peer_decision.get('sector_sweep_trigger')}")
             continue
         catalyst_override_ok = bool(
             pillars == 2 and isinstance(res.get("catalyst_override"), dict) and res.get("catalyst_override", {}).get("qualifies")
@@ -513,12 +679,15 @@ def run(args):
         else:
             print(f"  {act.lower():<5} {tkr:<6} ({score}) {decision['reason']}")
 
+    _timing_log("ticker_loop", "end", ticker_loop_start, extra=f"processed={idx} scanned={scanned_count} candidates_final={len(candidates)}")
+
     LAST_RUN_SUMMARY.update({
         "candidates": candidates,
         "scanned_count": scanned_count,
         "high_candidates": high_candidates,
         "watch_2": sorted(set(watch_2)),
         "catalysts": catalysts,
+        "sector_sweep_triggers": sector_sweep_triggers,
         "scan_errors": scan_errors,
         "expired_pullbacks": expired_pullbacks,
         "pending_pullbacks": atlas_db.get_pending_pullbacks(status="WAITING"),

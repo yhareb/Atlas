@@ -38,6 +38,7 @@ import sys
 import math
 import json
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, date, timedelta, time
 from zoneinfo import ZoneInfo
 
@@ -73,6 +74,7 @@ from atlas_engine import (
 RISK_PCT_FULL = 0.01      # 1% equity risk for 4/4 BUY
 RISK_PCT_HALF = 0.005     # 0.5% equity risk for 3/4 BUY (Small)
 RISK_PCT_GAP_BREAKOUT = 0.0025  # 0.25% equity risk for opening gap-up breakout
+RISK_PCT_INTRADAY_BREAKOUT = 0.0025  # 0.25% equity risk for mid-morning breakout continuation
 MAX_POS_PCT = 0.20        # cap any single position at 20% of equity
 MAX_POSITIONS = 10        # max concurrent open positions
 MAX_PER_SECTOR = 3        # max concurrent open positions per sector
@@ -89,7 +91,74 @@ BREAKOUT_FALLBACK_STOP_PCT = 0.04  # fallback trailing stop when intraday candle
 LATE_ENTRY_CUTOFF_ET = time(14, 30)  # no new entries at/after 2:30 PM ET
 SPY_INTRADAY_DROP_VETO_PCT = -0.4  # block new entries if SPY drops more than 0.4% in 30 minutes
 LIVE_PRICE_CACHE_TTL_SEC = 300  # pending-pullback live quote cache; 5 minutes
+SECTOR_SWEEP_TRIGGER_MOVE_PCT = 5.0
+SECTOR_SWEEP_TRIGGER_RVOL = 2.0
+SECTOR_SWEEP_CANDIDATE_RVOL = 1.5
+SECTOR_SWEEP_MAX_PEERS = 15
+SECTOR_SWEEP_PEER_CACHE_PATH = "/tmp/atlas_sector_peer_cache.json"
+SECTOR_SWEEP_PEER_CACHE_TTL_SEC = 86400
+SECTOR_SWEEP_PEER_LOOKUP_WORKERS = 8
 _LIVE_PRICE_CACHE = {}
+# Massive/Polygon single-ticker snapshot can 404 for active symbols that still
+# have trade/aggregate data. Bypass that endpoint for known cases to avoid noisy
+# audit alerts and use last-trade/prev-agg fallback instead.
+SINGLE_SNAPSHOT_BYPASS_TICKERS = {"CWAN"}
+_SECTOR_SWEEP_REF_CACHE = {}
+_SECTOR_SWEEP_FUND_CACHE = {}
+_SECTOR_SWEEP_PEER_CACHE = {}
+
+
+def _sector_sweep_load_disk_peer_cache():
+    try:
+        if not os.path.exists(SECTOR_SWEEP_PEER_CACHE_PATH):
+            return {}
+        with open(SECTOR_SWEEP_PEER_CACHE_PATH, "r") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        now_ts = _audit_time.time()
+        fresh = {}
+        for key, item in data.items():
+            if not isinstance(item, dict):
+                continue
+            ts = float(item.get("ts") or 0)
+            meta = item.get("meta") if isinstance(item.get("meta"), dict) else None
+            if meta and now_ts - ts < SECTOR_SWEEP_PEER_CACHE_TTL_SEC:
+                fresh[key] = {"ts": ts, "meta": meta}
+        return fresh
+    except Exception:
+        return {}
+
+
+def _sector_sweep_save_disk_peer_cache(cache):
+    try:
+        tmp = f"{SECTOR_SWEEP_PEER_CACHE_PATH}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(cache, f, separators=(",", ":"), sort_keys=True)
+        os.replace(tmp, SECTOR_SWEEP_PEER_CACHE_PATH)
+    except Exception:
+        pass
+
+
+def _sector_sweep_peer_disk_key(ticker, max_peers):
+    return f"{str(ticker or '').upper()}:{int(max_peers or SECTOR_SWEEP_MAX_PEERS)}"
+
+
+def _sector_sweep_get_disk_peer_meta(ticker, max_peers):
+    key = _sector_sweep_peer_disk_key(ticker, max_peers)
+    cache = _sector_sweep_load_disk_peer_cache()
+    item = cache.get(key) or {}
+    meta = item.get("meta")
+    return dict(meta) if isinstance(meta, dict) else None
+
+
+def _sector_sweep_put_disk_peer_meta(ticker, max_peers, meta):
+    if not isinstance(meta, dict):
+        return
+    key = _sector_sweep_peer_disk_key(ticker, max_peers)
+    cache = _sector_sweep_load_disk_peer_cache()
+    cache[key] = {"ts": _audit_time.time(), "meta": meta}
+    _sector_sweep_save_disk_peer_cache(cache)
 
 
 try:
@@ -175,17 +244,31 @@ def _live_price_lookup(ticker):
     if cached and (now_ts - float(cached.get("ts", 0))) <= LIVE_PRICE_CACHE_TTL_SEC:
         return cached.get("price")
     try:
+        if ticker not in SINGLE_SNAPSHOT_BYPASS_TICKERS:
+            r = _audit_get(
+                f"{MASSIVE_BASE}/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}",
+                params={"apiKey": MASSIVE_API_KEY}, headers={"Accept": "application/json"}, timeout=5,
+            )
+            if r.status_code == 200:
+                t = normalize_snapshot_fields(ticker, (r.json() or {}).get("ticker") or {})
+                for section, key in (("lastTrade", "p"), ("min", "c"), ("day", "c")):
+                    value = (t.get(section) or {}).get(key)
+                    if value:
+                        price = float(value)
+                        _LIVE_PRICE_CACHE[ticker] = {"ts": now_ts, "price": price}
+                        return price
+            elif r.status_code == 404:
+                SINGLE_SNAPSHOT_BYPASS_TICKERS.add(ticker)
+            else:
+                return None
         r = _audit_get(
-            f"{MASSIVE_BASE}/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}",
+            f"{MASSIVE_BASE}/v2/last/trade/{ticker}",
             params={"apiKey": MASSIVE_API_KEY}, headers={"Accept": "application/json"}, timeout=5,
         )
-        if r.status_code != 200:
-            return None
-        t = normalize_snapshot_fields(ticker, (r.json() or {}).get("ticker") or {})
-        for section, key in (("lastTrade", "p"), ("min", "c"), ("day", "c")):
-            value = (t.get(section) or {}).get(key)
-            if value:
-                price = float(value)
+        if r.status_code == 200:
+            price = ((r.json() or {}).get("results") or {}).get("p")
+            if price:
+                price = float(price)
                 _LIVE_PRICE_CACHE[ticker] = {"ts": now_ts, "price": price}
                 return price
     except Exception:
@@ -758,24 +841,46 @@ def _gap_breakout_window_open(now=None):
 
 
 def _gap_breakout_snapshot(ticker):
+    ticker = (ticker or "").upper()
     if not MASSIVE_API_KEY:
         return {}
     try:
+        if ticker not in SINGLE_SNAPSHOT_BYPASS_TICKERS:
+            r = _audit_get(
+                f"{MASSIVE_BASE}/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}",
+                params={"apiKey": MASSIVE_API_KEY}, headers={"Accept": "application/json"}, timeout=5,
+            )
+            if r.status_code == 200:
+                t = normalize_snapshot_fields(ticker, (r.json() or {}).get("ticker") or {})
+                day = t.get("day") or {}
+                prev = t.get("prevDay") or {}
+                last_trade = t.get("lastTrade") or {}
+                current = day.get("c") or last_trade.get("p") or prev.get("c")
+                return {
+                    "current": float(current) if current else None,
+                    "prev_close": float(prev.get("c")) if prev.get("c") else None,
+                    "day_volume": float(day.get("v") or day.get("volume") or 0),
+                }
+            if r.status_code == 404:
+                SINGLE_SNAPSHOT_BYPASS_TICKERS.add(ticker)
+            else:
+                return {}
+        current = _live_price_lookup(ticker)
+        prev_close = None
+        day_volume = 0.0
         r = _audit_get(
-            f"{MASSIVE_BASE}/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}",
-            params={"apiKey": MASSIVE_API_KEY}, headers={"Accept": "application/json"}, timeout=5,
+            f"{MASSIVE_BASE}/v2/aggs/ticker/{ticker}/prev",
+            params={"apiKey": MASSIVE_API_KEY, "adjusted": "true"}, headers={"Accept": "application/json"}, timeout=5,
         )
-        if r.status_code != 200:
-            return {}
-        t = normalize_snapshot_fields(ticker, (r.json() or {}).get("ticker") or {})
-        day = t.get("day") or {}
-        prev = t.get("prevDay") or {}
-        last_trade = t.get("lastTrade") or {}
-        current = day.get("c") or last_trade.get("p") or prev.get("c")
+        if r.status_code == 200:
+            rows = (r.json() or {}).get("results") or []
+            if rows:
+                prev_close = rows[0].get("c")
+                day_volume = rows[0].get("v") or 0.0
         return {
             "current": float(current) if current else None,
-            "prev_close": float(prev.get("c")) if prev.get("c") else None,
-            "day_volume": float(day.get("v") or day.get("volume") or 0),
+            "prev_close": float(prev_close) if prev_close else None,
+            "day_volume": float(day_volume or 0),
         }
     except Exception:
         return {}
@@ -910,6 +1015,451 @@ def consider_gap_up_breakout(signal_result, dry_run=True, regime=None, pending=N
                 ticker, round(entry, 2), shares, stop_loss=stop, risk_pct=decision["risk_pct"], target_price=target,
                 status="PENDING_FILL",
                 notes=f"Atlas gap-up breakout: gap +{gap_pct:.1f}%, RVOL {rvol:.1f}x; catalyst {catalyst_note}; stop {stop}; target {target}; 0.25% risk on equity ${equity:,.0f}",
+            )
+        except Exception as e:
+            decision["action"] = "ERROR"
+            decision["reason"] = str(e)
+    return decision
+
+
+# --------------------------------------------------------------------------- #
+# Intraday breakout continuation (10:00-12:00 ET only)
+# --------------------------------------------------------------------------- #
+def _intraday_breakout_window_open(now=None):
+    now_et = now.astimezone(ZoneInfo("America/New_York")) if now else datetime.now(ZoneInfo("America/New_York"))
+    return time(10, 0) <= now_et.time() < time(12, 0)
+
+
+def _prior_day_high(ticker):
+    aggs = _normalize_price_bars(ticker, get_massive_aggs(ticker, days=10)) or []
+    if len(aggs) < 2:
+        return None
+    try:
+        return float(aggs[-2].get("h") or aggs[-2].get("c"))
+    except Exception:
+        return None
+
+
+def _latest_completed_5m_close(ticker, now=None):
+    if not MASSIVE_API_KEY:
+        return None
+    now_et = now.astimezone(ZoneInfo("America/New_York")) if now else datetime.now(ZoneInfo("America/New_York"))
+    market_day = now_et.date().isoformat()
+    completed_before = now_et - timedelta(minutes=5)
+    try:
+        r = _audit_get(
+            f"{MASSIVE_BASE}/v2/aggs/ticker/{ticker}/range/5/minute/{market_day}/{market_day}",
+            params={"apiKey": MASSIVE_API_KEY, "adjusted": "true", "sort": "asc", "limit": 5000},
+            headers={"Accept": "application/json"}, timeout=8,
+        )
+        if r.status_code != 200:
+            return None
+        rows = _normalize_price_bars(ticker, (r.json() or {}).get("results") or [])
+        latest = None
+        for row in rows:
+            ts = row.get("t")
+            close = row.get("c")
+            if ts is None or close is None:
+                continue
+            dt = datetime.fromtimestamp(float(ts) / 1000.0, tz=timezone.utc).astimezone(ZoneInfo("America/New_York"))
+            if dt <= completed_before:
+                latest = row
+        return float(latest.get("c")) if latest else None
+    except Exception:
+        return None
+
+
+def _spy_positive_on_day():
+    snap = _gap_breakout_snapshot("SPY")
+    current = snap.get("current")
+    prev_close = snap.get("prev_close")
+    return bool(current and prev_close and float(current) > float(prev_close))
+
+
+def _recent_benzinga_catalyst(ticker, now=None):
+    ticker = (ticker or "").upper()
+    if not MASSIVE_API_KEY:
+        return False, None
+    now_utc = now.astimezone(timezone.utc) if now else datetime.now(timezone.utc)
+    since_utc = now_utc - timedelta(hours=24)
+    try:
+        r = _audit_get(
+            f"{MASSIVE_BASE}/benzinga/v2/news",
+            params={
+                "apiKey": MASSIVE_API_KEY,
+                "tickers": ticker,
+                "date.gte": since_utc.date().isoformat(),
+                "limit": 10,
+            },
+            headers={"Accept": "application/json"}, timeout=8,
+        )
+        rows = (r.json() or {}).get("results") if r.status_code == 200 else []
+        for row in rows or []:
+            published = row.get("published_utc") or row.get("created") or row.get("updated") or row.get("date")
+            if published:
+                try:
+                    txt = str(published).replace("Z", "+00:00")
+                    dt = datetime.fromisoformat(txt)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    if dt.astimezone(timezone.utc) < since_utc:
+                        continue
+                except Exception:
+                    pass
+            title = (row.get("title") or "Recent Benzinga catalyst").strip()
+            return True, title
+    except Exception:
+        pass
+    return False, None
+
+
+def _sector_sweep_window_open(now=None):
+    now_et = now.astimezone(ZoneInfo("America/New_York")) if now else datetime.now(ZoneInfo("America/New_York"))
+    return time(9, 30) <= now_et.time() < time(12, 0)
+
+
+def _sector_sweep_snapshot_metrics(ticker):
+    snap = _gap_breakout_snapshot(ticker)
+    current = snap.get("current")
+    prev_close = snap.get("prev_close")
+    day_vol = snap.get("day_volume")
+    avg_vol = _avg_daily_volume(ticker, days=30)
+    out = {"current": current, "prev_close": prev_close, "day_volume": day_vol, "avg_volume": avg_vol}
+    try:
+        if current and prev_close and float(prev_close) > 0:
+            out["move_pct"] = ((float(current) / float(prev_close)) - 1.0) * 100.0
+    except Exception:
+        pass
+    try:
+        if day_vol and avg_vol and float(avg_vol) > 0:
+            out["rvol"] = float(day_vol) / float(avg_vol)
+    except Exception:
+        pass
+    return out
+
+
+def _sector_sweep_reference_details(ticker):
+    ticker = (ticker or "").upper()
+    if not ticker or not MASSIVE_API_KEY:
+        return {}
+    if ticker in _SECTOR_SWEEP_REF_CACHE:
+        return _SECTOR_SWEEP_REF_CACHE[ticker] or {}
+    try:
+        r = _audit_get(
+            f"{MASSIVE_BASE}/v3/reference/tickers/{ticker}",
+            params={"apiKey": MASSIVE_API_KEY}, headers={"Accept": "application/json"}, timeout=6,
+        )
+        data = (r.json() or {}).get("results") if r.status_code == 200 else {}
+        _SECTOR_SWEEP_REF_CACHE[ticker] = data or {}
+    except Exception:
+        _SECTOR_SWEEP_REF_CACHE[ticker] = {}
+    return _SECTOR_SWEEP_REF_CACHE[ticker] or {}
+
+
+def _sector_sweep_fundamentals_general(ticker):
+    ticker = (ticker or "").upper()
+    if not ticker or not EODHD_API_KEY:
+        return {}
+    if ticker in _SECTOR_SWEEP_FUND_CACHE:
+        return _SECTOR_SWEEP_FUND_CACHE[ticker] or {}
+    try:
+        r = _audit_get(
+            f"https://eodhd.com/api/fundamentals/{ticker}.US",
+            params={"api_token": EODHD_API_KEY, "fmt": "json"},
+            headers={"Accept": "application/json"}, timeout=8,
+        )
+        data = (r.json() or {}).get("General") if r.status_code == 200 else {}
+        _SECTOR_SWEEP_FUND_CACHE[ticker] = data or {}
+    except Exception:
+        _SECTOR_SWEEP_FUND_CACHE[ticker] = {}
+    return _SECTOR_SWEEP_FUND_CACHE[ticker] or {}
+
+
+def _sector_sweep_classification(ticker):
+    ref = _sector_sweep_reference_details(ticker)
+    gen = _sector_sweep_fundamentals_general(ticker)
+    return {
+        "ticker": (ticker or "").upper(),
+        "name": ref.get("name") or gen.get("Name"),
+        "sic_code": ref.get("sic_code"),
+        "sic_description": ref.get("sic_description"),
+        "sector": gen.get("Sector"),
+        "industry": gen.get("Industry"),
+        "gic_sector": gen.get("GicSector"),
+        "gic_group": gen.get("GicGroup"),
+        "gic_industry": gen.get("GicIndustry"),
+        "gic_subindustry": gen.get("GicSubIndustry"),
+    }
+
+
+def _sector_sweep_is_us_listed_equity(ticker):
+    ref = _sector_sweep_reference_details(ticker)
+    if not ref:
+        return False
+    typ = str(ref.get("type") or "").upper()
+    market = str(ref.get("market") or "").lower()
+    locale = str(ref.get("locale") or "").lower()
+    exch = str(ref.get("primary_exchange") or "").upper()
+    return bool(
+        ref.get("active", True)
+        and market == "stocks"
+        and locale == "us"
+        and typ not in {"ETF", "ETN", "FUND", "INDEX"}
+        and exch not in {"OTC", "PINX", "OOTC"}
+    )
+
+
+def _sector_sweep_related_peers(ticker):
+    if not MASSIVE_API_KEY:
+        return []
+    try:
+        r = _audit_get(
+            f"{MASSIVE_BASE}/v1/related-companies/{ticker}",
+            params={"apiKey": MASSIVE_API_KEY}, headers={"Accept": "application/json"}, timeout=8,
+        )
+        if r.status_code != 200:
+            return []
+        return [(row.get("ticker") or "").upper() for row in ((r.json() or {}).get("results") or []) if row.get("ticker")]
+    except Exception:
+        return []
+
+
+def _sector_sweep_eodhd_industry_peers(industry, sector=None, limit=120):
+    if not EODHD_API_KEY or not industry:
+        return []
+    filters = [["industry", "=", industry], ["exchange", "=", "US"], ["market_capitalization", ">", 200000000], ["adjusted_close", ">", 2]]
+    if sector:
+        filters.insert(0, ["sector", "=", sector])
+    try:
+        r = _audit_get(
+            "https://eodhd.com/api/screener",
+            params={"api_token": EODHD_API_KEY, "fmt": "json", "filters": json.dumps(filters), "limit": int(limit), "sort": "market_capitalization.desc"},
+            headers={"Accept": "application/json"}, timeout=10,
+        )
+        if r.status_code != 200:
+            return []
+        return [(row.get("code") or "").upper().replace(".US", "") for row in ((r.json() or {}).get("data") or []) if row.get("code")]
+    except Exception:
+        return []
+
+
+def _sector_sweep_curated_gics_industry_peers(gic_industry):
+    if str(gic_industry or "").strip().lower() != "semiconductors & semiconductor equipment":
+        return []
+    return [
+        "NVDA", "AMD", "AVGO", "QCOM", "MU", "MRVL", "ON", "STM", "TSM", "ASML", "AMAT", "LRCX",
+        "KLAC", "TER", "UCTT", "MKSI", "MXL", "ALGM", "ENTG", "ONTO", "NVMI", "AEIS", "ACLS", "COHU",
+        "VECO", "ICHR", "FORM", "AMKR", "LSCC", "MPWR", "RMBS", "SMTC", "DIOD", "POWI", "CRUS", "WOLF",
+    ]
+
+
+def sector_catalyst_sweep_peers(ticker, max_peers=SECTOR_SWEEP_MAX_PEERS):
+    ticker = (ticker or "").upper()
+    cache_key = (ticker, int(max_peers or SECTOR_SWEEP_MAX_PEERS))
+    if cache_key in _SECTOR_SWEEP_PEER_CACHE:
+        return dict(_SECTOR_SWEEP_PEER_CACHE[cache_key])
+    disk_meta = _sector_sweep_get_disk_peer_meta(ticker, max_peers)
+    if disk_meta:
+        _SECTOR_SWEEP_PEER_CACHE[cache_key] = dict(disk_meta)
+        return dict(disk_meta)
+    cls = _sector_sweep_classification(ticker)
+    raw = []
+    if cls.get("industry"):
+        raw.extend(_sector_sweep_eodhd_industry_peers(cls.get("industry"), sector=cls.get("sector"), limit=max(30, int(max_peers or SECTOR_SWEEP_MAX_PEERS) * 3)))
+    raw.extend(_sector_sweep_related_peers(ticker))
+    raw.extend(_sector_sweep_curated_gics_industry_peers(cls.get("gic_industry")))
+    limit = int(max_peers or SECTOR_SWEEP_MAX_PEERS)
+    peers, seen, candidates = [], {ticker}, []
+    for sym in raw:
+        sym = (sym or "").upper().strip()
+        if not sym or sym in seen or "." in sym or "-" in sym:
+            continue
+        seen.add(sym)
+        candidates.append(sym)
+        if len(candidates) >= max(limit * 3, limit):
+            break
+    workers = max(1, min(SECTOR_SWEEP_PEER_LOOKUP_WORKERS, len(candidates) or 1))
+    if candidates:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_sym = {executor.submit(_sector_sweep_is_us_listed_equity, sym): sym for sym in candidates}
+            usable = {}
+            for future in as_completed(future_to_sym):
+                sym = future_to_sym[future]
+                try:
+                    usable[sym] = bool(future.result())
+                except Exception:
+                    usable[sym] = False
+        for sym in candidates:
+            if usable.get(sym):
+                peers.append(sym)
+                if len(peers) >= limit:
+                    break
+    meta = {"trigger": ticker, "classification": cls, "peers": peers, "peer_count": len(peers)}
+    _SECTOR_SWEEP_PEER_CACHE[cache_key] = dict(meta)
+    _sector_sweep_put_disk_peer_meta(ticker, max_peers, meta)
+    return meta
+
+
+def sector_catalyst_sweep_trigger(signal_result, now=None):
+    ticker = str((signal_result or {}).get("ticker") or "").upper()
+    if not ticker or not _sector_sweep_window_open(now=now):
+        return None
+    metrics = _sector_sweep_snapshot_metrics(ticker)
+    move_pct = metrics.get("move_pct")
+    rvol = metrics.get("rvol")
+    if move_pct is None or float(move_pct) <= SECTOR_SWEEP_TRIGGER_MOVE_PCT:
+        return None
+    if rvol is None or float(rvol) <= SECTOR_SWEEP_TRIGGER_RVOL:
+        return None
+    catalyst_ok, catalyst_note = _recent_benzinga_catalyst(ticker, now=now)
+    if not catalyst_ok:
+        return None
+    meta = sector_catalyst_sweep_peers(ticker)
+    meta.update({
+        "move_pct": round(float(move_pct), 2),
+        "rvol": round(float(rvol), 2),
+        "catalyst": catalyst_note,
+        "entry_type": "SECTOR_CATALYST_SWEEP",
+    })
+    return meta if meta.get("peers") else None
+
+
+def consider_sector_catalyst_peer_breakout(signal_result, trigger_meta, dry_run=True, regime=None, pending=None,
+                                           reserved_cash=0.0, now=None):
+    ticker = str((signal_result or {}).get("ticker") or "").upper()
+    if not ticker or not _sector_sweep_window_open(now=now):
+        return {"ticker": ticker, "action": "SKIP", "reason": "SECTOR_SWEEP_WINDOW_CLOSED"}
+    score = signal_result.get("score", "0/4 Pillars")
+    try:
+        pillars = int(str(score).split("/")[0])
+    except Exception:
+        pillars = 0
+    if pillars < 3:
+        return {"ticker": ticker, "action": "SKIP", "reason": "SECTOR_SWEEP_SCORE_LT_3"}
+    if atlas_db.get_pending_pullback(ticker):
+        return {"ticker": ticker, "action": "SKIP", "reason": "SECTOR_SWEEP_ALREADY_WAITING_FOR_DIP"}
+    allowed, why = check_admission(ticker, regime=regime, pending=pending)
+    if not allowed:
+        return {"ticker": ticker, "action": "BLOCK", "reason": why}
+    rv = None
+    try:
+        rv = float(signal_result.get("rvol")) if signal_result.get("rvol") is not None else None
+    except Exception:
+        rv = None
+    metrics = None
+    if rv is None:
+        metrics = _sector_sweep_snapshot_metrics(ticker)
+        rv = metrics.get("rvol")
+    if rv is None or float(rv) <= SECTOR_SWEEP_CANDIDATE_RVOL:
+        return {"ticker": ticker, "action": "SKIP", "reason": "SECTOR_SWEEP_RVOL_LE_1_5", "breakout_rvol": round(float(rv), 2) if rv is not None else None}
+    if metrics is None:
+        metrics = _sector_sweep_snapshot_metrics(ticker)
+    entry = metrics.get("current") or signal_result.get("entry_price")
+    if not entry:
+        return {"ticker": ticker, "action": "SKIP", "reason": "SECTOR_SWEEP_PRICE_UNAVAILABLE", "breakout_rvol": round(float(rv), 2)}
+    prior_high = _prior_day_high(ticker)
+    breakout_level = float(prior_high or entry)
+    entry = round(float(entry), 2)
+    stop_base = breakout_level if breakout_level < entry else entry
+    stop = round(float(stop_base) * 0.98, 2)
+    target = round(entry + (2 * (entry - stop)), 2)
+    equity = acct.get_equity(price_lookup=_price_lookup)
+    shares = size_position_for_risk(equity, entry, stop, RISK_PCT_INTRADAY_BREAKOUT)
+    cost = round(shares * entry, 2) if shares else 0.0
+    trigger = (trigger_meta or {}).get("trigger")
+    decision = {
+        "ticker": ticker,
+        "action": "CANDIDATE",
+        "reason": f"SECTOR CATALYST SWEEP: {trigger} sympathy breakout candidate, {score}, RVOL {float(rv):.1f}x",
+        "entry": entry, "stop": stop, "target": target,
+        "shares": shares, "cost": cost,
+        "risk_pct": RISK_PCT_INTRADAY_BREAKOUT * 100,
+        "score": score, "signal": signal_result.get("signal", ""),
+        "entry_type": "INTRADAY_BREAKOUT_CONTINUATION",
+        "sector_sweep": True,
+        "sector_sweep_trigger": trigger,
+        "sector_sweep_trigger_move_pct": (trigger_meta or {}).get("move_pct"),
+        "sector_sweep_trigger_rvol": (trigger_meta or {}).get("rvol"),
+        "sector_sweep_catalyst": (trigger_meta or {}).get("catalyst"),
+        "breakout_level": round(float(breakout_level), 2),
+        "breakout_rvol": round(float(rv), 2),
+        "equity": equity,
+    }
+    return decision
+
+
+def consider_intraday_breakout_continuation(signal_result, dry_run=True, regime=None, pending=None,
+                                             reserved_cash=0.0, now=None):
+    """Mid-morning continuation: 5m close above prior-day high on extreme volume."""
+    ticker = signal_result["ticker"].upper()
+    score = signal_result.get("score", "0/4 Pillars")
+    try:
+        pillars = int(str(score).split("/")[0])
+    except Exception:
+        pillars = 0
+    if not _intraday_breakout_window_open(now=now):
+        return {"ticker": ticker, "action": "SKIP", "reason": "INTRADAY_BREAKOUT_WINDOW_CLOSED"}
+    if pillars < 3:
+        return {"ticker": ticker, "action": "SKIP", "reason": "INTRADAY_BREAKOUT_SCORE_LT_3"}
+    if atlas_db.get_pending_pullback(ticker):
+        return {"ticker": ticker, "action": "SKIP", "reason": "INTRADAY_BREAKOUT_ALREADY_WAITING_FOR_DIP"}
+    allowed, why = check_admission(ticker, regime=regime, pending=pending)
+    if not allowed:
+        return {"ticker": ticker, "action": "BLOCK", "reason": why}
+    if not _spy_positive_on_day():
+        return {"ticker": ticker, "action": "SKIP", "reason": "INTRADAY_BREAKOUT_SPY_NOT_POSITIVE"}
+    catalyst_ok, catalyst_note = _recent_benzinga_catalyst(ticker, now=now)
+    if not catalyst_ok:
+        return {"ticker": ticker, "action": "SKIP", "reason": "INTRADAY_BREAKOUT_NO_24H_BENZINGA_CATALYST"}
+    prior_high = _prior_day_high(ticker)
+    if not prior_high:
+        return {"ticker": ticker, "action": "SKIP", "reason": "INTRADAY_BREAKOUT_PRIOR_HIGH_UNAVAILABLE"}
+    close_5m = _latest_completed_5m_close(ticker, now=now)
+    if not close_5m or close_5m <= prior_high:
+        return {"ticker": ticker, "action": "SKIP", "reason": "INTRADAY_BREAKOUT_NO_5M_CLOSE_ABOVE_PRIOR_HIGH", "breakout_level": round(prior_high, 2), "entry": round(close_5m, 2) if close_5m else None}
+    snap = _gap_breakout_snapshot(ticker)
+    avg_vol = _avg_daily_volume(ticker, days=30)
+    day_vol = snap.get("day_volume")
+    if not avg_vol or not day_vol:
+        return {"ticker": ticker, "action": "SKIP", "reason": "INTRADAY_BREAKOUT_RVOL_UNAVAILABLE", "breakout_level": round(prior_high, 2)}
+    rvol = day_vol / avg_vol
+    if rvol <= 2.0:
+        return {"ticker": ticker, "action": "SKIP", "reason": "INTRADAY_BREAKOUT_RVOL_LE_2", "breakout_level": round(prior_high, 2), "breakout_rvol": round(rvol, 2)}
+
+    entry = round(float(close_5m), 2)
+    breakout_level = round(float(prior_high), 2)
+    stop = round(float(prior_high) * 0.98, 2)
+    target = round(entry + (2 * (entry - stop)), 2)
+    equity = acct.get_equity(price_lookup=_price_lookup)
+    shares = size_position_for_risk(equity, entry, stop, RISK_PCT_INTRADAY_BREAKOUT)
+    if shares <= 0:
+        return {"ticker": ticker, "action": "SKIP", "reason": "INTRADAY_BREAKOUT_SIZED_TO_ZERO"}
+    cost = round(shares * entry, 2)
+    cash = acct.get_cash() - float(reserved_cash or 0)
+    if cost > cash:
+        shares = math.floor(cash / entry) if entry > 0 else 0
+        cost = round(shares * entry, 2)
+        if shares <= 0:
+            return {"ticker": ticker, "action": "SKIP", "reason": f"Insufficient cash (free ${cash:,.0f})"}
+    decision = {
+        "ticker": ticker, "action": "BUY",
+        "reason": f"INTRADAY BREAKOUT CONTINUATION: 5m close {entry:.2f} > prior high {breakout_level:.2f}, RVOL {rvol:.1f}x, catalyst: {catalyst_note}",
+        "entry": entry, "stop": stop, "target": target,
+        "shares": shares, "cost": cost,
+        "risk_pct": RISK_PCT_INTRADAY_BREAKOUT * 100,
+        "score": score, "signal": signal_result.get("signal", ""),
+        "entry_type": "INTRADAY_BREAKOUT_CONTINUATION",
+        "breakout_level": breakout_level,
+        "breakout_rvol": round(rvol, 2),
+        "catalyst": catalyst_note,
+        "equity": equity,
+    }
+    if not dry_run:
+        try:
+            atlas_db.open_trade(
+                ticker, entry, shares, stop_loss=stop, risk_pct=decision["risk_pct"], target_price=target,
+                status="PENDING_FILL",
+                notes=f"Atlas intraday breakout continuation: break {breakout_level}; entry {entry}; RVOL {rvol:.1f}x; catalyst {catalyst_note}; stop {stop}; target {target}; 0.25% risk on equity ${equity:,.0f}",
             )
         except Exception as e:
             decision["action"] = "ERROR"

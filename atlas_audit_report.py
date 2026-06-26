@@ -10,6 +10,7 @@ from collections import defaultdict
 from datetime import datetime, time, timezone
 import os
 from pathlib import Path
+import re
 import sqlite3
 import sys
 from zoneinfo import ZoneInfo
@@ -168,12 +169,21 @@ def build_report(now_et=None):
     provider_transient_errors = defaultdict(int)
     provider_transient_examples = {}
     alerts = []
+    live_trade_fallback_ok = set()
+    for _provider, endpoint, http_status, ok, _error in data["api"]:
+        m = re.search(r"/v2/last/trade/([A-Z.\-]+)", str(endpoint or ""))
+        if m and http_status == 200 and ok is True:
+            live_trade_fallback_ok.add(m.group(1).upper())
 
     for provider, endpoint, http_status, ok, error in data["api"]:
         p = provider or "Unknown"
         provider_counts.setdefault(p, {"calls": 0, "errors": 0})
         provider_counts[p]["calls"] += 1
         if http_status is not None and int(http_status) != 200:
+            endpoint_txt = str(endpoint or "")
+            m = re.search(r"/v2/snapshot/locale/us/markets/stocks/tickers/([A-Z.\-]+)", endpoint_txt)
+            if int(http_status) == 404 and m and m.group(1).upper() in live_trade_fallback_ok:
+                continue
             provider_counts[p]["errors"] += 1
             alerts.append(f"HTTP {http_status} {p}: {endpoint}")
         elif ok is False:

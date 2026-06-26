@@ -1,4 +1,4 @@
-import os, sys, re, requests
+import os, sys, re, json, requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from atlas_notify import send_telegram as _send_telegram
 from datetime import datetime, timedelta, date, time, timezone
@@ -1063,13 +1063,31 @@ def _llm_brief(futures, gainers, losers, buy_lines, watch_lines, headlines):
         print(f"[LLM brief] failed: {e}")
     return None
 
+def _write_premarket_run_marker(market_date, sent=True):
+    try:
+        payload = {
+            "market_date": str(market_date),
+            "ran_at_et": datetime.now(ZoneInfo("America/New_York")).isoformat(timespec="seconds"),
+            "sent": bool(sent),
+        }
+        tmp = "/tmp/atlas_pre_market_report_last_run.json.tmp"
+        with open(tmp, "w") as f:
+            json.dump(payload, f, sort_keys=True)
+        os.replace(tmp, "/tmp/atlas_pre_market_report_last_run.json")
+    except Exception:
+        pass
+
+
 def generate_pre_market_report(send=True):
     now_et = datetime.now(ZoneInfo("America/New_York"))
     today = current_et_market_date(now_et)
     if today in NYSE_HOLIDAYS_2026 or today.weekday() >= 5: return
-    today_str = today.strftime("%Y-%m-%d")
-    # Wave F comprehensive scout replaces the older idle-style brief.
-    return generate_wavef_pre_market_brief(send=send)
+    from atlas_report_handoff import build_atlas_handoff_report
+    message = build_atlas_handoff_report(context="pre_market", report_date=today)
+    _write_premarket_run_marker(today, sent=bool(send))
+    if send:
+        send_telegram(message)
+    return message
     lines = [f"🌄 *Pre-Market Brief — {today_str}*", ""]
     lines.append("*Index Proxies (ETF):*"); lines.extend(get_futures() or ["  N/A"]); lines.append("")
     gainers, losers = get_top_movers()
@@ -1093,5 +1111,18 @@ def generate_pre_market_report(send=True):
         send_telegram(message)
     return message
 
+def _launchd_market_open_window(now_et=None):
+    """Optional launchd guard: allow the market-open pre-market send once near 09:15 ET."""
+    now_et = now_et or datetime.now(ZoneInfo("America/New_York"))
+    today = current_et_market_date(now_et)
+    if today in NYSE_HOLIDAYS_2026 or today.weekday() >= 5:
+        return False
+    t = now_et.time().replace(tzinfo=None)
+    return time(9, 15) <= t < time(9, 20)
+
+
 if __name__ == "__main__":
-    generate_pre_market_report()
+    if os.environ.get("ATLAS_PREMARKET_LAUNCHD_GATED") == "1" and not _launchd_market_open_window():
+        print("[pre_market] launchd gate closed; outside 09:15-09:20 ET trading window")
+    else:
+        generate_pre_market_report()

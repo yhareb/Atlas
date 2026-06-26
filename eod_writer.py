@@ -162,20 +162,8 @@ def _day_summary_lines(handoff_data, holdings_count, armed_count, saved=True):
 
 
 def _build_handoff_message(handoff_data, saved=True):
-    buy_tickers = handoff_data.get("BUY") or []
-    watch_tickers = handoff_data.get("WATCH") or []
-    holding_lines, holdings = _holding_lines()
-    armed_lines, armed = _armed_lines()
-    lines = [
-        f"🦅 ATLAS EOD WRITER HANDOFF — {handoff_data.get('date')}",
-        "📬 Tomorrow handoff ready",
-    ]
-    lines += _bought_today_lines(buy_tickers)
-    lines += holding_lines
-    lines += armed_lines
-    lines += _watching_lines(watch_tickers)
-    lines += _day_summary_lines(handoff_data, len(holdings), len(armed), saved=saved)
-    return "\n".join(lines)
+    from atlas_report_handoff import build_atlas_handoff_report
+    return build_atlas_handoff_report(context="eod_handoff")
 
 
 def generate_eod_handoff(send=True, write_db=True):
