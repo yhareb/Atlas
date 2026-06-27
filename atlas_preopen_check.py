@@ -162,6 +162,14 @@ def _check_atlas_db():
 
 def _check_premarket_seen(now_et):
     try:
+        marker = Path("/tmp/atlas_pre_market_report_last_run.json")
+        if marker.exists():
+            data = json.loads(marker.read_text(errors="ignore") or "{}")
+            if str(data.get("market_date") or "") == now_et.date().isoformat():
+                return True
+    except Exception:
+        pass
+    try:
         if not atlas_audit:
             return False
         start_et = datetime.combine(now_et.date(), time(0, 0), ET)

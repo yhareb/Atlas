@@ -603,6 +603,15 @@ def run(args):
                 watch.append(tkr.upper())
                 if pillars == 2:
                     watch_2.append(tkr.upper())
+                    high_candidates.append({
+                        "ticker": tkr.upper(),
+                        "score": score,
+                        "pillars": pillars,
+                        "signal": res.get("signal", ""),
+                        "action": "WATCH",
+                        "reason": res.get("signal", ""),
+                        "pct_over_ema": res.get("pct_over_ema"),
+                    })
             _audit_signal_decision(tkr, {"action": "SKIP", "reason": res.get("signal", ""), "signal": res.get("signal")}, score, pillars, live, _scan_source(tkr, pending_scan, ema_retry_scan), market_date, run_id)
             print(f"  skip  {tkr:<6} {res.get('signal','')}  ({score})")
             continue

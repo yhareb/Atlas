@@ -1,0 +1,28 @@
+=== atlas_macro_premarket.py --force --dry-run ===
+[macro_premarket] collection_seconds=10.8 total_build_seconds=14.90
+🧭 ATLAS MACRO PRE-MARKET — Jun 27, 2026 · 09:41 AM ET
+
+1. Futures Overview
+S&P 500 futures edged lower by 0.29% to 7,401.75, while Nasdaq 100 futures led the decline, dropping 1.20% to 29,368.25 amid tech sector pressures. Dow futures were more stable, slipping just 0.25% to 52,209, reflecting a cautious market tone.
+
+2. NYSE/Nasdaq Breadth
+NYSE and Nasdaq breadth was evenly split with 21 advancers and 21 decliners, indicating a narrow tape. Weakness in Nasdaq futures suggests concentrated pressure in a few large-cap names rather than broad-based selling.
+
+3. Technology & Semiconductors
+The SOX index tumbled 5.93%, with equipment makers under scrutiny following analyst concerns over capex timing. This decline underscores the sector's vulnerability as chip stocks have been pivotal in recent market rallies.
+
+4. Artificial Intelligence
+The AI sector was quiet overnight with no major deal announcements or model releases to shift sentiment. The group continues to trade on broader tech sector dynamics and regulatory developments.
+
+5. Catalysts & Breaking News
+Export-control discussions and pre-open earnings reports are in focus, providing insight into margin resilience. Options expiry could amplify index moves if futures weakness carries into the cash session.
+
+6. Global Markets
+Asian markets saw the Nikkei 225 fall 4.15% to 69,360.88, while European equities were softer with the Euro Stoxx 50 down 0.73% to 6,221.55. The Dollar Index was steady at 101.37, WTI crude oil slipped 3.74% to $69.23, and the US 10-year yield eased to 4.37%.
+
+7. The Tone
+The market tone is cautious as tech sector pressures weigh on sentiment.
+
+8. Key Events Today
+Today's calendar features European economic data at 13:45 ET and Chinese data at 01:30 ET. Fed speakers and pre-open earnings will be closely watched for guidance on economic and market conditions.
+[macro_premarket] dry-run generated 1858 chars; Telegram not sent

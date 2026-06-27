@@ -491,25 +491,44 @@ def _actions_lines(buys, sells):
     return lines
 
 
-def _pending_confirmation_lines():
+def _pending_entry_current_price(ticker, row):
+    row = row or {}
+    for key in ("live_price", "current_price", "price", "last_price"):
+        if key not in row or row.get(key) in (None, ""):
+            continue
+        raw = str(row.get(key))
+        try:
+            val = float(raw)
+        except Exception:
+            val = None
+        if val is not None:
+            return val
+    try:
+        import atlas_portfolio as port
+        return _num(port._price_lookup(ticker))
+    except Exception:
+        return None
+
+
+def _pending_entry_lines():
     rows = atlas_db.get_pending_fill_trades()
     if not rows:
-        return ["", "━━━ 🔔 CONFIRM AT BROKER (0) ━━━", "✅ none"]
-    lines = ["", f"━━━ 🔔 CONFIRM AT BROKER ({len(rows)}) ━━━", ""]
+        return ["", "━━━ ⏳ PENDING ENTRIES (0) ━━━", "✅ none"]
+    lines = ["", f"━━━ ⏳ PENDING ENTRIES ({len(rows)}) ━━━", ""]
     for row in rows:
         ticker = str(row.get("ticker") or "?").upper()
-        entry = _num(row.get("entry_price"))
+        trigger = _num(row.get("entry_price"))
+        current = _pending_entry_current_price(ticker, row)
         stop = _num(row.get("stop_loss"))
         target = _num(row.get("target_price"))
-        shares = int(_num(row.get("quantity")))
         risk_pct = row.get("risk_pct")
         risk_txt = "N/A" if risk_pct in (None, "") else f"{_num(risk_pct):.1f}%"
         label = _ticker_label(ticker, row)
-        lines += [
-            f"⏳ {label} buy {_price(entry)} · stop {_price(stop)} · target {_price(target)} · {risk_txt} risk",
-            f"   {_register_buy_line(ticker, shares, entry)}",
-            "",
-        ]
+        if current is not None and trigger is not None and current <= trigger:
+            status = f"🟢 {label} · trigger {_price(trigger)} · now {_price(current)} · stop {_price(stop)} · target {_price(target)} · {risk_txt} risk — actionable now"
+        else:
+            status = f"⏳ {label} · trigger {_price(trigger)} · now {_price(current)} · stop {_price(stop)} · target {_price(target)} · {risk_txt} risk — wait, buy only if pulls back to {_price(trigger)}"
+        lines += [status, ""]
     return lines
 
 
@@ -625,13 +644,48 @@ def _gates_lines(high):
     return lines
 
 
+def _watch_sort_value(item):
+    if isinstance(item, dict):
+        raw = item.get("pct_over_ema")
+        if raw not in (None, ""):
+            try:
+                return float(raw)
+            except Exception:
+                pass
+        text = f"{item.get('reason', '')} {item.get('signal', '')}"
+    else:
+        text = str(item or "")
+    m = re.search(r"\+([0-9.]+)%", text)
+    return _num(m.group(1), 0.0) if m else 0.0
+
+
 def _watch_lines(summary):
-    watch = []
-    for t in summary.get("watch_2", []) or []:
-        s = str(t).upper()
-        if s and s not in {"SPY", "QQQ", "DIA"}:
-            watch.append(_ticker_label(s))
-    return ["", "👀 Watching: " + (" · ".join(dict.fromkeys(watch)) if watch else "none")]
+    watch_2 = [str(t).upper() for t in (summary.get("watch_2", []) or [])]
+    blocked = {"SPY", "QQQ", "DIA", ""}
+    detail_by_ticker = {}
+    for item in summary.get("high_candidates", []) or []:
+        if not isinstance(item, dict):
+            continue
+        t = str(item.get("ticker") or "").upper()
+        if t and str(item.get("action", "")).upper() == "WATCH":
+            detail_by_ticker[t] = item
+    rows = []
+    seen = set()
+    for t in watch_2 + sorted(detail_by_ticker):
+        if t in blocked or t in seen:
+            continue
+        seen.add(t)
+        item = detail_by_ticker.get(t, {"ticker": t})
+        rows.append((_watch_sort_value(item), _ticker_label(t, item)))
+    rows.sort(key=lambda x: x[0], reverse=True)
+    lines = ["", f"━━━ 👀 WATCHING ({len(rows)}) ━━━"]
+    if not rows:
+        lines.append("none")
+        return lines
+    lines.append("")
+    for i, (_, label) in enumerate(rows, 1):
+        lines.append(f"{i}. {label}")
+    return lines
 
 
 def _news_lines(summary):
@@ -663,7 +717,7 @@ def _build_report(summary):
 
     lines = _header_lines(summary, hold_count)
     lines += _actions_lines(buys, sells)
-    lines += _pending_confirmation_lines()
+    lines += _pending_entry_lines()
     lines += _holding_lines(summary)
     lines += _gap_breakout_lines(summary)
     lines += _intraday_breakout_lines(summary)
@@ -787,13 +841,13 @@ def _run_intraday_locked(now):
         if scan_done.get("done"):
             return
         try:
-            interim = _quick_status_report("full scan still running >60s")
+            interim = _quick_status_report("full scan still running >180s")
             _send_telegram_async(interim, label="atlas_interim_status")
             print("[intraday] interim telegram report queued")
         except Exception as e:
             print(f"[intraday] interim telegram report failed (non-fatal): {e}")
 
-    interim_timer = threading.Timer(60.0, _send_interim_report_if_slow)
+    interim_timer = threading.Timer(180.0, _send_interim_report_if_slow)
     interim_timer.daemon = True
     interim_timer.start()
     try:

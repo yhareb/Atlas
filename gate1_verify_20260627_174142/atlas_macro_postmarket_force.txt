@@ -1,0 +1,22 @@
+=== atlas_macro_postmarket.py --force --dry-run ===
+[macro_postmarket] collection_seconds=9.88 total_build_seconds=13.39
+🧭 ATLAS MACRO POST-MARKET — Jun 27, 2026 · 09:45 AM ET
+
+1. Opening Headline
+US stocks ended mixed as the Dow Jones Industrial Average rose 0.6%, while the S&P 500 fell 2% and the Nasdaq 100 tumbled 4.2%. The divergence highlighted a rotation into defensive sectors amid a tech selloff.
+
+2. What Drove It
+The catalyst was a sharp decline in technology shares, exacerbated by concerns over rising hardware costs and regulatory scrutiny. This overshadowed gains in defensive sectors, as investors sought safety amid uncertainty.
+
+3. Sector Breakdown
+Technology and Communication Services led the declines, with Technology down 5.4% and Communication Services off 3%. Health Care surged 7.3%, leading gains alongside Utilities and Real Estate, as investors rotated into defensives.
+
+4. Bonds, FX, Commodities
+The 10-year yield edged down to 4.37%, while the Dollar Index firmed to 101.37. WTI crude plunged 7.5% to $69.23, pressured by easing supply concerns and demand uncertainties.
+
+5. Sentiment
+The VIX climbed to 18.4, reflecting heightened volatility as market breadth remained mixed. Credit proxies softened slightly, indicating a cautious risk environment without signs of stress.
+
+6. Into Monday
+Traders will focus on a busy economic calendar, including ISM Manufacturing PMI on Wednesday, ADP Employment Change on Thursday, and Nonfarm Payrolls on Friday. Jobless claims and the unemployment rate will also be closely watched for labor market insights.
+[macro_postmarket] dry-run generated 1458 chars; Telegram not sent

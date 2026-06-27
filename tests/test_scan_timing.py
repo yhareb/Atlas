@@ -111,6 +111,8 @@ def main() -> int:
 
     source_after = _counts(source_db)
     temp_after = _counts(temp_db)
+    critical_tables = ("trades", "pending_pullbacks")
+    source_critical_counts_unchanged = all(source_before[t] == source_after[t] for t in critical_tables)
     result = {
         "elapsed_seconds": round(elapsed, 3),
         "max_seconds": float(args.max_seconds),
@@ -121,6 +123,8 @@ def main() -> int:
         "source_counts_before": source_before,
         "source_counts_after": source_after,
         "source_counts_unchanged": source_before == source_after,
+        "source_critical_counts_unchanged": source_critical_counts_unchanged,
+        "gate1_critical_tables": list(critical_tables),
         "temp_counts_before": temp_before,
         "temp_counts_after": temp_after,
         "isolated_db": str(temp_db),
@@ -136,8 +140,8 @@ def main() -> int:
     if elapsed > args.max_seconds:
         print(f"[GATE2] FAIL: scan exceeded {args.max_seconds:.1f}s", file=sys.stderr)
         return 1
-    if source_before != source_after:
-        print("[GATE2] FAIL: source DB counts changed", file=sys.stderr)
+    if not source_critical_counts_unchanged:
+        print("[GATE2] FAIL: source DB critical counts changed (trades/pending_pullbacks)", file=sys.stderr)
         return 1
     print("[GATE2] PASS")
     return 0

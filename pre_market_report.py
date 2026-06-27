@@ -765,6 +765,88 @@ def _overnight_headlines(limit=5):
     return [re.sub(r"^\s*•\s*", "", str(x)).strip() for x in get_benzinga_headlines()[:limit] if str(x).strip()]
 
 
+def _benzinga_catalyst_for_ticker(ticker, hours=24):
+    ticker = (ticker or "").upper()
+    if not ticker or not BENZINGA_API_KEY:
+        return None
+    now_utc = datetime.now(timezone.utc)
+    since_utc = now_utc - timedelta(hours=hours)
+    try:
+        r = _audit_get(
+            "https://api.benzinga.com/api/v2/news",
+            params={
+                "token": BENZINGA_API_KEY,
+                "tickers": ticker,
+                "dateFrom": since_utc.astimezone(ZoneInfo("America/New_York")).date().isoformat(),
+                "dateTo": now_utc.astimezone(ZoneInfo("America/New_York")).date().isoformat(),
+                "pageSize": 5,
+            },
+            timeout=PRE_MARKET_HTTP_TIMEOUT,
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json() or []
+        articles = data if isinstance(data, list) else (data.get("data") or data.get("articles") or [])
+        for item in articles:
+            title = (item.get("title") or item.get("headline") or "").strip()
+            if title:
+                return title
+    except Exception as e:
+        print(f"[pre-market] Benzinga catalyst lookup failed for {ticker}: {e}")
+    return None
+
+
+def _early_movers_candidates(limit=12):
+    """Visibility-only early momentum screen: +10% day gain and RVOL >1.5x."""
+    tickers = [t for t in get_discovery_universe(limit=120) if _is_tradeable_symbol(t)]
+
+    def _scan(ticker):
+        q = _snapshot_quote(ticker)
+        pct = _to_float(q.get("pct"))
+        price = _to_float(q.get("price"))
+        vol = _to_float(q.get("volume"))
+        prev_vol = _to_float(q.get("prev_volume"))
+        rvol = (vol / prev_vol) if vol and prev_vol else None
+        if pct is None or price is None or rvol is None:
+            return None
+        if pct >= 10.0 and rvol > 1.5:
+            return {"ticker": ticker, "pct": pct, "price": price, "rvol": rvol}
+        return None
+
+    rows = []
+    if tickers:
+        with ThreadPoolExecutor(max_workers=min(10, len(tickers))) as pool:
+            for item in pool.map(_scan, tickers):
+                if item:
+                    rows.append(item)
+    rows.sort(key=lambda x: x.get("pct") or 0, reverse=True)
+    rows = rows[:limit]
+
+    def _enrich(row):
+        catalyst = _benzinga_catalyst_for_ticker(row["ticker"])
+        row["catalyst"] = _clean_catalyst_reason(catalyst) if catalyst else "No catalyst found"
+        return row
+
+    if rows:
+        with ThreadPoolExecutor(max_workers=min(6, len(rows))) as pool:
+            rows = list(pool.map(_enrich, rows))
+        rows.sort(key=lambda x: x.get("pct") or 0, reverse=True)
+    return rows
+
+
+def _early_movers_lines(rows):
+    if not rows:
+        return []
+    lines = []
+    for i, row in enumerate(rows, 1):
+        catalyst = row.get("catalyst") or "No catalyst found"
+        prefix = "Catalyst: " if catalyst != "No catalyst found" else ""
+        lines.append(
+            f"{i}. {ticker_label(row['ticker'], row)} {_fmt_pct(row.get('pct'), decimals=0)} · {_fmt_price(row.get('price'))} · RVOL {row.get('rvol'):.1f}x · {prefix}{catalyst}"
+        )
+    return lines
+
+
 def _gapper_candidates(limit=6):
     data = massive_get("/v2/snapshot/locale/us/markets/stocks/gainers") or {}
     start_et, end_et = premarket_news_window()
@@ -919,6 +1001,7 @@ def generate_wavef_pre_market_brief(send=False):
         "macro": get_wavef_macro,
         "overnight_headlines": _overnight_headlines,
         "top_movers": get_top_movers,
+        "early_movers": _early_movers_candidates,
         "gapper_candidates": _gapper_candidates,
         "earnings": get_wavef_earnings,
         "analyst_actions": lambda: get_wavef_analyst_actions(limit=4),
@@ -940,6 +1023,7 @@ def generate_wavef_pre_market_brief(send=False):
     macro = results.get("macro") or []
     headlines = results.get("overnight_headlines") or []
     gainers, losers = results.get("top_movers") or ([], [])
+    early_movers = results.get("early_movers") or []
     gappers = results.get("gapper_candidates") or []
     earnings = results.get("earnings") or []
     analysts = results.get("analyst_actions") or []
@@ -980,6 +1064,11 @@ def generate_wavef_pre_market_brief(send=False):
     if open_positions:
         lines += ["", _section("OPEN POSITIONS")]
         lines.extend(open_positions)
+
+    early_mover_lines = _early_movers_lines(early_movers)
+    if early_mover_lines:
+        lines += ["", _section(f"🔥 EARLY MOVERS ({len(early_mover_lines)})"), "Visibility only — on your radar, not a buy recommendation."]
+        lines.extend(early_mover_lines)
 
     if gap_breakouts:
         lines += ["", _section("GAP-UP BREAKOUTS")]
@@ -1082,8 +1171,17 @@ def generate_pre_market_report(send=True):
     now_et = datetime.now(ZoneInfo("America/New_York"))
     today = current_et_market_date(now_et)
     if today in NYSE_HOLIDAYS_2026 or today.weekday() >= 5: return
-    from atlas_report_handoff import build_atlas_handoff_report
-    message = build_atlas_handoff_report(context="pre_market", report_date=today)
+    message = generate_wavef_pre_market_brief(send=False)
+    early_mover_lines = _early_movers_lines(_early_movers_candidates())
+    if early_mover_lines and "🔥 EARLY MOVERS" not in message:
+        message = "\n\n".join([
+            message,
+            "\n".join([
+                _section(f"🔥 EARLY MOVERS ({len(early_mover_lines)})"),
+                "Visibility only — on your radar, not a buy recommendation.",
+                *early_mover_lines,
+            ]),
+        ])
     _write_premarket_run_marker(today, sent=bool(send))
     if send:
         send_telegram(message)
@@ -1121,8 +1219,27 @@ def _launchd_market_open_window(now_et=None):
     return time(9, 15) <= t < time(9, 20)
 
 
-if __name__ == "__main__":
-    if os.environ.get("ATLAS_PREMARKET_LAUNCHD_GATED") == "1" and not _launchd_market_open_window():
+def main(argv=None):
+    import argparse
+    parser = argparse.ArgumentParser(description="Atlas pre-market report")
+    parser.add_argument("--dry-run", action="store_true", help="Build and print report without sending Telegram")
+    parser.add_argument("--force", action="store_true", help="Bypass launchd market-open gate")
+    args = parser.parse_args(argv)
+
+    gated = os.environ.get("ATLAS_PREMARKET_LAUNCHD_GATED") == "1"
+    if gated and not args.force and not args.dry_run and not _launchd_market_open_window():
         print("[pre_market] launchd gate closed; outside 09:15-09:20 ET trading window")
-    else:
-        generate_pre_market_report()
+        return 0
+
+    message = generate_pre_market_report(send=not args.dry_run)
+    if not message:
+        print("[pre_market] no report generated")
+        return 1
+    if args.dry_run:
+        print(message)
+        print(f"[pre_market] dry-run generated {len(message)} chars; Telegram not sent")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
