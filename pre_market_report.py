@@ -982,7 +982,15 @@ def _first_compact(items, fallback="none"):
     return " | ".join(cleaned[:3]) if cleaned else fallback
 
 
-def generate_wavef_pre_market_brief(send=False):
+def _current_premarket_day(now_et=None):
+    now_et = now_et or datetime.now(ZoneInfo("America/New_York"))
+    day = now_et.date()
+    if day in NYSE_HOLIDAYS_2026 or day.weekday() >= 5:
+        return None
+    return day
+
+
+def generate_wavef_pre_market_brief(send=False, market_day=None):
     _t0 = _audit_time.perf_counter()
 
     def _timed(label, fn):
@@ -992,7 +1000,10 @@ def generate_wavef_pre_market_brief(send=False):
         finally:
             print(f"[pre-market timing] {label}: {_audit_time.perf_counter() - st:.2f}s")
 
-    market_day = current_et_market_date()
+    market_day = market_day or _current_premarket_day()
+    if market_day is None:
+        print("[pre-market] no report generated; non-trading ET calendar day")
+        return None
     date_label = market_day.strftime("%B %-d, %Y")
     tasks = {
         "spy_snapshot": lambda: _snapshot_quote("SPY"),
@@ -1169,9 +1180,13 @@ def _write_premarket_run_marker(market_date, sent=True):
 
 def generate_pre_market_report(send=True):
     now_et = datetime.now(ZoneInfo("America/New_York"))
-    today = current_et_market_date(now_et)
-    if today in NYSE_HOLIDAYS_2026 or today.weekday() >= 5: return
-    message = generate_wavef_pre_market_brief(send=False)
+    today = _current_premarket_day(now_et)
+    if today is None:
+        print("[pre_market] no report generated; non-trading ET calendar day")
+        return None
+    message = generate_wavef_pre_market_brief(send=False, market_day=today)
+    if not message:
+        return None
     early_mover_lines = _early_movers_lines(_early_movers_candidates())
     if early_mover_lines and "🔥 EARLY MOVERS" not in message:
         message = "\n\n".join([
@@ -1212,8 +1227,7 @@ def generate_pre_market_report(send=True):
 def _launchd_market_open_window(now_et=None):
     """Optional launchd guard: allow the market-open pre-market send once near 09:15 ET."""
     now_et = now_et or datetime.now(ZoneInfo("America/New_York"))
-    today = current_et_market_date(now_et)
-    if today in NYSE_HOLIDAYS_2026 or today.weekday() >= 5:
+    if _current_premarket_day(now_et) is None:
         return False
     t = now_et.time().replace(tzinfo=None)
     return time(9, 15) <= t < time(9, 20)

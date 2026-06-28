@@ -294,6 +294,15 @@ def _backfill_positions_into_trades(conn):
 # --------------------------------------------------------------------------- #
 # Signals (unchanged API)
 # --------------------------------------------------------------------------- #
+def get_max_signal_id():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT MAX(id) FROM signals")
+    row = cursor.fetchone()
+    conn.close()
+    return int(row[0] or 0)
+
+
 def log_signal(ticker, signal, score, rvol, entry_price, stop_loss, max_loss_per_share, atr, trend_stack, relative_strength, volume, catalyst, warnings):
     conn = get_connection()
     cursor = conn.cursor()

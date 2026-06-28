@@ -1,4 +1,4 @@
-import os, sys, datetime, contextlib, io, re, time, errno, signal, threading, subprocess
+import os, sys, datetime, contextlib, io, re, time, errno, signal, threading, subprocess, sqlite3, json
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -15,9 +15,20 @@ try:
 except Exception:
     pass
 
-SCRIPTS_DIR = "/Users/yasser/scripts"
+SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 import atlas_db
+if not hasattr(atlas_db, "get_max_signal_id"):
+    def _get_max_signal_id_fallback():
+        conn = atlas_db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(id) FROM signals")
+        row = cursor.fetchone()
+        conn.close()
+        return int(row[0] or 0)
+    atlas_db.get_max_signal_id = _get_max_signal_id_fallback
+if os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB"):
+    atlas_db.DB_PATH = os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB")
 from atlas_symbol_meta import ticker_label
 
 _ENV_PATH = os.path.expanduser("~/.hermes/profiles/atlas/.env")
@@ -441,31 +452,114 @@ def _header_lines(summary, hold_count):
     ]
 
 
-def _actions_lines(buys, sells):
-    buys = _unique(buys)
+def _current_cycle_buy_signals(before_id=None, minutes=15):
+    """Return BUY/BUY Small signal rows written after the scan high-water mark."""
+    db_path = getattr(atlas_db, "DB_PATH", "/Users/yasser/scripts/atlas.db")
+    try:
+        con = sqlite3.connect(db_path)
+        con.row_factory = sqlite3.Row
+        if before_id:
+            where_clause = """
+            WHERE id > ?
+              AND signal LIKE '%BUY%'
+              AND (
+                COALESCE(score, '') LIKE '4/%'
+                OR COALESCE(score, '') LIKE '3/%'
+              )
+            """
+            params = (int(before_id),)
+        else:
+            where_clause = """
+            WHERE timestamp >= datetime('now', ?)
+              AND signal LIKE '%BUY%'
+              AND (
+                COALESCE(score, '') LIKE '4/%'
+                OR COALESCE(score, '') LIKE '3/%'
+              )
+            """
+            params = (f"-{int(minutes)} minutes",)
+        rows = con.execute(
+            f"""
+            SELECT ticker, score, signal, entry_price, stop_loss, warnings
+            FROM signals
+            {where_clause}
+            ORDER BY
+              CASE
+                WHEN CAST(substr(COALESCE(score, '0/4'), 1, instr(COALESCE(score, '0/4'), '/') - 1) AS INTEGER) >= 4 THEN 0
+                WHEN CAST(substr(COALESCE(score, '0/4'), 1, instr(COALESCE(score, '0/4'), '/') - 1) AS INTEGER) = 3 THEN 1
+                ELSE 2
+              END,
+              ticker
+            """,
+            params,
+        ).fetchall()
+        con.close()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[intraday] current-cycle BUY signal query failed: {e}", flush=True)
+        return []
+
+
+def _pending_target_for_signal(ticker, entry):
+    """Pull target from pending state when available; otherwise use 25% fallback."""
+    ticker = str(ticker or "").upper()
+    entry = _num(entry)
+    fallback = round(entry * 1.25, 2) if entry else None
+    try:
+        row = atlas_db.get_pending_pullback(ticker)
+    except Exception:
+        row = None
+    if row:
+        for key in ("target", "target_price"):
+            if row.get(key) not in (None, ""):
+                return _num(row.get(key), fallback or 0.0)
+        raw = row.get("signal_json")
+        if raw:
+            try:
+                data = json.loads(raw) if isinstance(raw, str) else raw
+                for key in ("target", "target_price"):
+                    if isinstance(data, dict) and data.get(key) not in (None, ""):
+                        return _num(data.get(key), fallback or 0.0)
+                risk_card = data.get("risk_card") if isinstance(data, dict) else None
+                if isinstance(risk_card, dict):
+                    for key in ("target", "target_price"):
+                        if risk_card.get(key) not in (None, ""):
+                            return _num(risk_card.get(key), fallback or 0.0)
+            except Exception:
+                pass
+    return fallback
+
+
+def _risk_label_for_signal(row, summary):
+    pillars = _pillar_num(row.get("score"))
+    detail = str((summary or {}).get("entry_regime_detail") or (summary or {}).get("regime_detail") or "")
+    macro = (summary or {}).get("macro_context") or {}
+    cautious = (
+        "WEAK" in detail.upper()
+        or "UNKNOWN" in detail.upper()
+        or "UNAVAILABLE" in detail.upper()
+        or bool(macro.get("cautious") if isinstance(macro, dict) else False)
+    )
+    return "0.5% risk" if pillars == 3 or cautious else "1% risk"
+
+
+def _actions_lines(buys, sells, summary=None, before_scan_signal_id=None):
+    signal_buys = _unique(_current_cycle_buy_signals(before_scan_signal_id), key="ticker")
     sells = _unique(sells)
     lines = ["", "━━━ ACTIONS ━━━"]
-    if buys:
-        lines.append(f"🛒 BUY ({len(buys)}) — engine wants in")
-        for b in buys:
-            ticker = str(b.get("ticker") or b.get("symbol") or "?").upper()
-            entry = _num(b.get("entry"))
-            stop = _num(b.get("stop"))
-            target = _num(b.get("target"))
-            shares = int(_num(b.get("shares")))
-            cost = _num(b.get("cost"), entry * shares)
-            risk = b.get("risk_pct")
-            win_pct = ((target - entry) / entry * 100) if entry else 0
-            loss_pct = ((entry - stop) / entry * 100) if entry else 0
-            risk_txt = "N/A" if risk in (None, "") else f"{_num(risk):.1f}%"
-            live_price = b.get("live_price") or b.get("current_price") or b.get("price") or entry
+    if signal_buys:
+        lines.append(f"🛒 BUY ({len(signal_buys)})")
+        for b in signal_buys:
+            ticker = str(b.get("ticker") or "?").upper()
+            entry = _num(b.get("entry_price"))
+            stop = _num(b.get("stop_loss"))
+            target = _pending_target_for_signal(ticker, entry)
+            score = str(b.get("score") or "")
             label = _ticker_label(ticker, b)
-            lines += [
-                "",
-                f"🟢 {label} Buy at {_price(entry)} - currently trading at {_price(live_price)} · stop {_price(stop)} · target {_price(target)} · {risk_txt} risk",
-                f"   ~{_money(cost)} · win +{win_pct:.0f}% / loss −{loss_pct:.0f}%",
-                f"   {_register_buy_line(ticker, shares, entry)}",
-            ]
+            risk_txt = _risk_label_for_signal(b, summary or {})
+            lines.append(
+                f"   • {label} — {_whole(entry)} · stop {_whole(stop)} · target {_whole(target)} · {score} · {risk_txt}"
+            )
     else:
         lines.append("🛒 BUY: none this cycle")
     if sells:
@@ -715,8 +809,9 @@ def _build_report(summary):
     waiting_count = len(_unique([h for h in high if str(h.get("action", "")).upper() == "WAIT" and "PULLBACK" in str(h.get("reason", "")).upper()]))
     pending_count = len(atlas_db.get_pending_fill_trades())
 
+    before_scan_signal_id = summary.get("_before_scan_signal_id")
     lines = _header_lines(summary, hold_count)
-    lines += _actions_lines(buys, sells)
+    lines += _actions_lines(buys, sells, summary, before_scan_signal_id)
     lines += _pending_entry_lines()
     lines += _holding_lines(summary)
     lines += _gap_breakout_lines(summary)
@@ -776,6 +871,8 @@ def _send_telegram_async(message, label="atlas"):
 
 
 def run_intraday():
+    cli_force = "--force" in sys.argv
+    cli_dry_run = "--dry-run" in sys.argv
     now = datetime.datetime.now()
     print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Atlas intraday loop starting...")
 
@@ -783,28 +880,37 @@ def run_intraday():
     if lock_fd is None:
         print(f"[intraday] overlap guard: another atlas_intraday run is still active ({LOCK_PATH}); sending status and exiting cleanly.")
         try:
-            _send_telegram_async(_quick_status_report("previous scan still running"), label="atlas_overlap_status")
-            print("[intraday] overlap status telegram queued")
+            if not cli_dry_run:
+                _send_telegram_async(_quick_status_report("previous scan still running"), label="atlas_overlap_status")
+                print("[intraday] overlap status telegram queued")
+            else:
+                print("[intraday] dry-run: overlap status telegram suppressed")
         except Exception as e:
             print(f"[intraday] overlap status telegram failed (non-fatal): {e}")
         return {"skipped": True, "reason": "previous intraday run still active"}
     try:
         signal.alarm(MAX_INTRADAY_RUNTIME_SECONDS)
-        return _run_intraday_locked(now)
+        return _run_intraday_locked(now, force=cli_force, dry_run=cli_dry_run)
     finally:
         signal.alarm(0)
         _release_run_lock(lock_fd)
 
 
-def _run_intraday_locked(now):
+def _run_intraday_locked(now, force=False, dry_run=False):
     ok, gate_detail = is_market_hours()
-    if not ok:
+    if not ok and not force:
         print(f"[intraday] market-hours gate: {gate_detail}; exiting cleanly with no scan/trade/Telegram.")
         return {"skipped": True, "reason": gate_detail}
-    print(f"[intraday] market-hours gate: {gate_detail}")
+    if not ok and force:
+        print(f"[intraday] market-hours gate bypassed by --force: {gate_detail}")
+    else:
+        print(f"[intraday] market-hours gate: {gate_detail}")
     try:
-        _send_telegram_async(_quick_status_report("scan starting"), label="atlas_start_status")
-        print("[intraday] start status telegram subprocess queued")
+        if not dry_run:
+            _send_telegram_async(_quick_status_report("scan starting"), label="atlas_start_status")
+            print("[intraday] start status telegram subprocess queued")
+        else:
+            print("[intraday] dry-run: start status telegram suppressed")
     except Exception as e:
         print(f"[intraday] start status telegram failed (non-fatal): {e}")
 
@@ -818,6 +924,21 @@ def _run_intraday_locked(now):
             print(f"[intraday] stream unavailable; polling continues: {e}")
 
     import atlas_manage
+    staging_db = os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB")
+    if staging_db:
+        try:
+            atlas_db.DB_PATH = staging_db
+            if hasattr(atlas_manage, "atlas_db"):
+                atlas_manage.atlas_db.DB_PATH = staging_db
+            if hasattr(atlas_manage, "acct"):
+                atlas_manage.acct.DB_PATH = staging_db
+            if hasattr(atlas_manage, "port"):
+                if hasattr(atlas_manage.port, "atlas_db"):
+                    atlas_manage.port.atlas_db.DB_PATH = staging_db
+                if hasattr(atlas_manage.port, "acct"):
+                    atlas_manage.port.acct.DB_PATH = staging_db
+        except Exception as e:
+            print(f"[intraday] staging DB override warning: {e}")
     # Report-first safety: the full intraday Telegram report must be generated from
     # the base scan before sector-sweep peer enrichment can consume the launchd
     # window. This does not modify sector-sweep logic; it disables the sweep trigger
@@ -832,7 +953,7 @@ def _run_intraday_locked(now):
                 print("[intraday] report-first mode: sector sweep peer enrichment deferred until after Telegram report")
         except Exception as e:
             print(f"[intraday] report-first sector-sweep deferral unavailable (non-fatal): {e}")
-    args = SimpleNamespace(tickers=[], file=None, live=True, exits_only=False, json=False)
+    args = SimpleNamespace(tickers=[], file=None, live=not dry_run, exits_only=False, json=False)
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
     scan_done = {"done": False}
@@ -841,11 +962,21 @@ def _run_intraday_locked(now):
         if scan_done.get("done"):
             return
         try:
-            interim = _quick_status_report("full scan still running >180s")
-            _send_telegram_async(interim, label="atlas_interim_status")
-            print("[intraday] interim telegram report queued")
+            if not dry_run:
+                interim = _quick_status_report("full scan still running >180s")
+                _send_telegram_async(interim, label="atlas_interim_status")
+                print("[intraday] interim telegram report queued")
+            else:
+                print("[intraday] dry-run: interim telegram suppressed")
         except Exception as e:
             print(f"[intraday] interim telegram report failed (non-fatal): {e}")
+
+    try:
+        _before_scan_signal_id = atlas_db.get_max_signal_id()
+        print(f"[intraday] signal high-water before scan id={_before_scan_signal_id}")
+    except Exception as e:
+        _before_scan_signal_id = 0
+        print(f"[intraday] signal high-water capture failed; falling back to 15m window: {e}")
 
     interim_timer = threading.Timer(180.0, _send_interim_report_if_slow)
     interim_timer.daemon = True
@@ -870,6 +1001,7 @@ def _run_intraday_locked(now):
     if not isinstance(summary, dict):
         print("WARNING: Could not get structured intraday summary; not asserting an action.")
         summary = getattr(atlas_manage, "LAST_RUN_SUMMARY", {}) or {}
+    summary["_before_scan_signal_id"] = _before_scan_signal_id
     if stream_status is not None:
         summary["stream_status"] = stream_status
 
@@ -886,8 +1018,11 @@ def _run_intraday_locked(now):
     print("[intraday] telegram report body end")
 
     try:
-        ok = send_telegram(report_msg)
-        print(f"[intraday] telegram report success={ok}")
+        if not dry_run:
+            ok = send_telegram(report_msg)
+            print(f"[intraday] telegram report success={ok}")
+        else:
+            print("[intraday] dry-run: final telegram send suppressed")
     except Exception as e:
         print(f"[intraday] telegram report failed (non-fatal): {e}")
 
