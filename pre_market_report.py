@@ -3,8 +3,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from atlas_notify import send_telegram as _send_telegram
 from datetime import datetime, timedelta, date, time, timezone
 from zoneinfo import ZoneInfo
-sys.path.insert(0, "/Users/yasser/scripts")
+SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPTS_DIR)
 import atlas_db
+if os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB"):
+    atlas_db.DB_PATH = os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB")
 from atlas_symbol_meta import normalize_price, normalize_snapshot_fields, ticker_label
 from atlas_time import current_et_market_date, current_et_market_date_str, previous_et_trading_date_str
 from atlas_engine import _llm_judge_catalyst
@@ -834,16 +837,35 @@ def _early_movers_candidates(limit=12):
     return rows
 
 
+def _has_display_catalyst(row):
+    catalyst = str((row or {}).get("catalyst") or "").strip()
+    return bool(catalyst) and catalyst.lower() != "no catalyst found"
+
+
+def _append_spaced(lines, items):
+    for item in items:
+        if item is None:
+            continue
+        text = str(item).rstrip()
+        if not text:
+            continue
+        lines.append(text)
+        lines.append("")
+
+
 def _early_movers_lines(rows):
     if not rows:
         return []
+    display_rows = [row for row in rows if _has_display_catalyst(row)]
+    if not display_rows:
+        return ["No catalyst-confirmed movers pre-market"]
     lines = []
-    for i, row in enumerate(rows, 1):
-        catalyst = row.get("catalyst") or "No catalyst found"
-        prefix = "Catalyst: " if catalyst != "No catalyst found" else ""
+    for i, row in enumerate(display_rows, 1):
+        catalyst = str(row.get("catalyst") or "").strip()
         lines.append(
-            f"{i}. {ticker_label(row['ticker'], row)} {_fmt_pct(row.get('pct'), decimals=0)} · {_fmt_price(row.get('price'))} · RVOL {row.get('rvol'):.1f}x · {prefix}{catalyst}"
+            f"{i}. {ticker_label(row['ticker'], row)} {_fmt_pct(row.get('pct'), decimals=0)} · {_fmt_price(row.get('price'))} · RVOL {row.get('rvol'):.1f}x · Catalyst: {catalyst}"
         )
+        lines.append("")
     return lines
 
 
@@ -1070,35 +1092,36 @@ def generate_wavef_pre_market_brief(send=False, market_day=None):
     else:
         lines.append("No overnight Benzinga headlines returned")
     lines.append("Scheduled Events (4 AM–4 PM ET)")
-    lines.extend(macro[:8] if macro else ["No scheduled macro events returned"])
+    _append_spaced(lines, macro[:8] if macro else ["No scheduled macro events returned"])
 
     if open_positions:
         lines += ["", _section("OPEN POSITIONS")]
-        lines.extend(open_positions)
+        _append_spaced(lines, open_positions)
 
     early_mover_lines = _early_movers_lines(early_movers)
     if early_mover_lines:
-        lines += ["", _section(f"🔥 EARLY MOVERS ({len(early_mover_lines)})"), "Visibility only — on your radar, not a buy recommendation."]
-        lines.extend(early_mover_lines)
+        early_mover_count = sum(1 for x in early_mover_lines if str(x).strip())
+        lines += ["", _section(f"🔥 EARLY MOVERS ({early_mover_count})"), "Visibility only — on your radar, not a buy recommendation."]
+        _append_spaced(lines, early_mover_lines)
 
     if gap_breakouts:
         lines += ["", _section("GAP-UP BREAKOUTS")]
-        lines.extend(gap_breakouts)
+        _append_spaced(lines, gap_breakouts)
 
     if pullbacks:
         lines += ["", _section("PULLBACK CANDIDATES")]
-        lines.extend(pullbacks)
+        _append_spaced(lines, pullbacks)
 
     if catalyst_overrides:
         lines += ["", _section("CATALYST OVERRIDES — HALF SIZE")]
-        lines.extend(catalyst_overrides)
+        _append_spaced(lines, catalyst_overrides)
 
     if too_hot:
         lines += ["", _section("TOO HOT SKIP"), " | ".join(too_hot[:12])]
 
     if sectors:
         lines += ["", _section("SECTOR PULSE")]
-        lines.extend(sectors)
+        _append_spaced(lines, sectors)
 
     scouting = []
     if earnings:
@@ -1112,11 +1135,11 @@ def generate_wavef_pre_market_brief(send=False, market_day=None):
         scouting.append("FDA calendar: " + " | ".join(fda_bits))
     if scouting:
         lines += ["", _section("SCOUTING")]
-        lines.extend(scouting)
+        _append_spaced(lines, scouting)
 
     msg = "\n".join(lines)
-    if send:
-        send_telegram(msg)
+    # Telegram delivery is centralized in generate_pre_market_report().
+    # This renderer must only render, otherwise a single pre-market session can send twice.
     print(f"[pre-market timing] total: {_audit_time.perf_counter() - _t0:.2f}s")
     return msg
 

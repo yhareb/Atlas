@@ -292,6 +292,21 @@ def scan_gaps(day, universe_limit=100, workers=MAX_WORKERS):
     return tickers, rows, flagged, failures, elapsed
 
 
+def _space_report_items(message: str) -> str:
+    out = []
+    prev_item = False
+    for line in str(message).splitlines():
+        stripped = line.strip()
+        is_item = bool(re.match(r"^(?:\d+\.|[-•]|[🟢🟡🔴🔹🔸🚀📈🎣🔥])\s+", stripped))
+        if is_item and prev_item and out and out[-1].strip():
+            out.append("")
+        out.append(line)
+        prev_item = is_item
+        if not stripped:
+            prev_item = False
+    return "\n".join(out)
+
+
 def render_report(flagged, now_et):
     stamp = now_et.strftime("%-I:%M %p ET") if sys.platform != "win32" else now_et.strftime("%I:%M %p ET").lstrip("0")
     if not flagged:
@@ -316,7 +331,7 @@ def render_report(flagged, now_et):
             lines.append(f"{i}. {r['ticker']} {r['gap_pct']:.1f}% · pre-mkt ${r['premarket']:.2f} · prior close ${r['prior_close']:.2f} · Catalyst: {r['catalyst']}" if r.get("catalyst") else f"{i}. {r['ticker']} {r['gap_pct']:.1f}% · pre-mkt ${r['premarket']:.2f} · prior close ${r['prior_close']:.2f} · No catalyst found")
     else:
         lines.append("None")
-    return "\n".join(lines)
+    return _space_report_items("\n".join(lines))
 
 
 def timing_gate(now_et):

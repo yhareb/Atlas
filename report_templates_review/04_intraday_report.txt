@@ -1,0 +1,148 @@
+🦅 ATLAS INTRADAY — 5:17 PM ET
+📡 🟢 RISK-ON · SPY $728.99 · ⚠️ Fed/CPI day — cautious · 🧠 CAUTION: broad market/semis pressure
+💰 Equity $29,126 · Cash $22,473 · 3 positions
+
+━━━ ACTIONS ━━━
+🛒 BUY (29)
+   • AAL (American Airlines Group) — $18 · stop $17 · target $22 · 4/4 Pillars · 0.5% risk
+   • ELVN (Enliven Therapeutics) — $50 · stop $44 · target $63 · 4/4 Pillars · 0.5% risk
+   • JNJ (Johnson & Johnson) — $255 · stop $246 · target $318 · 4/4 Pillars · 0.5% risk
+   • MRK (Merck) — $129 · stop $124 · target $161 · 4/4 Pillars · 0.5% risk
+   • RL (Ralph Lauren) — $411 · stop $391 · target $514 · 4/4 Pillars · 0.5% risk
+   • SLS (SELLAS Life Sciences Group) — $12 · stop $11 · target $15 · 4/4 Pillars · 0.5% risk
+   • ABBV (AbbVie) — $253 · stop $243 · target $317 · 3/4 Pillars · 0.5% risk
+   • ABSI (Absci) — $11 · stop $9 · target $14 · 3/4 Pillars · 0.5% risk
+   • ALGM (Allegro MicroSystems) — $58 · stop $51 · target $72 · 3/4 Pillars · 0.5% risk
+   • AMAT (Applied Materials) — $627 · stop $558 · target $784 · 3/4 Pillars · 0.5% risk
+   • APGE (Apogee Therapeutics) — $133 · stop $123 · target $166 · 3/4 Pillars · 0.5% risk
+   • BAC (Bank of America) — $58 · stop $56 · target $72 · 3/4 Pillars · 0.5% risk
+   • BLZE (Backblaze) — $15 · stop $13 · target $18 · 3/4 Pillars · 0.5% risk
+   • CAT (Caterpillar) — $997 · stop $934 · target $1,247 · 3/4 Pillars · 0.5% risk
+   • CGEM (Cullinan Therapeutics) — $18 · stop $16 · target $23 · 3/4 Pillars · 0.5% risk
+   • CSCO (Cisco Systems) — $114 · stop $108 · target $142 · 3/4 Pillars · 0.5% risk
+   • CWAN (Clearwater Analytics) — $25 · stop $24 · target $31 · 3/4 Pillars · 0.5% risk
+   • EWTX (Edgewise Therapeutics) — $41 · stop $37 · target $52 · 3/4 Pillars · 0.5% risk
+   • FCEL (FuelCell Energy Inc NEW) — $24 · stop $19 · target $30 · 3/4 Pillars · 0.5% risk
+   • HON (Honeywell International) — $232 · stop $221 · target $290 · 3/4 Pillars · 0.5% risk
+   • JPM (JPMorgan Chase) — $329 · stop $317 · target $411 · 3/4 Pillars · 0.5% risk
+   • KLIC (Kulicke & Soffa Industries) — $125 · stop $112 · target $157 · 3/4 Pillars · 0.5% risk
+   • KO (Coca-Cola) — $83 · stop $80 · target $103 · 3/4 Pillars · 0.5% risk
+   • MKSI (Mks) — $389 · stop $349 · target $486 · 3/4 Pillars · 0.5% risk
+   • MSM (MSC Industrial Direct) — $118 · stop $114 · target $148 · 3/4 Pillars · 0.5% risk
+   • SPCX (SpaceX) — $153 · stop $116 · target $192 · 3/4 Pillars · 0.5% risk
+   • SYNA (Synaptics) — $121 · stop $106 · target $151 · 3/4 Pillars · 0.5% risk
+   • TGT (Target) — $140 · stop $134 · target $175 · 3/4 Pillars · 0.5% risk
+   • UNF (Unifirst) — $266 · stop $257 · target $333 · 3/4 Pillars · 0.5% risk
+💰 SELL: none — holding all
+
+━━━ ⏳ PENDING ENTRIES (0) ━━━
+✅ none
+
+━━━ 💼 HOLDING (3) ━━━
+
+🔴 SYNA (Synaptics) ~$845  $126.44 → $120.70  −5% (−$40)
+   🛑 $113.35  🎯 $156.61
+
+🔴 INTC (Intel) ~$893  $129.78 → $127.62  −2% (−$15)
+   🛑 $113.02  🎯 $162.25
+
+🟢 LRCX (Lam Research) ~$4,915  $368.39 → $378.06  +3% (+$126)
+   🛑 $368.40  🎯 $446.95
+
+━━━ 🚀 GAP-UP BREAKOUTS (0) ━━━
+
+✅ none
+
+━━━ 📈 INTRADAY BREAKOUTS (0) ━━━
+
+✅ none
+
+━━━ 🎣 WAITING FOR DIP (20) ━━━
+
+🔸 MU (Micron Technology) buy $105.80 · now $113.35 (+4%)
+   3/4 · ✅ fundamentals 56% · 📉 RSI 59 · 📈 MACD+ · ⚠️ momentum weak
+
+🔸 CGEM (Cullinan Therapeutics) buy $15.20 · now $18.04 (+9%)
+   3/4 · ⚠️ weak/no earnings · 📉 RSI 67 · 📈 MACD+ · 🟢 +0.7
+
+🔸 CAT (Caterpillar) buy $961.93 · now $999.81 (+2%)
+   3/4 · ✅ fundamentals 13% · 📉 RSI 63 · 📈 MACD+ · ⚠️ momentum weak · 🟢 +0.8
+
+🔸 ELVN (Enliven Therapeutics) buy $44.79 · now $50.00 (+8%)
+   3/4 · ⚠️ weak/no earnings · 📉 RSI 67 · 📈 MACD+ · 🟢 +1.0
+
+🔸 EWTX (Edgewise Therapeutics) buy $36.84 · now $41.46 (+8%)
+   3/4 · ⚠️ weak/no earnings · 📉 RSI 65 · 📈 MACD+ · 🟢 +0.2
+
+🔸 AAL (American Airlines Group) buy $15.79 · now $17.85 (+9%)
+   3/4 · fundamentals 0% · 📉 RSI 76 · 📈 MACD+ · ⚠️ momentum weak · 🔴 -0.0
+
+🔸 SLDB (Solid Biosciences) buy $8.01 · now $9.29 (+11%)
+   3/4 · ⚠️ weak/no earnings · 📉 RSI 70 · 📈 MACD+ · ⚠️ momentum weak · 🟢 +0.0
+
+🔸 JNJ (Johnson & Johnson) buy $238.39 · now $254.61 (+6%)
+   3/4 · ✅ fundamentals · 📉 RSI 65 · 📈 MACD+ · 🟢 +1.0
+
+🔸 AMAT (Applied Materials) buy $587.24 · now $627.25 (+5%)
+   3/4 · ✅ fundamentals 29% · 📉 RSI 69 · 📈 MACD+ · ⚠️ momentum weak · 🟢 +0.9
+
+🔸 BAC (Bank of America) buy $57.02 · now $57.93 (+2%)
+   3/4 · ✅ fundamentals 27% · 📉 RSI 75 · 📈 MACD+ · ⚠️ momentum weak · 🟢 +0.9
+
+🔸 RL (Ralph Lauren) buy $407.11 · now $411.16 (+1%)
+   3/4 · ✅ fundamentals 12% · 📉 RSI 65 · 📈 MACD+ · ⚠️ momentum weak · 🟢 +1.0
+
+🔸 CWAN (Clearwater Analytics) buy $24.54 · now $24.55 (+0%)
+   3/4 · ⚠️ weak/no earnings · 📉 RSI 68 · 📈 MACD+
+
+🔸 MRK (Merck) buy $119.39 · now $127.53 (+6%)
+   3/4 · ✅ fundamentals 14% · 📉 RSI 64 · 📈 MACD+ · 🟢 +0.5
+
+🔸 GLW (Corning) buy $199.06 · now $220.28 (+9%)
+   3/4 · ✅ fundamentals 12% · 📉 RSI 64 · 📈 MACD+ · 🟢 +0.9
+
+🔸 MKSI (Mks) buy $381.34 · now $388.61 (+2%)
+   4/4 · ✅ fundamentals · 📉 RSI 67 · 📈 MACD+ · 🟢 +1.0
+
+🔸 ALGM (Allegro MicroSystems) buy $55.54 · now $56.82 (+2%)
+   3/4 · ⚠️ weak/no earnings · 📉 RSI 63 · 📈 MACD+ · 🟢 +1.0
+
+🔸 KLIC (Kulicke & Soffa Industries) buy $120.68 · now $121.01 (+0%)
+   4/4 · ✅ fundamentals · 📉 RSI 74 · 📈 MACD+ · ⚠️ momentum weak · 🟢 +1.0
+
+🔸 TGT (Target) buy $135.72 · now $140.21 (+4%)
+   3/4 · ✅ fundamentals 3% · 📉 RSI 66 · 📈 MACD+ · 🟢 +1.0
+
+🔸 KO (Coca-Cola) buy $81.19 · now $82.43 (+2%)
+   3/4 · ✅ fundamentals 27% · 📉 RSI 61 · 📈 MACD+ · 🟢 +0.8
+
+🔸 APGE (Apogee Therapeutics) buy $116.41 · now $132.55 (+14%)
+   3/4 · ⚠️ weak/no earnings · 📉 RSI 81 · 📈 MACD+ · ⚠️ momentum weak · 🟢 +1.0
+
+
+━━━ 🚦 TOO HOT (3) ━━━
+
+1. BLZE (Backblaze) +35% over EMA
+
+2. SLS (SELLAS Life Sciences Group) +30% over EMA
+
+3. ABSI (Absci) +26% over EMA
+
+
+━━━ 👀 WATCHING (15) ━━━
+
+1. ARM (Arm Holdings)
+2. ATAI (AtaiBeckley)
+3. CDE (Coeur Mining)
+4. DFTX (Definium Therapeutics)
+5. FDS (Factset Research Systems)
+6. GE (GE Aerospace)
+7. GENI (Genius Sports)
+8. HELP (Cybin)
+9. INTC (Intel)
+10. KEEL (Keel Infrastructure)
+11. LRCX (Lam Research)
+12. ONDS (Ondas)
+13. SDOT (Sadot Group)
+14. UNH (UnitedHealth Group)
+15. WMT (Walmart)

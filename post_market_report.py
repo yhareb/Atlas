@@ -16,7 +16,8 @@ from atlas_notify import send_telegram as _send_telegram
 from datetime import datetime, timedelta, date, time, timezone
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, "/Users/yasser/scripts")
+SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPTS_DIR)
 import atlas_db
 import atlas_portfolio as port
 from atlas_symbol_meta import normalize_snapshot_fields, ticker_label
@@ -91,6 +92,21 @@ NYSE_HOLIDAYS_2026 = {
     date(2026, 7, 3), date(2026, 9, 7), date(2026, 11, 26),
     date(2026, 11, 27), date(2026, 12, 25),
 }
+
+
+def _space_report_items(message: str) -> str:
+    out = []
+    prev_item = False
+    for line in str(message).splitlines():
+        stripped = line.strip()
+        is_item = bool(re.match(r"^(?:\d+\.|[-•]|[🟢🟡🔴🔹🔸🚀📈🎣🔥])\s+", stripped))
+        if is_item and prev_item and out and out[-1].strip():
+            out.append("")
+        out.append(line)
+        prev_item = is_item
+        if not stripped:
+            prev_item = False
+    return "\n".join(out)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -583,7 +599,7 @@ def generate_post_market_report(send=True, market_date=None, now_et=None):
     if today in NYSE_HOLIDAYS_2026 or today.weekday() >= 5:
         return  # Silent on holidays and weekends
     from atlas_report_handoff import build_atlas_handoff_report
-    message = build_atlas_handoff_report(context="post_market", report_date=today)
+    message = _space_report_items(build_atlas_handoff_report(context="post_market", report_date=today))
     if send:
         send_telegram(message)
     return message
@@ -689,7 +705,7 @@ def generate_post_market_report(send=True, market_date=None, now_et=None):
     lines.append("   • 🌙 Market closed. Handoff written. See you tomorrow, Prof.")
     lines.append("─────────────────────────────────────────")
 
-    message = "\n".join(lines)
+    message = _space_report_items("\n".join(lines))
     if send:
         send_telegram(message)
     return message

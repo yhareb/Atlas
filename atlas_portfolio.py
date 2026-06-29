@@ -769,19 +769,21 @@ def evaluate_exit(lot, dry_run=True, regime=None):
     gain_R = (last - entry) / risk if risk > 0 else 0.0
 
     stop = hard_stop
-    trail_note = "persisted decision stop"
-    if peak_R >= 2.0:
-        stop = max(stop, entry + risk)
-        trail_note = "peak +2R reached -> stop locked at +1R"
-    elif peak_R >= 1.0:
-        stop = max(stop, entry)
-        trail_note = "peak +1R reached -> stop at breakeven"
+    manual_stop_locked = bool(int(lot.get("manual_stop_lock") or 0))
+    trail_note = "manual stop locked" if manual_stop_locked else "persisted decision stop"
+    if not manual_stop_locked:
+        if peak_R >= 2.0:
+            stop = max(stop, entry + risk)
+            trail_note = "peak +2R reached -> stop locked at +1R"
+        elif peak_R >= 1.0:
+            stop = max(stop, entry)
+            trail_note = "peak +1R reached -> stop at breakeven"
 
     regime_ok, regime_detail = regime if regime is not None else check_regime()
     earnings_ctx = check_earnings_context(ticker)
     fda_calendar = check_fda_calendar(ticker, holding=True)
     risk_off_tightened = False
-    if not regime_ok and stop < entry:
+    if not manual_stop_locked and not regime_ok and stop < entry:
         stop = entry
         risk_off_tightened = True
         trail_note = f"regime risk-OFF -> stop tightened to breakeven ({regime_detail})"

@@ -22,7 +22,10 @@ from zoneinfo import ZoneInfo
 warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL.*")
 import requests
 
-sys.path.insert(0, "/Users/yasser/scripts")
+SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPTS_DIR)
+from atlas_time import is_trading_day
+
 try:
     from atlas_notify import send_telegram as _send_telegram
 except Exception:
@@ -485,6 +488,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true", help="Bypass 08:45 ET launchd gate")
     parser.add_argument("--no-llm", action="store_true", help="Use deterministic fallback narrative")
     args = parser.parse_args(argv)
+
+    today_et = datetime.now(ET).date()
+    if not is_trading_day(today_et):
+        print(f"[macro_premarket] calendar gate closed; non-market ET day {today_et.isoformat()}; no report sent")
+        return 0
 
     if not args.force and not _launchd_gate_open():
         return 0

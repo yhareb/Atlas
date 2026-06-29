@@ -543,25 +543,174 @@ def _risk_label_for_signal(row, summary):
     return "0.5% risk" if pillars == 3 or cautious else "1% risk"
 
 
-def _actions_lines(buys, sells, summary=None, before_scan_signal_id=None):
-    signal_buys = _unique(_current_cycle_buy_signals(before_scan_signal_id), key="ticker")
+def _signal_sort_key(row):
+    ticker = str((row or {}).get("ticker") or "").upper()
+    pillars = _pillar_num((row or {}).get("score"))
+    return (-pillars, ticker)
+
+
+def _pending_signal_payload(ticker):
+    try:
+        row = atlas_db.get_pending_pullback(str(ticker or "").upper())
+    except Exception:
+        row = None
+    raw = (row or {}).get("signal_json")
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _sentiment_score_value(row):
+    data = row or {}
+    payload = _pending_signal_payload(data.get("ticker"))
+    candidates = [data.get("sentiment_info"), payload.get("sentiment_info"), data.get("gap_breakout"), payload.get("gap_breakout")]
+    for sent in candidates:
+        if not isinstance(sent, dict):
+            continue
+        for key in ("normalized", "sentiment_score", "score"):
+            if sent.get(key) not in (None, ""):
+                return _num(sent.get(key), 0.0)
+    text = f"{data.get('warnings', '')} {payload.get('warnings', '')}"
+    m = re.search(r"([+-][0-9]+(?:\.[0-9]+)?)", text)
+    return _num(m.group(1), 0.0) if m else 0.0
+
+
+def _risk_percent_for_signal(row, summary):
+    if (row or {}).get("risk_pct") not in (None, ""):
+        return f"{_num((row or {}).get('risk_pct')):.1f}%"
+    return _risk_label_for_signal(row or {}, summary or {}).replace(" risk", "")
+
+
+def _pending_buy_now_rows():
+    rows = []
+    try:
+        pending_rows = atlas_db.get_pending_pullbacks(status="WAITING")
+    except Exception:
+        pending_rows = []
+    for row in pending_rows or []:
+        row = dict(row or {})
+        if _pillar_num(row.get("score")) != 4:
+            continue
+        if not _pending_pullback_visible_in_status(row):
+            continue
+        payload = row.get("signal_result")
+        if not isinstance(payload, dict):
+            raw = row.get("signal_json")
+            try:
+                payload = json.loads(raw) if isinstance(raw, str) and raw else {}
+            except Exception:
+                payload = {}
+        raw_risk_card = payload.get("risk_card")
+        risk_card = raw_risk_card if isinstance(raw_risk_card, dict) else {}
+        ticker = str(row.get("ticker") or "").upper()
+        rows.append({
+            "ticker": ticker,
+            "score": row.get("score"),
+            "signal": row.get("signal") or payload.get("signal") or "PENDING PULLBACK",
+            "trigger_price": row.get("trigger_price") or payload.get("trigger_price") or payload.get("entry_price") or payload.get("entry"),
+            "entry_price": row.get("trigger_price") or payload.get("entry_price") or payload.get("entry"),
+            "current_price": row.get("live_price") or row.get("current_price") or row.get("price") or row.get("reference_price"),
+            "stop_loss": payload.get("stop_loss") or payload.get("stop") or risk_card.get("stop_loss"),
+            "target_price": payload.get("target_price") or payload.get("target") or risk_card.get("target_price") or risk_card.get("target"),
+            "risk_pct": payload.get("risk_pct"),
+            "sentiment_info": payload.get("sentiment_info"),
+            "source": "pending_pullback",
+        })
+    return rows
+
+
+def _buy_now_line(row, summary=None):
+    row = dict(row or {})
+    payload = _pending_signal_payload(row.get("ticker"))
+    ticker = str(row.get("ticker") or "?").upper()
+    trigger = row.get("trigger_price") or row.get("entry_price") or row.get("entry") or payload.get("trigger_price") or payload.get("entry_price") or payload.get("entry")
+    now = row.get("live_price") or row.get("current_price") or row.get("price") or row.get("reference_price") or trigger
+    raw_risk_card = payload.get("risk_card")
+    risk_card = raw_risk_card if isinstance(raw_risk_card, dict) else {}
+    stop = row.get("stop_loss") or row.get("stop") or payload.get("stop_loss") or payload.get("stop") or risk_card.get("stop_loss")
+    target = row.get("target_price") or row.get("target") or payload.get("target_price") or payload.get("target") or _pending_target_for_signal(ticker, trigger)
+    label = _ticker_label(ticker, row)
+    return f"⚡ {label} — trigger {_price(trigger)} · now {_price(now)} · stop {_price(stop)} · target {_price(target)} · 4/4 · {_risk_percent_for_signal(row, summary or {})}"
+
+
+def _buy_now_rows(before_scan_signal_id=None, high=None):
+    rows = [
+        dict(row)
+        for row in _current_cycle_buy_signals(before_scan_signal_id)
+        if _pillar_num((row or {}).get("score")) == 4
+    ]
+    scan_by_ticker = {}
+    for item in high or []:
+        if isinstance(item, dict):
+            t = str(item.get("ticker") or item.get("symbol") or "").upper()
+            if t:
+                scan_by_ticker[t] = item
+    pending_rows = _pending_buy_now_rows()
+    for row in pending_rows:
+        scan_row = scan_by_ticker.get(str(row.get("ticker") or "").upper())
+        if scan_row:
+            row["current_price"] = scan_row.get("live_price") or scan_row.get("current_price") or scan_row.get("price") or row.get("current_price")
+            row.setdefault("pct_over_ema", scan_row.get("pct_over_ema"))
+    rows.extend(pending_rows)
+    rows = _unique(rows, key="ticker")
+    rows.sort(key=lambda row: (-_sentiment_score_value(row), str(row.get("ticker") or "").upper()))
+    return rows
+
+
+def _buy_now_tickers(before_scan_signal_id=None, high=None):
+    return {str(row.get("ticker") or "").upper() for row in _buy_now_rows(before_scan_signal_id, high=high)}
+
+
+def _buy_now_lines(summary=None, before_scan_signal_id=None, high=None):
+    rows = _buy_now_rows(before_scan_signal_id, high=high)
+    lines = ["━━━ 🔥 BUY NOW ━━━"]
+    if not rows:
+        lines.append("none")
+        lines.append("")
+        return lines
+    lines.append("")
+    for row in rows[:5]:
+        lines.append(_buy_now_line(row, summary or {}))
+        lines.append("")
+    return lines
+
+
+def _action_buy_line(row, summary=None):
+    ticker = str(row.get("ticker") or "?").upper()
+    entry = _num(row.get("entry_price"))
+    stop = _num(row.get("stop_loss"))
+    target = _pending_target_for_signal(ticker, entry)
+    score = str(row.get("score") or "")
+    m = re.search(r"(\d+/4)", score)
+    score_txt = m.group(1) if m else score.replace(" Pillars", "")
+    label = _ticker_label(ticker, row)
+    risk_txt = _risk_label_for_signal(row, summary or {})
+    return f"   • {label} — {_whole(entry)} · stop {_whole(stop)} · target {_whole(target)} · {score_txt} · {risk_txt}"
+
+
+def _actions_lines(buys, sells, summary=None, before_scan_signal_id=None, high=None):
+    hot_tickers = _too_hot_tickers(high or [])
+    signal_buys = sorted(
+        _unique([
+            row for row in _current_cycle_buy_signals(before_scan_signal_id)
+            if str((row or {}).get("ticker") or "").upper() not in hot_tickers
+        ], key="ticker"),
+        key=_signal_sort_key,
+    )
     sells = _unique(sells)
-    lines = ["", "━━━ ACTIONS ━━━"]
-    if signal_buys:
-        lines.append(f"🛒 BUY ({len(signal_buys)})")
-        for b in signal_buys:
-            ticker = str(b.get("ticker") or "?").upper()
-            entry = _num(b.get("entry_price"))
-            stop = _num(b.get("stop_loss"))
-            target = _pending_target_for_signal(ticker, entry)
-            score = str(b.get("score") or "")
-            label = _ticker_label(ticker, b)
-            risk_txt = _risk_label_for_signal(b, summary or {})
-            lines.append(
-                f"   • {label} — {_whole(entry)} · stop {_whole(stop)} · target {_whole(target)} · {score} · {risk_txt}"
-            )
+    top_picks = signal_buys[:5]
+    lines = ["", f"━━━ 🔥 TOP PICKS ({len(top_picks)}) ━━━", ""]
+    if top_picks:
+        for b in top_picks:
+            lines.append(_action_buy_line(b, summary or {}))
+            lines.append("")
     else:
-        lines.append("🛒 BUY: none this cycle")
+        lines.append("none")
+        lines.append("")
     if sells:
         lines.append(f"💰 SELL ({len(sells)}) — engine exiting")
         for s in sells:
@@ -579,6 +728,7 @@ def _actions_lines(buys, sells, summary=None, before_scan_signal_id=None):
                 f"🔴 {label} sell ~{_money(proceeds)} · {_price(entry)} → {_price(out)}  {_fmt_pct(roi, signed=True)} ({_signed_money(pnl)}) {icon}",
                 f"   💡 {_short_reason(s.get('reason'))}",
                 f"   {_register_sell_line(ticker, shares, out)}",
+                "",
             ]
     else:
         lines.append("💰 SELL: none — holding all")
@@ -696,8 +846,39 @@ def _intraday_breakout_lines(summary):
     return lines
 
 
-def _waiting_lines(high):
-    waits = _unique([h for h in high if str(h.get("action", "")).upper() == "WAIT" and "PULLBACK" in str(h.get("reason", "")).upper()])
+def _too_hot_tickers(high):
+    hot = set()
+    for h in high or []:
+        if not isinstance(h, dict):
+            continue
+        ticker = str(h.get("ticker") or "").upper()
+        if not ticker:
+            continue
+        reason = str(h.get("reason", "")).upper()
+        action = str(h.get("action", "")).upper()
+        if action == "SKIP" and (reason.startswith("TOO EXTENDED") or "TOO HOT" in reason):
+            hot.add(ticker)
+            continue
+        raw_pct = h.get("pct_over_ema")
+        try:
+            pct = float(raw_pct) if raw_pct not in (None, "") else None
+        except Exception:
+            pct = None
+        if action == "SKIP" and pct is not None and pct > 10:
+            hot.add(ticker)
+    return hot
+
+
+def _waiting_lines(high, suppress_tickers=None):
+    hot_tickers = _too_hot_tickers(high)
+    suppress_tickers = {str(t or "").upper() for t in (suppress_tickers or set())}
+    waits = _unique([
+        h for h in high
+        if str(h.get("action", "")).upper() == "WAIT"
+        and "PULLBACK" in str(h.get("reason", "")).upper()
+        and str(h.get("ticker") or "").upper() not in hot_tickers
+        and str(h.get("ticker") or "").upper() not in suppress_tickers
+    ])
     lines = ["", f"━━━ 🎣 WAITING FOR DIP ({len(waits)}) ━━━", ""]
     if not waits:
         lines.append("✅ none")
@@ -810,22 +991,41 @@ def _build_report(summary):
     pending_count = len(atlas_db.get_pending_fill_trades())
 
     before_scan_signal_id = summary.get("_before_scan_signal_id")
+    buy_now_tickers = _buy_now_tickers(before_scan_signal_id, high=high)
     lines = _header_lines(summary, hold_count)
-    lines += _actions_lines(buys, sells, summary, before_scan_signal_id)
-    lines += _pending_entry_lines()
     lines += _holding_lines(summary)
+    lines += _buy_now_lines(summary, before_scan_signal_id, high=high)
+    lines += _actions_lines(buys, sells, summary, before_scan_signal_id, high=high)
+    lines += _waiting_lines(high, suppress_tickers=buy_now_tickers)
     lines += _gap_breakout_lines(summary)
     lines += _intraday_breakout_lines(summary)
-    lines += _waiting_lines(high)
     lines += _gates_lines(high)
     lines += _watch_lines(summary)
     return "\n".join(lines)
 
 
+def _pending_pullback_visible_in_status(row):
+    row = row or {}
+    text = " ".join(str(row.get(k) or "") for k in ("status", "signal", "signal_json"))
+    if "TOO HOT" in text.upper() or "TOO EXTENDED" in text.upper():
+        return False
+    raw_pct = row.get("pct_over_ema")
+    try:
+        pct = float(raw_pct) if raw_pct not in (None, "") else None
+    except Exception:
+        pct = None
+    # The quick scan-start status intentionally avoids provider calls; suppress rows
+    # whose stored pullback state already proves the ticker is >10% extended/hot.
+    return not (pct is not None and pct > 10)
+
+
 def _quick_status_report(reason="scan in progress"):
     """Fast no-provider Telegram body for long scans/overlap. Avoids price APIs."""
     open_rows = atlas_db.get_open_positions()
-    pending_rows = atlas_db.get_pending_pullbacks(status="WAITING")
+    pending_rows = [
+        row for row in atlas_db.get_pending_pullbacks(status="WAITING")
+        if _pending_pullback_visible_in_status(row)
+    ]
     fill_rows = atlas_db.get_pending_fill_trades()
     lines = [
         f"⏳ ATLAS INTRADAY STATUS — {reason}",
@@ -872,9 +1072,15 @@ def _send_telegram_async(message, label="atlas"):
 
 def run_intraday():
     cli_force = "--force" in sys.argv
-    cli_dry_run = "--dry-run" in sys.argv
+    cli_live = "--live" in sys.argv
+    explicit_dry_run = "--dry-run" in sys.argv
+    cli_dry_run = explicit_dry_run or (cli_force and not cli_live)
     now = datetime.datetime.now()
     print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Atlas intraday loop starting...")
+    if cli_force and cli_dry_run and not cli_live:
+        print("[intraday] --force without --live: verification dry-run enforced; production DB writes and Telegram sends suppressed")
+    elif cli_force and cli_live:
+        print("[intraday] --force --live: live forced run enabled; DB writes and Telegram sends allowed")
 
     lock_fd = _acquire_run_lock()
     if lock_fd is None:
@@ -925,6 +1131,21 @@ def _run_intraday_locked(now, force=False, dry_run=False):
 
     import atlas_manage
     staging_db = os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB")
+    force_dryrun_temp_db = None
+    production_db = os.path.realpath("/Users/yasser/scripts/atlas.db")
+    env_db_is_production = bool(staging_db) and os.path.realpath(staging_db) == production_db
+    if force and dry_run and (not staging_db or env_db_is_production):
+        try:
+            import shutil
+            source_db = staging_db or getattr(atlas_db, "DB_PATH", "/Users/yasser/scripts/atlas.db")
+            force_dryrun_temp_db = f"/tmp/atlas_intraday_force_dryrun_{os.getpid()}.db"
+            shutil.copy2(source_db, force_dryrun_temp_db)
+            staging_db = force_dryrun_temp_db
+            print(f"[intraday] forced dry-run DB isolated: {source_db} -> {staging_db}")
+        except Exception as e:
+            force_dryrun_temp_db = None
+            print(f"[intraday] forced dry-run DB isolation failed; aborting before scan: {e}")
+            return {"skipped": True, "reason": "forced dry-run DB isolation failed"}
     if staging_db:
         try:
             atlas_db.DB_PATH = staging_db
@@ -1025,6 +1246,13 @@ def _run_intraday_locked(now, force=False, dry_run=False):
             print("[intraday] dry-run: final telegram send suppressed")
     except Exception as e:
         print(f"[intraday] telegram report failed (non-fatal): {e}")
+
+    if force_dryrun_temp_db:
+        try:
+            os.unlink(force_dryrun_temp_db)
+            print(f"[intraday] forced dry-run temp DB removed: {force_dryrun_temp_db}")
+        except Exception as e:
+            print(f"[intraday] forced dry-run temp DB cleanup warning: {e}")
 
 
 if __name__ == "__main__":

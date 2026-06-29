@@ -1,0 +1,12 @@
+🛡️ ATLAS OPS AUDIT — 5:20 PM ET
+✅ All systems healthy
+📡 API Health (last 30m)
+- Massive: 1292 calls · 0 errors
+- EODHD: 166 calls · 0 errors
+- Benzinga: 2 calls · 0 errors
+🎯 Signals
+- 94 tickers · 40 WAITING · 118 SKIP · 6 TOO HOT
+💾 DB Events
+- 174 writes (trades: 0 · pending_pullbacks: 2 · other: 172)
+🛠️ Code Changes
+- None

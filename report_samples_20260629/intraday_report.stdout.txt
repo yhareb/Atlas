@@ -1,0 +1,1311 @@
+
+[2026-06-29 01:11:51] Atlas intraday loop starting...
+[intraday] --force without --live: verification dry-run enforced; production DB writes and Telegram sends suppressed
+[intraday] market-hours gate bypassed by --force: outside market hours — weekend (Sun 2026-06-28 17:11 EDT)
+[intraday] dry-run: start status telegram suppressed
+[intraday] forced dry-run DB isolated: /Users/yasser/scripts/atlas.db -> /tmp/atlas_intraday_force_dryrun_11134.db
+[intraday] report-first mode: sector sweep peer enrichment deferred until after Telegram report
+[intraday] signal high-water before scan id=6924
+====================================================================
+  ATLAS v2 DAILY MANAGER   2026-06-29 01:11
+  Mode: DRY-RUN — no writes
+====================================================================
+
+====================================================================
+  ACCOUNT
+====================================================================
+  Cash available : $22,472.74
+  Open invested  : $6,582.61
+  Realized P&L   : $9.94
+  Equity (MTM)   : $29,125.74
+
+====================================================================
+  EXITS  (evaluated before any new buys)
+====================================================================
+  HOLD  SYNA   persisted decision stop; gain -0.44R; 2d open
+  HOLD  INTC   persisted decision stop; gain -0.13R; 3d open
+  HOLD  LRCX   peak +2R reached -> stop locked at +1R; gain +966.85R; 4d open
+
+====================================================================
+  REGIME GATE
+====================================================================
+  RISK-ON  : ⚠️ WEAK — cautious (half size); SPY 728.99 < 50SMA 734.35
+  MACRO LLM: ⚠️ CAUTION: broad market/semis pressure
+  MACRO    : ⚠️ Fed/CPI day — cautious (Fed Kashkari Speech, Fed Williams Speech)
+
+====================================================================
+  SCAN & ENTRIES  (94 candidates)
+====================================================================
+[TIMING] 2026-06-29T01:14:32 section=ticker_loop event=start candidates=94
+[TIMING] 2026-06-29T01:14:32 section=pillar_checks_parallel event=start tickers=94 workers=8
+[TIMING] 2026-06-29T01:14:32 section=pillar_checks event=start ticker=MU
+[TIMING] 2026-06-29T01:14:32 section=pillar_checks event=start ticker=CGEM
+[TIMING] 2026-06-29T01:14:32 section=pillar_checks event=start ticker=CAT
+[TIMING] 2026-06-29T01:14:32 section=pillar_checks event=start ticker=ELVN
+[TIMING] 2026-06-29T01:14:32 section=pillar_checks event=start ticker=EWTX
+[TIMING] 2026-06-29T01:14:32 section=pillar_checks event=start ticker=AAL
+[TIMING] 2026-06-29T01:14:32 section=pillar_checks event=start ticker=SLDB
+[TIMING] 2026-06-29T01:14:32 section=pillar_checks event=start ticker=JNJ
+[TIMING] 2026-06-29T01:14:39 section=pillar_checks event=end ticker=CGEM elapsed=6.997s
+[TIMING] 2026-06-29T01:14:39 section=pillar_checks event=start ticker=AMAT
+[TIMING] 2026-06-29T01:14:39 section=pillar_checks event=end ticker=SLDB elapsed=7.033s
+[TIMING] 2026-06-29T01:14:39 section=pillar_checks event=start ticker=BAC
+[TIMING] 2026-06-29T01:14:39 section=pillar_checks event=end ticker=MU elapsed=7.466s
+[TIMING] 2026-06-29T01:14:39 section=pillar_checks event=start ticker=RL
+[TIMING] 2026-06-29T01:14:39 section=pillar_checks event=end ticker=AAL elapsed=7.928s
+[TIMING] 2026-06-29T01:14:39 section=pillar_checks event=start ticker=CWAN
+[TIMING] 2026-06-29T01:14:39 section=pillar_checks event=end ticker=CAT elapsed=7.983s
+[TIMING] 2026-06-29T01:14:39 section=pillar_checks event=start ticker=MRK
+[TIMING] 2026-06-29T01:14:40 section=pillar_checks event=end ticker=EWTX elapsed=8.043s
+[TIMING] 2026-06-29T01:14:40 section=pillar_checks event=start ticker=GLW
+[TIMING] 2026-06-29T01:14:40 section=pillar_checks event=end ticker=JNJ elapsed=8.157s
+[TIMING] 2026-06-29T01:14:40 section=pillar_checks event=start ticker=MKSI
+[TIMING] 2026-06-29T01:14:41 section=pillar_checks event=end ticker=ELVN elapsed=9.219s
+[TIMING] 2026-06-29T01:14:41 section=pillar_checks event=start ticker=ALGM
+[TIMING] 2026-06-29T01:14:45 section=pillar_checks event=end ticker=GLW elapsed=5.927s
+[TIMING] 2026-06-29T01:14:45 section=pillar_checks event=start ticker=KLIC
+[TIMING] 2026-06-29T01:14:46 section=pillar_checks event=end ticker=BAC elapsed=7.437s
+[TIMING] 2026-06-29T01:14:46 section=pillar_checks event=start ticker=TGT
+[TIMING] 2026-06-29T01:14:46 section=pillar_checks event=end ticker=CWAN elapsed=6.554s
+[TIMING] 2026-06-29T01:14:46 section=pillar_checks event=start ticker=KO
+[TIMING] 2026-06-29T01:14:46 section=pillar_checks event=end ticker=MKSI elapsed=6.546s
+[TIMING] 2026-06-29T01:14:46 section=pillar_checks event=start ticker=SYNA
+[TIMING] 2026-06-29T01:14:46 section=pillar_checks event=end ticker=RL elapsed=7.371s
+[TIMING] 2026-06-29T01:14:46 section=pillar_checks event=start ticker=INTC
+[TIMING] 2026-06-29T01:14:47 section=pillar_checks event=end ticker=AMAT elapsed=8.152s
+[TIMING] 2026-06-29T01:14:47 section=pillar_checks event=start ticker=LRCX
+[TIMING] 2026-06-29T01:14:47 section=pillar_checks event=end ticker=MRK elapsed=7.499s
+[TIMING] 2026-06-29T01:14:47 section=pillar_checks event=start ticker=STZ
+[TIMING] 2026-06-29T01:14:48 section=pillar_checks event=end ticker=ALGM elapsed=6.971s
+[TIMING] 2026-06-29T01:14:48 section=pillar_checks event=start ticker=NKE
+[intraday] dry-run: interim telegram suppressed
+[TIMING] 2026-06-29T01:14:51 section=pillar_checks event=end ticker=INTC elapsed=5.080s
+[TIMING] 2026-06-29T01:14:51 section=pillar_checks event=start ticker=FDS
+[TIMING] 2026-06-29T01:14:52 section=pillar_checks event=end ticker=LRCX elapsed=5.199s
+[TIMING] 2026-06-29T01:14:52 section=pillar_checks event=start ticker=AVAV
+[TIMING] 2026-06-29T01:14:52 section=pillar_checks event=end ticker=KO elapsed=6.104s
+[TIMING] 2026-06-29T01:14:52 section=pillar_checks event=start ticker=CULP
+[TIMING] 2026-06-29T01:14:52 section=pillar_checks event=end ticker=SYNA elapsed=5.955s
+[TIMING] 2026-06-29T01:14:52 section=pillar_checks event=start ticker=CNVS
+[TIMING] 2026-06-29T01:14:53 section=pillar_checks event=end ticker=STZ elapsed=5.806s
+[TIMING] 2026-06-29T01:14:53 section=pillar_checks event=start ticker=XAIR
+[TIMING] 2026-06-29T01:14:53 section=pillar_checks event=end ticker=KLIC elapsed=7.382s
+[TIMING] 2026-06-29T01:14:53 section=pillar_checks event=start ticker=APOG
+[TIMING] 2026-06-29T01:14:53 section=pillar_checks event=end ticker=CNVS elapsed=0.893s
+[TIMING] 2026-06-29T01:14:53 section=pillar_checks event=start ticker=GBX
+[TIMING] 2026-06-29T01:14:53 section=pillar_checks event=end ticker=CULP elapsed=1.068s
+[TIMING] 2026-06-29T01:14:53 section=pillar_checks event=start ticker=BSET
+[TIMING] 2026-06-29T01:14:53 section=pillar_checks event=end ticker=TGT elapsed=7.334s
+[TIMING] 2026-06-29T01:14:53 section=pillar_checks event=start ticker=MSM
+[TIMING] 2026-06-29T01:14:54 section=pillar_checks event=end ticker=XAIR elapsed=0.872s
+[TIMING] 2026-06-29T01:14:54 section=pillar_checks event=start ticker=UNF
+[TIMING] 2026-06-29T01:14:54 section=pillar_checks event=end ticker=NKE elapsed=6.331s
+[TIMING] 2026-06-29T01:14:54 section=pillar_checks event=start ticker=LNN
+[TIMING] 2026-06-29T01:14:54 section=pillar_checks event=end ticker=BSET elapsed=1.115s
+[TIMING] 2026-06-29T01:14:54 section=pillar_checks event=start ticker=GIS
+[TIMING] 2026-06-29T01:14:58 section=pillar_checks event=end ticker=AVAV elapsed=6.251s
+[TIMING] 2026-06-29T01:14:58 section=pillar_checks event=start ticker=FC
+[TIMING] 2026-06-29T01:14:58 section=pillar_checks event=end ticker=FDS elapsed=6.896s
+[TIMING] 2026-06-29T01:14:58 section=pillar_checks event=start ticker=PRGS
+[TIMING] 2026-06-29T01:14:59 section=pillar_checks event=end ticker=MSM elapsed=5.294s
+[TIMING] 2026-06-29T01:14:59 section=pillar_checks event=start ticker=CNXC
+[TIMING] 2026-06-29T01:14:59 section=pillar_checks event=end ticker=GBX elapsed=5.844s
+[TIMING] 2026-06-29T01:14:59 section=pillar_checks event=start ticker=NVDA
+[TIMING] 2026-06-29T01:14:59 section=pillar_checks event=end ticker=FC elapsed=1.047s
+[TIMING] 2026-06-29T01:14:59 section=pillar_checks event=start ticker=AAPL
+[TIMING] 2026-06-29T01:14:59 section=pillar_checks event=end ticker=LNN elapsed=5.234s
+[TIMING] 2026-06-29T01:14:59 section=pillar_checks event=start ticker=GOOGL
+[TIMING] 2026-06-29T01:15:00 section=pillar_checks event=end ticker=APOG elapsed=6.730s
+[TIMING] 2026-06-29T01:15:00 section=pillar_checks event=start ticker=GOOG
+[TIMING] 2026-06-29T01:15:00 section=pillar_checks event=end ticker=GIS elapsed=5.615s
+[TIMING] 2026-06-29T01:15:00 section=pillar_checks event=start ticker=MSFT
+[TIMING] 2026-06-29T01:15:04 section=pillar_checks event=end ticker=UNF elapsed=10.480s
+[TIMING] 2026-06-29T01:15:04 section=pillar_checks event=start ticker=AMZN
+[TIMING] 2026-06-29T01:15:05 section=pillar_checks event=end ticker=CNXC elapsed=6.576s
+[TIMING] 2026-06-29T01:15:05 section=pillar_checks event=start ticker=TSM
+[TIMING] 2026-06-29T01:15:05 section=pillar_checks event=end ticker=NVDA elapsed=6.417s
+[TIMING] 2026-06-29T01:15:05 section=pillar_checks event=start ticker=AVGO
+[TIMING] 2026-06-29T01:15:05 section=pillar_checks event=end ticker=PRGS elapsed=7.173s
+[TIMING] 2026-06-29T01:15:05 section=pillar_checks event=start ticker=TSLA
+[TIMING] 2026-06-29T01:15:06 section=pillar_checks event=end ticker=GOOG elapsed=6.058s
+[TIMING] 2026-06-29T01:15:06 section=pillar_checks event=start ticker=META
+[TIMING] 2026-06-29T01:15:06 section=pillar_checks event=end ticker=AAPL elapsed=6.602s
+[TIMING] 2026-06-29T01:15:06 section=pillar_checks event=start ticker=WMT
+[TIMING] 2026-06-29T01:15:06 section=pillar_checks event=end ticker=GOOGL elapsed=6.656s
+[TIMING] 2026-06-29T01:15:06 section=pillar_checks event=start ticker=JPM
+[TIMING] 2026-06-29T01:15:06 section=pillar_checks event=end ticker=MSFT elapsed=6.131s
+[TIMING] 2026-06-29T01:15:06 section=pillar_checks event=start ticker=AMD
+[TIMING] 2026-06-29T01:15:11 section=pillar_checks event=end ticker=TSM elapsed=5.589s
+[TIMING] 2026-06-29T01:15:11 section=pillar_checks event=start ticker=V
+[TIMING] 2026-06-29T01:15:11 section=pillar_checks event=end ticker=AMZN elapsed=6.705s
+[TIMING] 2026-06-29T01:15:11 section=pillar_checks event=start ticker=XOM
+[TIMING] 2026-06-29T01:15:11 section=pillar_checks event=end ticker=AVGO elapsed=6.085s
+[TIMING] 2026-06-29T01:15:11 section=pillar_checks event=start ticker=CSCO
+[TIMING] 2026-06-29T01:15:12 section=pillar_checks event=end ticker=WMT elapsed=5.956s
+[TIMING] 2026-06-29T01:15:12 section=pillar_checks event=start ticker=ABBV
+[TIMING] 2026-06-29T01:15:12 section=pillar_checks event=end ticker=META elapsed=6.174s
+[TIMING] 2026-06-29T01:15:12 section=pillar_checks event=start ticker=ORCL
+[TIMING] 2026-06-29T01:15:12 section=pillar_checks event=end ticker=TSLA elapsed=6.350s
+[TIMING] 2026-06-29T01:15:12 section=pillar_checks event=start ticker=UNH
+[TIMING] 2026-06-29T01:15:12 section=pillar_checks event=end ticker=AMD elapsed=6.074s
+[TIMING] 2026-06-29T01:15:12 section=pillar_checks event=start ticker=GE
+[TIMING] 2026-06-29T01:15:14 section=pillar_checks event=end ticker=JPM elapsed=7.887s
+[TIMING] 2026-06-29T01:15:14 section=pillar_checks event=start ticker=ARM
+[TIMING] 2026-06-29T01:15:20 section=pillar_checks event=end ticker=ORCL elapsed=7.779s
+[TIMING] 2026-06-29T01:15:20 section=pillar_checks event=start ticker=PG
+[TIMING] 2026-06-29T01:15:20 section=pillar_checks event=end ticker=ARM elapsed=6.096s
+[TIMING] 2026-06-29T01:15:20 section=pillar_checks event=start ticker=CVX
+[TIMING] 2026-06-29T01:15:20 section=pillar_checks event=end ticker=V elapsed=9.500s
+[TIMING] 2026-06-29T01:15:20 section=pillar_checks event=start ticker=MIC
+[TIMING] 2026-06-29T01:15:21 section=pillar_checks event=end ticker=GE elapsed=8.594s
+[TIMING] 2026-06-29T01:15:21 section=pillar_checks event=start ticker=SDOT
+[TIMING] 2026-06-29T01:15:21 section=pillar_checks event=end ticker=UNH elapsed=8.925s
+[TIMING] 2026-06-29T01:15:21 section=pillar_checks event=start ticker=GOGL
+[TIMING] 2026-06-29T01:15:21 section=pillar_checks event=end ticker=XOM elapsed=9.940s
+[TIMING] 2026-06-29T01:15:21 section=pillar_checks event=start ticker=PCLA
+[TIMING] 2026-06-29T01:15:21 section=pillar_checks event=end ticker=MIC elapsed=0.851s
+[TIMING] 2026-06-29T01:15:21 section=pillar_checks event=start ticker=WSHP
+[TIMING] 2026-06-29T01:15:22 section=pillar_checks event=end ticker=PCLA elapsed=0.862s
+[TIMING] 2026-06-29T01:15:22 section=pillar_checks event=start ticker=NVC
+[TIMING] 2026-06-29T01:15:22 section=pillar_checks event=end ticker=CSCO elapsed=10.385s
+[TIMING] 2026-06-29T01:15:22 section=pillar_checks event=start ticker=CDE
+[TIMING] 2026-06-29T01:15:22 section=pillar_checks event=end ticker=ABBV elapsed=10.397s
+[TIMING] 2026-06-29T01:15:22 section=pillar_checks event=start ticker=NOK
+[TIMING] 2026-06-29T01:15:22 section=pillar_checks event=end ticker=WSHP elapsed=1.059s
+[TIMING] 2026-06-29T01:15:22 section=pillar_checks event=start ticker=SPCX
+[TIMING] 2026-06-29T01:15:23 section=pillar_checks event=end ticker=NVC elapsed=1.062s
+[TIMING] 2026-06-29T01:15:23 section=pillar_checks event=start ticker=ONDS
+[TIMING] 2026-06-29T01:15:25 section=pillar_checks event=end ticker=PG elapsed=5.872s
+[TIMING] 2026-06-29T01:15:25 section=pillar_checks event=start ticker=KEEL
+[TIMING] 2026-06-29T01:15:28 section=pillar_checks event=end ticker=NOK elapsed=5.412s
+[TIMING] 2026-06-29T01:15:28 section=pillar_checks event=start ticker=HL
+[TIMING] 2026-06-29T01:15:28 section=pillar_checks event=end ticker=GOGL elapsed=7.010s
+[TIMING] 2026-06-29T01:15:28 section=pillar_checks event=start ticker=SOFI
+[TIMING] 2026-06-29T01:15:28 section=pillar_checks event=end ticker=SDOT elapsed=7.123s
+[TIMING] 2026-06-29T01:15:28 section=pillar_checks event=start ticker=T
+[TIMING] 2026-06-29T01:15:28 section=pillar_checks event=end ticker=CVX elapsed=7.980s
+[TIMING] 2026-06-29T01:15:28 section=pillar_checks event=start ticker=NWL
+[TIMING] 2026-06-29T01:15:28 section=pillar_checks event=end ticker=SPCX elapsed=6.277s
+[TIMING] 2026-06-29T01:15:28 section=pillar_checks event=start ticker=WEN
+[TIMING] 2026-06-29T01:15:29 section=pillar_checks event=end ticker=ONDS elapsed=6.278s
+[TIMING] 2026-06-29T01:15:29 section=pillar_checks event=start ticker=NFLX
+[TIMING] 2026-06-29T01:15:29 section=pillar_checks event=end ticker=CDE elapsed=7.416s
+[TIMING] 2026-06-29T01:15:29 section=pillar_checks event=start ticker=HON
+[TIMING] 2026-06-29T01:15:31 section=pillar_checks event=end ticker=KEEL elapsed=5.880s
+[TIMING] 2026-06-29T01:15:31 section=pillar_checks event=start ticker=DFTX
+[TIMING] 2026-06-29T01:15:34 section=pillar_checks event=end ticker=HL elapsed=6.743s
+[TIMING] 2026-06-29T01:15:34 section=pillar_checks event=start ticker=BLZE
+[TIMING] 2026-06-29T01:15:34 section=pillar_checks event=end ticker=SOFI elapsed=6.513s
+[TIMING] 2026-06-29T01:15:34 section=pillar_checks event=start ticker=SLS
+[TIMING] 2026-06-29T01:15:34 section=pillar_checks event=end ticker=NWL elapsed=6.487s
+[TIMING] 2026-06-29T01:15:34 section=pillar_checks event=start ticker=LILAK
+[TIMING] 2026-06-29T01:15:34 section=pillar_checks event=end ticker=T elapsed=6.646s
+[TIMING] 2026-06-29T01:15:34 section=pillar_checks event=start ticker=ABSI
+[TIMING] 2026-06-29T01:15:35 section=pillar_checks event=end ticker=WEN elapsed=6.854s
+[TIMING] 2026-06-29T01:15:35 section=pillar_checks event=start ticker=APGE
+[TIMING] 2026-06-29T01:15:36 section=pillar_checks event=end ticker=NFLX elapsed=6.645s
+[TIMING] 2026-06-29T01:15:36 section=pillar_checks event=start ticker=ZURA
+[TIMING] 2026-06-29T01:15:37 section=pillar_checks event=end ticker=HON elapsed=7.431s
+[TIMING] 2026-06-29T01:15:37 section=pillar_checks event=start ticker=GRPN
+[TIMING] 2026-06-29T01:15:38 section=pillar_checks event=end ticker=DFTX elapsed=6.286s
+[TIMING] 2026-06-29T01:15:38 section=pillar_checks event=start ticker=HELP
+[TIMING] 2026-06-29T01:15:41 section=pillar_checks event=end ticker=LILAK elapsed=6.458s
+[TIMING] 2026-06-29T01:15:41 section=pillar_checks event=start ticker=FCEL
+[TIMING] 2026-06-29T01:15:41 section=pillar_checks event=end ticker=ZURA elapsed=5.456s
+[TIMING] 2026-06-29T01:15:41 section=pillar_checks event=start ticker=LCID
+[TIMING] 2026-06-29T01:15:42 section=pillar_checks event=end ticker=BLZE elapsed=7.333s
+[TIMING] 2026-06-29T01:15:42 section=pillar_checks event=start ticker=ATAI
+[TIMING] 2026-06-29T01:15:42 section=pillar_checks event=end ticker=ABSI elapsed=7.174s
+[TIMING] 2026-06-29T01:15:42 section=pillar_checks event=start ticker=SPT
+[TIMING] 2026-06-29T01:15:42 section=pillar_checks event=end ticker=SLS elapsed=7.513s
+[TIMING] 2026-06-29T01:15:42 section=pillar_checks event=start ticker=GENI
+[TIMING] 2026-06-29T01:15:45 section=pillar_checks event=end ticker=GRPN elapsed=8.221s
+[TIMING] 2026-06-29T01:15:45 section=pillar_checks event=end ticker=HELP elapsed=7.320s
+[TIMING] 2026-06-29T01:15:45 section=pillar_checks event=end ticker=APGE elapsed=10.151s
+[TIMING] 2026-06-29T01:15:47 section=pillar_checks event=end ticker=GENI elapsed=5.295s
+[TIMING] 2026-06-29T01:15:47 section=pillar_checks event=end ticker=FCEL elapsed=6.480s
+[TIMING] 2026-06-29T01:15:48 section=pillar_checks event=end ticker=LCID elapsed=6.591s
+[TIMING] 2026-06-29T01:15:48 section=pillar_checks event=end ticker=SPT elapsed=6.366s
+[TIMING] 2026-06-29T01:15:49 section=pillar_checks event=end ticker=ATAI elapsed=7.060s
+[TIMING] 2026-06-29T01:15:49 section=pillar_checks_parallel event=end elapsed=77.161s tickers=94 workers=8
+[TIMING] 2026-06-29T01:15:49 section=ticker event=start ticker=MU idx=1/94
+[TIMING] 2026-06-29T01:15:49 section=pending_pullback event=start ticker=MU
+[TIMING] 2026-06-29T01:15:53 section=pending_pullback event=end ticker=MU elapsed=3.867s
+  ⏳ WAITING FOR PULLBACK — MU (3/4 Pillars): price $113.35 = +3.9% over 10-EMA. Limit armed at $105.80 (3-day window).
+[TIMING] 2026-06-29T01:15:53 section=ticker event=start ticker=CGEM idx=2/94
+[TIMING] 2026-06-29T01:15:53 section=pending_pullback event=start ticker=CGEM
+[TIMING] 2026-06-29T01:15:56 section=pending_pullback event=end ticker=CGEM elapsed=3.885s
+  ⏳ WAITING FOR PULLBACK — CGEM (3/4 Pillars): price $18.04 = +8.9% over 10-EMA. Limit armed at $15.20 (3-day window).
+[TIMING] 2026-06-29T01:15:56 section=ticker event=start ticker=CAT idx=3/94
+[TIMING] 2026-06-29T01:15:56 section=pending_pullback event=start ticker=CAT
+[TIMING] 2026-06-29T01:16:00 section=pending_pullback event=end ticker=CAT elapsed=3.743s
+  ⏳ WAITING FOR PULLBACK — CAT (3/4 Pillars): price $999.81 = +1.7% over 10-EMA. Limit armed at $961.93 (3-day window).
+[TIMING] 2026-06-29T01:16:00 section=ticker event=start ticker=ELVN idx=4/94
+[TIMING] 2026-06-29T01:16:00 section=pending_pullback event=start ticker=ELVN
+[TIMING] 2026-06-29T01:16:04 section=pending_pullback event=end ticker=ELVN elapsed=3.914s
+  ⏳ WAITING FOR PULLBACK — ELVN (3/4 Pillars): price $50.00 = +8.4% over 10-EMA. Limit armed at $44.79 (3-day window).
+[TIMING] 2026-06-29T01:16:04 section=ticker event=start ticker=EWTX idx=5/94
+[TIMING] 2026-06-29T01:16:04 section=pending_pullback event=start ticker=EWTX
+[TIMING] 2026-06-29T01:16:06 section=pending_pullback event=end ticker=EWTX elapsed=2.080s
+  ⏳ WAITING FOR PULLBACK — EWTX (3/4 Pillars): price $41.46 = +7.5% over 10-EMA. Limit armed at $36.84 (3-day window).
+[TIMING] 2026-06-29T01:16:06 section=ticker event=start ticker=AAL idx=6/94
+[TIMING] 2026-06-29T01:16:06 section=pending_pullback event=start ticker=AAL
+[TIMING] 2026-06-29T01:16:08 section=pending_pullback event=end ticker=AAL elapsed=2.182s
+  ⏳ WAITING FOR PULLBACK — AAL (3/4 Pillars): price $17.85 = +8.9% over 10-EMA. Limit armed at $15.79 (3-day window).
+[TIMING] 2026-06-29T01:16:08 section=ticker event=start ticker=SLDB idx=7/94
+[TIMING] 2026-06-29T01:16:08 section=pending_pullback event=start ticker=SLDB
+[TIMING] 2026-06-29T01:16:11 section=pending_pullback event=end ticker=SLDB elapsed=2.182s
+  ⏳ WAITING FOR PULLBACK — SLDB (3/4 Pillars): price $9.29 = +11.2% over 10-EMA. Limit armed at $8.01 (3-day window).
+[TIMING] 2026-06-29T01:16:11 section=ticker event=start ticker=JNJ idx=8/94
+[TIMING] 2026-06-29T01:16:11 section=pending_pullback event=start ticker=JNJ
+[TIMING] 2026-06-29T01:16:15 section=pending_pullback event=end ticker=JNJ elapsed=4.068s
+  ⏳ WAITING FOR PULLBACK — JNJ (3/4 Pillars): price $254.61 = +5.9% over 10-EMA. Limit armed at $238.39 (3-day window).
+[TIMING] 2026-06-29T01:16:15 section=ticker event=start ticker=AMAT idx=9/94
+[TIMING] 2026-06-29T01:16:15 section=pending_pullback event=start ticker=AMAT
+[TIMING] 2026-06-29T01:16:18 section=pending_pullback event=end ticker=AMAT elapsed=3.778s
+  ⏳ WAITING FOR PULLBACK — AMAT (3/4 Pillars): price $627.25 = +4.7% over 10-EMA. Limit armed at $587.24 (3-day window).
+[TIMING] 2026-06-29T01:16:18 section=ticker event=start ticker=BAC idx=10/94
+[TIMING] 2026-06-29T01:16:18 section=pending_pullback event=start ticker=BAC
+[TIMING] 2026-06-29T01:16:23 section=pending_pullback event=end ticker=BAC elapsed=4.090s
+  ⏳ WAITING FOR PULLBACK — BAC (3/4 Pillars): price $57.93 = +1.7% over 10-EMA. Limit armed at $57.02 (3-day window).
+[TIMING] 2026-06-29T01:16:23 section=ticker event=start ticker=RL idx=11/94
+[TIMING] 2026-06-29T01:16:23 section=pending_pullback event=start ticker=RL
+[TIMING] 2026-06-29T01:16:26 section=pending_pullback event=end ticker=RL elapsed=3.559s
+  ⏳ WAITING FOR PULLBACK — RL (3/4 Pillars): price $411.16 = +1.4% over 10-EMA. Limit armed at $407.11 (3-day window).
+[TIMING] 2026-06-29T01:16:26 section=ticker event=start ticker=CWAN idx=12/94
+[TIMING] 2026-06-29T01:16:26 section=pending_pullback event=start ticker=CWAN
+[TIMING] 2026-06-29T01:16:30 section=pending_pullback event=end ticker=CWAN elapsed=4.102s
+  ⏳ WAITING FOR PULLBACK — CWAN (3/4 Pillars): price $24.55 = +0.5% over 10-EMA. Limit armed at $24.54 (3-day window).
+[TIMING] 2026-06-29T01:16:30 section=ticker event=start ticker=MRK idx=13/94
+[TIMING] 2026-06-29T01:16:30 section=pending_pullback event=start ticker=MRK
+[TIMING] 2026-06-29T01:16:34 section=pending_pullback event=end ticker=MRK elapsed=3.882s
+  ⏳ WAITING FOR PULLBACK — MRK (3/4 Pillars): price $127.53 = +5.6% over 10-EMA. Limit armed at $119.39 (3-day window).
+[TIMING] 2026-06-29T01:16:34 section=ticker event=start ticker=GLW idx=14/94
+[TIMING] 2026-06-29T01:16:34 section=pending_pullback event=start ticker=GLW
+[TIMING] 2026-06-29T01:16:38 section=pending_pullback event=end ticker=GLW elapsed=3.893s
+  ⏳ WAITING FOR PULLBACK — GLW (3/4 Pillars): price $220.28 = +8.7% over 10-EMA. Limit armed at $199.06 (3-day window).
+[TIMING] 2026-06-29T01:16:38 section=ticker event=start ticker=MKSI idx=15/94
+[TIMING] 2026-06-29T01:16:38 section=pending_pullback event=start ticker=MKSI
+[TIMING] 2026-06-29T01:16:42 section=pending_pullback event=end ticker=MKSI elapsed=4.013s
+  ⏳ WAITING FOR PULLBACK — MKSI (4/4 Pillars): price $388.61 = +1.6% over 10-EMA. Limit armed at $381.34 (3-day window).
+[TIMING] 2026-06-29T01:16:42 section=ticker event=start ticker=ALGM idx=16/94
+[TIMING] 2026-06-29T01:16:42 section=pending_pullback event=start ticker=ALGM
+[TIMING] 2026-06-29T01:16:45 section=pending_pullback event=end ticker=ALGM elapsed=3.284s
+  ⏳ WAITING FOR PULLBACK — ALGM (3/4 Pillars): price $56.82 = +1.5% over 10-EMA. Limit armed at $55.54 (3-day window).
+[TIMING] 2026-06-29T01:16:45 section=ticker event=start ticker=KLIC idx=17/94
+[TIMING] 2026-06-29T01:16:45 section=pending_pullback event=start ticker=KLIC
+[TIMING] 2026-06-29T01:16:50 section=pending_pullback event=end ticker=KLIC elapsed=4.264s
+  ⏳ WAITING FOR PULLBACK — KLIC (4/4 Pillars): price $121.01 = +-0.4% over 10-EMA. Limit armed at $120.68 (3-day window).
+[TIMING] 2026-06-29T01:16:50 section=ticker event=start ticker=TGT idx=18/94
+[TIMING] 2026-06-29T01:16:50 section=pending_pullback event=start ticker=TGT
+[TIMING] 2026-06-29T01:16:54 section=pending_pullback event=end ticker=TGT elapsed=4.369s
+  ⏳ WAITING FOR PULLBACK — TGT (3/4 Pillars): price $140.21 = +3.9% over 10-EMA. Limit armed at $135.72 (3-day window).
+[TIMING] 2026-06-29T01:16:54 section=ticker event=start ticker=KO idx=19/94
+[TIMING] 2026-06-29T01:16:54 section=pending_pullback event=start ticker=KO
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=end ticker=KO elapsed=3.826s
+  ⏳ WAITING FOR PULLBACK — KO (3/4 Pillars): price $82.43 = +2.0% over 10-EMA. Limit armed at $81.19 (3-day window).
+[TIMING] 2026-06-29T01:16:58 section=ticker event=start ticker=SYNA idx=20/94
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=start ticker=SYNA
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=end ticker=SYNA elapsed=0.001s
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=start ticker=SYNA
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=end ticker=SYNA elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=start ticker=SYNA
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=end ticker=SYNA elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=start ticker=SYNA
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=end ticker=SYNA elapsed=0.000s peers=0
+  block SYNA   (3/4 Pillars) Already holding SYNA
+[TIMING] 2026-06-29T01:16:58 section=ticker event=start ticker=INTC idx=21/94
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=start ticker=INTC
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=end ticker=INTC elapsed=0.001s
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=start ticker=INTC
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=end ticker=INTC elapsed=0.000s rating={'firm': 'Goldman Sachs', 'analyst': 'James Schneider', 'benzinga_analyst_id': '586e48c7351b9b00018beef7', 'benzinga_firm_id': '57f832a96b87f600016fa34f', 'rating': 'neutral', 'rating_action': 'initiates_coverage_on', 'price_target': 150.0, 'adjusted_price_target': 150.0, 'previous_price_target': None, 'price_percent_change': None, 'date': '2026-06-25', 'pt_raised': False, 'analyst_quality': {'benzinga_firm_id': '57f832a96b87f600016fa34f', 'benzinga_id': '586e48c7351b9b00018beef7', 'firm_match': True, 'firm_name': 'Goldman Sachs', 'full_name': 'James Schneider', 'overall_avg_return': 61.03, 'overall_success_rate': 53.01, 'smart_score': 76.01, 'summary': None, 'top_analyst': False, 'total_ratings': 83.0}, 'top_analyst_backed': False, 'note': 'Initiates Coverage On by Goldman Sachs → PT $150'}
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=start ticker=INTC
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=end ticker=INTC elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=start ticker=INTC
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=end ticker=INTC elapsed=0.000s peers=0
+  skip  INTC   ⚪ WATCH  (2/4 Pillars)
+[TIMING] 2026-06-29T01:16:58 section=ticker event=start ticker=LRCX idx=22/94
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=start ticker=LRCX
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=end ticker=LRCX elapsed=0.001s
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=start ticker=LRCX
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=end ticker=LRCX elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=start ticker=LRCX
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=end ticker=LRCX elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=start ticker=LRCX
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=end ticker=LRCX elapsed=0.000s peers=0
+  skip  LRCX   ⚪ WATCH  (2/4 Pillars)
+[TIMING] 2026-06-29T01:16:58 section=ticker event=start ticker=STZ idx=23/94
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=start ticker=STZ
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=end ticker=STZ elapsed=0.001s
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=start ticker=STZ
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=end ticker=STZ elapsed=0.000s rating={'firm': 'TD Cowen', 'analyst': 'Seamus Cassidy', 'benzinga_analyst_id': '6a3eb415f11bb700014a9611', 'benzinga_firm_id': '57f832aa6b87f600016fa359', 'rating': 'buy', 'rating_action': 'assumes', 'price_target': 174.0, 'adjusted_price_target': 174.0, 'previous_price_target': None, 'price_percent_change': None, 'date': '2026-06-26', 'pt_raised': False, 'analyst_quality': None, 'top_analyst_backed': False, 'note': 'Assumes by TD Cowen → PT $174'}
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=start ticker=STZ
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=end ticker=STZ elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=start ticker=STZ
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=end ticker=STZ elapsed=0.000s peers=0
+  skip  STZ    🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:16:58 section=ticker event=start ticker=NKE idx=24/94
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=start ticker=NKE
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=end ticker=NKE elapsed=0.001s
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=start ticker=NKE
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=end ticker=NKE elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=start ticker=NKE
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=end ticker=NKE elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=start ticker=NKE
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=end ticker=NKE elapsed=0.000s peers=0
+  skip  NKE    🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:16:58 section=ticker event=start ticker=FDS idx=25/94
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=start ticker=FDS
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=end ticker=FDS elapsed=0.001s
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=start ticker=FDS
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=end ticker=FDS elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=start ticker=FDS
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=end ticker=FDS elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=start ticker=FDS
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=end ticker=FDS elapsed=0.000s peers=0
+  skip  FDS    ⚪ WATCH  (2/4 Pillars)
+[TIMING] 2026-06-29T01:16:58 section=ticker event=start ticker=AVAV idx=26/94
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=start ticker=AVAV
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=end ticker=AVAV elapsed=0.001s
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=start ticker=AVAV
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=end ticker=AVAV elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=start ticker=AVAV
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=end ticker=AVAV elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=start ticker=AVAV
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=end ticker=AVAV elapsed=0.000s peers=0
+  skip  AVAV   🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:16:58 section=ticker event=start ticker=CULP idx=27/94
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=start ticker=CULP
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=end ticker=CULP elapsed=0.001s
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=start ticker=CULP
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=end ticker=CULP elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=start ticker=CULP
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=end ticker=CULP elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=start ticker=CULP
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=end ticker=CULP elapsed=0.000s peers=0
+  skip  CULP     (0)
+[TIMING] 2026-06-29T01:16:58 section=ticker event=start ticker=CNVS idx=28/94
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=start ticker=CNVS
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=end ticker=CNVS elapsed=0.001s
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=start ticker=CNVS
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=end ticker=CNVS elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=start ticker=CNVS
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=end ticker=CNVS elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=start ticker=CNVS
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=end ticker=CNVS elapsed=0.000s peers=0
+  skip  CNVS     (0)
+[TIMING] 2026-06-29T01:16:58 section=ticker event=start ticker=XAIR idx=29/94
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=start ticker=XAIR
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=end ticker=XAIR elapsed=0.001s
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=start ticker=XAIR
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=end ticker=XAIR elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=start ticker=XAIR
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=end ticker=XAIR elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=start ticker=XAIR
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=end ticker=XAIR elapsed=0.000s peers=0
+  skip  XAIR     (0)
+[TIMING] 2026-06-29T01:16:58 section=ticker event=start ticker=APOG idx=30/94
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=start ticker=APOG
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=end ticker=APOG elapsed=0.001s
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=start ticker=APOG
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=end ticker=APOG elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=start ticker=APOG
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=end ticker=APOG elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=start ticker=APOG
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=end ticker=APOG elapsed=0.000s peers=0
+  block APOG   (2/4 Pillars) ⛔ EARNINGS in 0d — no new entry
+[TIMING] 2026-06-29T01:16:58 section=ticker event=start ticker=GBX idx=31/94
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=start ticker=GBX
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=end ticker=GBX elapsed=0.001s
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=start ticker=GBX
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=end ticker=GBX elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=start ticker=GBX
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=end ticker=GBX elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=start ticker=GBX
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=end ticker=GBX elapsed=0.000s peers=0
+  skip  GBX    🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:16:58 section=ticker event=start ticker=BSET idx=32/94
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=start ticker=BSET
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=end ticker=BSET elapsed=0.001s
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=start ticker=BSET
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=end ticker=BSET elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=start ticker=BSET
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=end ticker=BSET elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=start ticker=BSET
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=end ticker=BSET elapsed=0.000s peers=0
+  skip  BSET     (0)
+[TIMING] 2026-06-29T01:16:58 section=ticker event=start ticker=MSM idx=33/94
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=start ticker=MSM
+[TIMING] 2026-06-29T01:16:58 section=pending_pullback event=end ticker=MSM elapsed=0.001s
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=start ticker=MSM
+[TIMING] 2026-06-29T01:16:58 section=analyst_ratings_check event=end ticker=MSM elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=start ticker=MSM
+[TIMING] 2026-06-29T01:16:58 section=news_catalyst_check event=end ticker=MSM elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=start ticker=MSM
+[TIMING] 2026-06-29T01:16:58 section=sector_sweep_trigger event=end ticker=MSM elapsed=0.000s peers=0
+  block MSM    (3/4 Pillars) LATE_SESSION_CUTOFF: no new entries after 14:30 ET (17:17 ET)
+[TIMING] 2026-06-29T01:17:00 section=ticker event=start ticker=UNF idx=34/94
+[TIMING] 2026-06-29T01:17:00 section=pending_pullback event=start ticker=UNF
+[TIMING] 2026-06-29T01:17:00 section=pending_pullback event=end ticker=UNF elapsed=0.001s
+[TIMING] 2026-06-29T01:17:00 section=analyst_ratings_check event=start ticker=UNF
+[TIMING] 2026-06-29T01:17:00 section=analyst_ratings_check event=end ticker=UNF elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:00 section=news_catalyst_check event=start ticker=UNF
+[TIMING] 2026-06-29T01:17:00 section=news_catalyst_check event=end ticker=UNF elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:00 section=sector_sweep_trigger event=start ticker=UNF
+[TIMING] 2026-06-29T01:17:00 section=sector_sweep_trigger event=end ticker=UNF elapsed=0.000s peers=0
+  block UNF    (3/4 Pillars) LATE_SESSION_CUTOFF: no new entries after 14:30 ET (17:17 ET)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=LNN idx=35/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=LNN
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=LNN elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=LNN
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=LNN elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=LNN
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=LNN elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=LNN
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=LNN elapsed=0.000s peers=0
+  skip  LNN    🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=GIS idx=36/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=GIS
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=GIS elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=GIS
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=GIS elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=GIS
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=GIS elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=GIS
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=GIS elapsed=0.000s peers=0
+  skip  GIS    🔴 AVOID  (0/4 Pillars)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=FC idx=37/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=FC
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=FC elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=FC
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=FC elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=FC
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=FC elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=FC
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=FC elapsed=0.000s peers=0
+  skip  FC       (0)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=PRGS idx=38/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=PRGS
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=PRGS elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=PRGS
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=PRGS elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=PRGS
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=PRGS elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=PRGS
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=PRGS elapsed=0.000s peers=0
+  skip  PRGS   🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=CNXC idx=39/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=CNXC
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=CNXC elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=CNXC
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=CNXC elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=CNXC
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=CNXC elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=CNXC
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=CNXC elapsed=0.000s peers=0
+  skip  CNXC   🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=NVDA idx=40/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=NVDA
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=NVDA elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=NVDA
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=NVDA elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=NVDA
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=NVDA elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=NVDA
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=NVDA elapsed=0.000s peers=0
+  skip  NVDA   🔴 AVOID  (0/4 Pillars)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=AAPL idx=41/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=AAPL
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=AAPL elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=AAPL
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=AAPL elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=AAPL
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=AAPL elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=AAPL
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=AAPL elapsed=0.000s peers=0
+  skip  AAPL   🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=GOOGL idx=42/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=GOOGL
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=GOOGL elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=GOOGL
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=GOOGL elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=GOOGL
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=GOOGL elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=GOOGL
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=GOOGL elapsed=0.000s peers=0
+  skip  GOOGL  🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=GOOG idx=43/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=GOOG
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=GOOG elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=GOOG
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=GOOG elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=GOOG
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=GOOG elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=GOOG
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=GOOG elapsed=0.000s peers=0
+  skip  GOOG   🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=MSFT idx=44/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=MSFT
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=MSFT elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=MSFT
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=MSFT elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=MSFT
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=MSFT elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=MSFT
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=MSFT elapsed=0.000s peers=0
+  skip  MSFT   🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=AMZN idx=45/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=AMZN
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=AMZN elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=AMZN
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=AMZN elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=AMZN
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=AMZN elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=AMZN
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=AMZN elapsed=0.000s peers=0
+  skip  AMZN   🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=TSM idx=46/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=TSM
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=TSM elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=TSM
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=TSM elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=TSM
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=TSM elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=TSM
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=TSM elapsed=0.000s peers=0
+  skip  TSM    🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=AVGO idx=47/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=AVGO
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=AVGO elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=AVGO
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=AVGO elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=AVGO
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=AVGO elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=AVGO
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=AVGO elapsed=0.000s peers=0
+  skip  AVGO   🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=TSLA idx=48/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=TSLA
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=TSLA elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=TSLA
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=TSLA elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=TSLA
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=TSLA elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=TSLA
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=TSLA elapsed=0.000s peers=0
+  skip  TSLA   🔴 AVOID  (0/4 Pillars)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=META idx=49/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=META
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=META elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=META
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=META elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=META
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=META elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=META
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=META elapsed=0.000s peers=0
+  skip  META   🔴 AVOID  (0/4 Pillars)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=WMT idx=50/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=WMT
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=WMT elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=WMT
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=WMT elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=WMT
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=WMT elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=WMT
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=WMT elapsed=0.000s peers=0
+  skip  WMT    ⚪ WATCH  (2/4 Pillars)
+[TIMING] 2026-06-29T01:17:02 section=ticker event=start ticker=JPM idx=51/94
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=start ticker=JPM
+[TIMING] 2026-06-29T01:17:02 section=pending_pullback event=end ticker=JPM elapsed=0.001s
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=start ticker=JPM
+[TIMING] 2026-06-29T01:17:02 section=analyst_ratings_check event=end ticker=JPM elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=start ticker=JPM
+[TIMING] 2026-06-29T01:17:02 section=news_catalyst_check event=end ticker=JPM elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=start ticker=JPM
+[TIMING] 2026-06-29T01:17:02 section=sector_sweep_trigger event=end ticker=JPM elapsed=0.000s peers=0
+  block JPM    (3/4 Pillars) LATE_SESSION_CUTOFF: no new entries after 14:30 ET (17:17 ET)
+[TIMING] 2026-06-29T01:17:04 section=ticker event=start ticker=AMD idx=52/94
+[TIMING] 2026-06-29T01:17:04 section=pending_pullback event=start ticker=AMD
+[TIMING] 2026-06-29T01:17:04 section=pending_pullback event=end ticker=AMD elapsed=0.001s
+[TIMING] 2026-06-29T01:17:04 section=analyst_ratings_check event=start ticker=AMD
+[TIMING] 2026-06-29T01:17:04 section=analyst_ratings_check event=end ticker=AMD elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:04 section=news_catalyst_check event=start ticker=AMD
+[TIMING] 2026-06-29T01:17:04 section=news_catalyst_check event=end ticker=AMD elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:04 section=sector_sweep_trigger event=start ticker=AMD
+[TIMING] 2026-06-29T01:17:04 section=sector_sweep_trigger event=end ticker=AMD elapsed=0.000s peers=0
+  skip  AMD    🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:04 section=ticker event=start ticker=V idx=53/94
+[TIMING] 2026-06-29T01:17:04 section=pending_pullback event=start ticker=V
+[TIMING] 2026-06-29T01:17:04 section=pending_pullback event=end ticker=V elapsed=0.001s
+[TIMING] 2026-06-29T01:17:04 section=analyst_ratings_check event=start ticker=V
+[TIMING] 2026-06-29T01:17:04 section=analyst_ratings_check event=end ticker=V elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:04 section=news_catalyst_check event=start ticker=V
+[TIMING] 2026-06-29T01:17:04 section=news_catalyst_check event=end ticker=V elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:04 section=sector_sweep_trigger event=start ticker=V
+[TIMING] 2026-06-29T01:17:04 section=sector_sweep_trigger event=end ticker=V elapsed=0.000s peers=0
+  skip  V      🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:04 section=ticker event=start ticker=XOM idx=54/94
+[TIMING] 2026-06-29T01:17:04 section=pending_pullback event=start ticker=XOM
+[TIMING] 2026-06-29T01:17:04 section=pending_pullback event=end ticker=XOM elapsed=0.001s
+[TIMING] 2026-06-29T01:17:04 section=analyst_ratings_check event=start ticker=XOM
+[TIMING] 2026-06-29T01:17:04 section=analyst_ratings_check event=end ticker=XOM elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:04 section=news_catalyst_check event=start ticker=XOM
+[TIMING] 2026-06-29T01:17:04 section=news_catalyst_check event=end ticker=XOM elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:04 section=sector_sweep_trigger event=start ticker=XOM
+[TIMING] 2026-06-29T01:17:04 section=sector_sweep_trigger event=end ticker=XOM elapsed=0.000s peers=0
+  skip  XOM    🔴 AVOID  (0/4 Pillars)
+[TIMING] 2026-06-29T01:17:04 section=ticker event=start ticker=CSCO idx=55/94
+[TIMING] 2026-06-29T01:17:04 section=pending_pullback event=start ticker=CSCO
+[TIMING] 2026-06-29T01:17:04 section=pending_pullback event=end ticker=CSCO elapsed=0.000s
+[TIMING] 2026-06-29T01:17:04 section=analyst_ratings_check event=start ticker=CSCO
+[TIMING] 2026-06-29T01:17:04 section=analyst_ratings_check event=end ticker=CSCO elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:04 section=news_catalyst_check event=start ticker=CSCO
+[TIMING] 2026-06-29T01:17:04 section=news_catalyst_check event=end ticker=CSCO elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:04 section=sector_sweep_trigger event=start ticker=CSCO
+[TIMING] 2026-06-29T01:17:04 section=sector_sweep_trigger event=end ticker=CSCO elapsed=0.000s peers=0
+  block CSCO   (3/4 Pillars) LATE_SESSION_CUTOFF: no new entries after 14:30 ET (17:17 ET)
+[TIMING] 2026-06-29T01:17:06 section=ticker event=start ticker=ABBV idx=56/94
+[TIMING] 2026-06-29T01:17:06 section=pending_pullback event=start ticker=ABBV
+[TIMING] 2026-06-29T01:17:06 section=pending_pullback event=end ticker=ABBV elapsed=0.001s
+[TIMING] 2026-06-29T01:17:06 section=analyst_ratings_check event=start ticker=ABBV
+[TIMING] 2026-06-29T01:17:06 section=analyst_ratings_check event=end ticker=ABBV elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:06 section=news_catalyst_check event=start ticker=ABBV
+[TIMING] 2026-06-29T01:17:06 section=news_catalyst_check event=end ticker=ABBV elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:06 section=sector_sweep_trigger event=start ticker=ABBV
+[TIMING] 2026-06-29T01:17:06 section=sector_sweep_trigger event=end ticker=ABBV elapsed=0.000s peers=0
+  block ABBV   (3/4 Pillars) LATE_SESSION_CUTOFF: no new entries after 14:30 ET (17:17 ET)
+[TIMING] 2026-06-29T01:17:09 section=ticker event=start ticker=ORCL idx=57/94
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=start ticker=ORCL
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=end ticker=ORCL elapsed=0.001s
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=start ticker=ORCL
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=end ticker=ORCL elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=start ticker=ORCL
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=end ticker=ORCL elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=start ticker=ORCL
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=end ticker=ORCL elapsed=0.000s peers=0
+  skip  ORCL   🔴 AVOID  (0/4 Pillars)
+[TIMING] 2026-06-29T01:17:09 section=ticker event=start ticker=UNH idx=58/94
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=start ticker=UNH
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=end ticker=UNH elapsed=0.001s
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=start ticker=UNH
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=end ticker=UNH elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=start ticker=UNH
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=end ticker=UNH elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=start ticker=UNH
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=end ticker=UNH elapsed=0.000s peers=0
+  skip  UNH    ⚪ WATCH  (2/4 Pillars)
+[TIMING] 2026-06-29T01:17:09 section=ticker event=start ticker=GE idx=59/94
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=start ticker=GE
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=end ticker=GE elapsed=0.001s
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=start ticker=GE
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=end ticker=GE elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=start ticker=GE
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=end ticker=GE elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=start ticker=GE
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=end ticker=GE elapsed=0.000s peers=0
+  skip  GE     ⚪ WATCH  (2/4 Pillars)
+[TIMING] 2026-06-29T01:17:09 section=ticker event=start ticker=ARM idx=60/94
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=start ticker=ARM
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=end ticker=ARM elapsed=0.001s
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=start ticker=ARM
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=end ticker=ARM elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=start ticker=ARM
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=end ticker=ARM elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=start ticker=ARM
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=end ticker=ARM elapsed=0.000s peers=0
+  skip  ARM    ⚪ WATCH  (2/4 Pillars)
+[TIMING] 2026-06-29T01:17:09 section=ticker event=start ticker=PG idx=61/94
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=start ticker=PG
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=end ticker=PG elapsed=0.001s
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=start ticker=PG
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=end ticker=PG elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=start ticker=PG
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=end ticker=PG elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=start ticker=PG
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=end ticker=PG elapsed=0.000s peers=0
+  skip  PG     🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:09 section=ticker event=start ticker=CVX idx=62/94
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=start ticker=CVX
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=end ticker=CVX elapsed=0.001s
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=start ticker=CVX
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=end ticker=CVX elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=start ticker=CVX
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=end ticker=CVX elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=start ticker=CVX
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=end ticker=CVX elapsed=0.000s peers=0
+  skip  CVX    🔴 AVOID  (0/4 Pillars)
+[TIMING] 2026-06-29T01:17:09 section=ticker event=start ticker=MIC idx=63/94
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=start ticker=MIC
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=end ticker=MIC elapsed=0.001s
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=start ticker=MIC
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=end ticker=MIC elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=start ticker=MIC
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=end ticker=MIC elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=start ticker=MIC
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=end ticker=MIC elapsed=0.000s peers=0
+  skip  MIC      (0)
+[TIMING] 2026-06-29T01:17:09 section=ticker event=start ticker=SDOT idx=64/94
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=start ticker=SDOT
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=end ticker=SDOT elapsed=0.001s
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=start ticker=SDOT
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=end ticker=SDOT elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=start ticker=SDOT
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=end ticker=SDOT elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=start ticker=SDOT
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=end ticker=SDOT elapsed=0.000s peers=0
+  skip  SDOT   ⚪ WATCH  (2/4 Pillars)
+[TIMING] 2026-06-29T01:17:09 section=ticker event=start ticker=GOGL idx=65/94
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=start ticker=GOGL
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=end ticker=GOGL elapsed=0.001s
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=start ticker=GOGL
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=end ticker=GOGL elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=start ticker=GOGL
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=end ticker=GOGL elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=start ticker=GOGL
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=end ticker=GOGL elapsed=0.000s peers=0
+  skip  GOGL   🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:09 section=ticker event=start ticker=PCLA idx=66/94
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=start ticker=PCLA
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=end ticker=PCLA elapsed=0.001s
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=start ticker=PCLA
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=end ticker=PCLA elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=start ticker=PCLA
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=end ticker=PCLA elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=start ticker=PCLA
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=end ticker=PCLA elapsed=0.000s peers=0
+  skip  PCLA     (0)
+[TIMING] 2026-06-29T01:17:09 section=ticker event=start ticker=WSHP idx=67/94
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=start ticker=WSHP
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=end ticker=WSHP elapsed=0.001s
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=start ticker=WSHP
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=end ticker=WSHP elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=start ticker=WSHP
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=end ticker=WSHP elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=start ticker=WSHP
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=end ticker=WSHP elapsed=0.000s peers=0
+  skip  WSHP     (0)
+[TIMING] 2026-06-29T01:17:09 section=ticker event=start ticker=NVC idx=68/94
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=start ticker=NVC
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=end ticker=NVC elapsed=0.001s
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=start ticker=NVC
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=end ticker=NVC elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=start ticker=NVC
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=end ticker=NVC elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=start ticker=NVC
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=end ticker=NVC elapsed=0.000s peers=0
+  skip  NVC      (0)
+[TIMING] 2026-06-29T01:17:09 section=ticker event=start ticker=CDE idx=69/94
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=start ticker=CDE
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=end ticker=CDE elapsed=0.001s
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=start ticker=CDE
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=end ticker=CDE elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=start ticker=CDE
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=end ticker=CDE elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=start ticker=CDE
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=end ticker=CDE elapsed=0.000s peers=0
+  skip  CDE    ⚪ WATCH  (2/4 Pillars)
+[TIMING] 2026-06-29T01:17:09 section=ticker event=start ticker=NOK idx=70/94
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=start ticker=NOK
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=end ticker=NOK elapsed=0.001s
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=start ticker=NOK
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=end ticker=NOK elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=start ticker=NOK
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=end ticker=NOK elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=start ticker=NOK
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=end ticker=NOK elapsed=0.000s peers=0
+  skip  NOK    🔴 AVOID  (0/4 Pillars)
+[TIMING] 2026-06-29T01:17:09 section=ticker event=start ticker=SPCX idx=71/94
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=start ticker=SPCX
+[TIMING] 2026-06-29T01:17:09 section=pending_pullback event=end ticker=SPCX elapsed=0.001s
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=start ticker=SPCX
+[TIMING] 2026-06-29T01:17:09 section=analyst_ratings_check event=end ticker=SPCX elapsed=0.000s rating={'firm': 'Argus Research', 'analyst': '', 'benzinga_analyst_id': '', 'benzinga_firm_id': '57f832aa6b87f600016fa36a', 'rating': 'hold', 'rating_action': 'initiates_coverage_on', 'price_target': None, 'adjusted_price_target': None, 'previous_price_target': None, 'price_percent_change': None, 'date': '2026-06-26', 'pt_raised': False, 'analyst_quality': None, 'top_analyst_backed': False, 'note': 'Initiates Coverage On by Argus Research → PT N/A'}
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=start ticker=SPCX
+[TIMING] 2026-06-29T01:17:09 section=news_catalyst_check event=end ticker=SPCX elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=start ticker=SPCX
+[TIMING] 2026-06-29T01:17:09 section=sector_sweep_trigger event=end ticker=SPCX elapsed=0.000s peers=0
+  block SPCX   (3/4 Pillars) LATE_SESSION_CUTOFF: no new entries after 14:30 ET (17:17 ET)
+[TIMING] 2026-06-29T01:17:11 section=ticker event=start ticker=ONDS idx=72/94
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=start ticker=ONDS
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=end ticker=ONDS elapsed=0.001s
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=start ticker=ONDS
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=end ticker=ONDS elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=start ticker=ONDS
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=end ticker=ONDS elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=start ticker=ONDS
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=end ticker=ONDS elapsed=0.000s peers=0
+  skip  ONDS   ⚪ WATCH  (2/4 Pillars)
+[TIMING] 2026-06-29T01:17:11 section=ticker event=start ticker=KEEL idx=73/94
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=start ticker=KEEL
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=end ticker=KEEL elapsed=0.001s
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=start ticker=KEEL
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=end ticker=KEEL elapsed=0.000s rating={'firm': 'Citizens', 'analyst': 'Greg P. Miller', 'benzinga_analyst_id': '6891ff12ce665b00013ae12b', 'benzinga_firm_id': '57f832aa6b87f600016fa36e', 'rating': 'market outperform', 'rating_action': 'initiates_coverage_on', 'price_target': 10.0, 'adjusted_price_target': 10.0, 'previous_price_target': None, 'price_percent_change': None, 'date': '2026-06-24', 'pt_raised': False, 'analyst_quality': {'benzinga_firm_id': '57f832aa6b87f600016fa36e', 'benzinga_id': '6891ff12ce665b00013ae12b', 'firm_match': True, 'firm_name': 'Citizens', 'full_name': 'Greg P. Miller', 'overall_avg_return': 17.41, 'overall_success_rate': 64.29, 'smart_score': 64.17, 'summary': None, 'top_analyst': False, 'total_ratings': 14.0}, 'top_analyst_backed': False, 'note': 'Initiates Coverage On by Citizens → PT $10'}
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=start ticker=KEEL
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=end ticker=KEEL elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=start ticker=KEEL
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=end ticker=KEEL elapsed=0.000s peers=0
+  skip  KEEL   ⚪ WATCH  (2/4 Pillars)
+[TIMING] 2026-06-29T01:17:11 section=ticker event=start ticker=HL idx=74/94
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=start ticker=HL
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=end ticker=HL elapsed=0.001s
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=start ticker=HL
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=end ticker=HL elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=start ticker=HL
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=end ticker=HL elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=start ticker=HL
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=end ticker=HL elapsed=0.000s peers=0
+  skip  HL     🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:11 section=ticker event=start ticker=SOFI idx=75/94
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=start ticker=SOFI
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=end ticker=SOFI elapsed=0.001s
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=start ticker=SOFI
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=end ticker=SOFI elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=start ticker=SOFI
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=end ticker=SOFI elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=start ticker=SOFI
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=end ticker=SOFI elapsed=0.000s peers=0
+  skip  SOFI   🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:11 section=ticker event=start ticker=T idx=76/94
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=start ticker=T
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=end ticker=T elapsed=0.001s
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=start ticker=T
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=end ticker=T elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=start ticker=T
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=end ticker=T elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=start ticker=T
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=end ticker=T elapsed=0.000s peers=0
+  skip  T      🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:11 section=ticker event=start ticker=NWL idx=77/94
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=start ticker=NWL
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=end ticker=NWL elapsed=0.001s
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=start ticker=NWL
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=end ticker=NWL elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=start ticker=NWL
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=end ticker=NWL elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=start ticker=NWL
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=end ticker=NWL elapsed=0.000s peers=0
+  skip  NWL    🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:11 section=ticker event=start ticker=WEN idx=78/94
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=start ticker=WEN
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=end ticker=WEN elapsed=0.001s
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=start ticker=WEN
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=end ticker=WEN elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=start ticker=WEN
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=end ticker=WEN elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=start ticker=WEN
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=end ticker=WEN elapsed=0.000s peers=0
+  block WEN    (2/4 Pillars) LATE_SESSION_CUTOFF: no new entries after 14:30 ET (17:17 ET)
+[TIMING] 2026-06-29T01:17:11 section=ticker event=start ticker=NFLX idx=79/94
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=start ticker=NFLX
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=end ticker=NFLX elapsed=0.001s
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=start ticker=NFLX
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=end ticker=NFLX elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=start ticker=NFLX
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=end ticker=NFLX elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=start ticker=NFLX
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=end ticker=NFLX elapsed=0.000s peers=0
+  skip  NFLX   🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:11 section=ticker event=start ticker=HON idx=80/94
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=start ticker=HON
+[TIMING] 2026-06-29T01:17:11 section=pending_pullback event=end ticker=HON elapsed=0.001s
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=start ticker=HON
+[TIMING] 2026-06-29T01:17:11 section=analyst_ratings_check event=end ticker=HON elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=start ticker=HON
+[TIMING] 2026-06-29T01:17:11 section=news_catalyst_check event=end ticker=HON elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=start ticker=HON
+[TIMING] 2026-06-29T01:17:11 section=sector_sweep_trigger event=end ticker=HON elapsed=0.000s peers=0
+  block HON    (3/4 Pillars) LATE_SESSION_CUTOFF: no new entries after 14:30 ET (17:17 ET)
+[TIMING] 2026-06-29T01:17:13 section=ticker event=start ticker=DFTX idx=81/94
+[TIMING] 2026-06-29T01:17:13 section=pending_pullback event=start ticker=DFTX
+[TIMING] 2026-06-29T01:17:13 section=pending_pullback event=end ticker=DFTX elapsed=0.001s
+[TIMING] 2026-06-29T01:17:13 section=analyst_ratings_check event=start ticker=DFTX
+[TIMING] 2026-06-29T01:17:13 section=analyst_ratings_check event=end ticker=DFTX elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:13 section=news_catalyst_check event=start ticker=DFTX
+[TIMING] 2026-06-29T01:17:13 section=news_catalyst_check event=end ticker=DFTX elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:13 section=sector_sweep_trigger event=start ticker=DFTX
+[TIMING] 2026-06-29T01:17:13 section=sector_sweep_trigger event=end ticker=DFTX elapsed=0.000s peers=0
+  skip  DFTX   ⚪ WATCH  (2/4 Pillars)
+[TIMING] 2026-06-29T01:17:13 section=ticker event=start ticker=BLZE idx=82/94
+[TIMING] 2026-06-29T01:17:13 section=pending_pullback event=start ticker=BLZE
+[TIMING] 2026-06-29T01:17:13 section=pending_pullback event=end ticker=BLZE elapsed=0.001s
+[TIMING] 2026-06-29T01:17:13 section=analyst_ratings_check event=start ticker=BLZE
+[TIMING] 2026-06-29T01:17:13 section=analyst_ratings_check event=end ticker=BLZE elapsed=0.000s rating={'firm': 'Craig-Hallum', 'analyst': 'Jeff Van Rhee', 'benzinga_analyst_id': '591479b9290fa7000138e4bb', 'benzinga_firm_id': '606c62f26538960001891011', 'rating': 'buy', 'rating_action': 'upgrades', 'price_target': 16.0, 'adjusted_price_target': 16.0, 'previous_price_target': 6.5, 'price_percent_change': 146.14999389648438, 'date': '2026-06-23', 'pt_raised': True, 'analyst_quality': {'benzinga_firm_id': '606c62f26538960001891011', 'benzinga_id': '591479b9290fa7000138e4bb', 'firm_match': True, 'firm_name': 'Craig-Hallum', 'full_name': 'Jeff Van Rhee', 'overall_avg_return': 18.75, 'overall_success_rate': 57.41, 'smart_score': 68.58, 'summary': None, 'top_analyst': False, 'total_ratings': 54.0}, 'top_analyst_backed': False, 'note': 'Upgrades by Craig-Hallum → PT $16 (PT raised)'}
+[TIMING] 2026-06-29T01:17:13 section=news_catalyst_check event=start ticker=BLZE
+[TIMING] 2026-06-29T01:17:13 section=news_catalyst_check event=end ticker=BLZE elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:13 section=sector_sweep_trigger event=start ticker=BLZE
+[TIMING] 2026-06-29T01:17:13 section=sector_sweep_trigger event=end ticker=BLZE elapsed=0.000s peers=0
+  🚀 TOO EXTENDED — BLZE (+35.0% over 10-EMA): no trade, watching for base/consolidation.
+[TIMING] 2026-06-29T01:17:17 section=ticker event=start ticker=SLS idx=83/94
+[TIMING] 2026-06-29T01:17:17 section=pending_pullback event=start ticker=SLS
+[TIMING] 2026-06-29T01:17:17 section=pending_pullback event=end ticker=SLS elapsed=0.001s
+[TIMING] 2026-06-29T01:17:17 section=analyst_ratings_check event=start ticker=SLS
+[TIMING] 2026-06-29T01:17:17 section=analyst_ratings_check event=end ticker=SLS elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:17 section=news_catalyst_check event=start ticker=SLS
+[TIMING] 2026-06-29T01:17:17 section=news_catalyst_check event=end ticker=SLS elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:17 section=sector_sweep_trigger event=start ticker=SLS
+[TIMING] 2026-06-29T01:17:17 section=sector_sweep_trigger event=end ticker=SLS elapsed=0.000s peers=0
+  🚀 TOO EXTENDED — SLS (+29.9% over 10-EMA): no trade, watching for base/consolidation.
+[TIMING] 2026-06-29T01:17:20 section=ticker event=start ticker=LILAK idx=84/94
+[TIMING] 2026-06-29T01:17:20 section=pending_pullback event=start ticker=LILAK
+[TIMING] 2026-06-29T01:17:20 section=pending_pullback event=end ticker=LILAK elapsed=0.001s
+[TIMING] 2026-06-29T01:17:20 section=analyst_ratings_check event=start ticker=LILAK
+[TIMING] 2026-06-29T01:17:20 section=analyst_ratings_check event=end ticker=LILAK elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:20 section=news_catalyst_check event=start ticker=LILAK
+[TIMING] 2026-06-29T01:17:20 section=news_catalyst_check event=end ticker=LILAK elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:20 section=sector_sweep_trigger event=start ticker=LILAK
+[TIMING] 2026-06-29T01:17:20 section=sector_sweep_trigger event=end ticker=LILAK elapsed=0.000s peers=0
+  skip  LILAK  🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:20 section=ticker event=start ticker=ABSI idx=85/94
+[TIMING] 2026-06-29T01:17:20 section=pending_pullback event=start ticker=ABSI
+[TIMING] 2026-06-29T01:17:20 section=pending_pullback event=end ticker=ABSI elapsed=0.001s
+[TIMING] 2026-06-29T01:17:20 section=analyst_ratings_check event=start ticker=ABSI
+[TIMING] 2026-06-29T01:17:20 section=analyst_ratings_check event=end ticker=ABSI elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:20 section=news_catalyst_check event=start ticker=ABSI
+[TIMING] 2026-06-29T01:17:20 section=news_catalyst_check event=end ticker=ABSI elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:20 section=sector_sweep_trigger event=start ticker=ABSI
+[TIMING] 2026-06-29T01:17:20 section=sector_sweep_trigger event=end ticker=ABSI elapsed=0.000s peers=0
+  🚀 TOO EXTENDED — ABSI (+26.5% over 10-EMA): no trade, watching for base/consolidation.
+[TIMING] 2026-06-29T01:17:24 section=ticker event=start ticker=APGE idx=86/94
+[TIMING] 2026-06-29T01:17:24 section=pending_pullback event=start ticker=APGE
+[TIMING] 2026-06-29T01:17:24 section=pending_pullback event=end ticker=APGE elapsed=0.001s
+[TIMING] 2026-06-29T01:17:24 section=analyst_ratings_check event=start ticker=APGE
+[TIMING] 2026-06-29T01:17:24 section=analyst_ratings_check event=end ticker=APGE elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:24 section=news_catalyst_check event=start ticker=APGE
+[TIMING] 2026-06-29T01:17:24 section=news_catalyst_check event=end ticker=APGE elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:24 section=sector_sweep_trigger event=start ticker=APGE
+[TIMING] 2026-06-29T01:17:24 section=sector_sweep_trigger event=end ticker=APGE elapsed=0.000s peers=0
+  ⏳ WAITING FOR PULLBACK — APGE (3/4 Pillars): price $132.55 = +14.4% over 10-EMA. Limit armed at $116.41 (3-day window).
+[TIMING] 2026-06-29T01:17:29 section=ticker event=start ticker=ZURA idx=87/94
+[TIMING] 2026-06-29T01:17:29 section=pending_pullback event=start ticker=ZURA
+[TIMING] 2026-06-29T01:17:29 section=pending_pullback event=end ticker=ZURA elapsed=0.001s
+[TIMING] 2026-06-29T01:17:29 section=analyst_ratings_check event=start ticker=ZURA
+[TIMING] 2026-06-29T01:17:29 section=analyst_ratings_check event=end ticker=ZURA elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:29 section=news_catalyst_check event=start ticker=ZURA
+[TIMING] 2026-06-29T01:17:29 section=news_catalyst_check event=end ticker=ZURA elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:29 section=sector_sweep_trigger event=start ticker=ZURA
+[TIMING] 2026-06-29T01:17:29 section=sector_sweep_trigger event=end ticker=ZURA elapsed=0.000s peers=0
+  skip  ZURA   🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:29 section=ticker event=start ticker=GRPN idx=88/94
+[TIMING] 2026-06-29T01:17:29 section=pending_pullback event=start ticker=GRPN
+[TIMING] 2026-06-29T01:17:29 section=pending_pullback event=end ticker=GRPN elapsed=0.001s
+[TIMING] 2026-06-29T01:17:29 section=analyst_ratings_check event=start ticker=GRPN
+[TIMING] 2026-06-29T01:17:29 section=analyst_ratings_check event=end ticker=GRPN elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:29 section=news_catalyst_check event=start ticker=GRPN
+[TIMING] 2026-06-29T01:17:29 section=news_catalyst_check event=end ticker=GRPN elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:29 section=sector_sweep_trigger event=start ticker=GRPN
+[TIMING] 2026-06-29T01:17:29 section=sector_sweep_trigger event=end ticker=GRPN elapsed=0.000s peers=0
+  skip  GRPN   🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:29 section=ticker event=start ticker=HELP idx=89/94
+[TIMING] 2026-06-29T01:17:29 section=pending_pullback event=start ticker=HELP
+[TIMING] 2026-06-29T01:17:29 section=pending_pullback event=end ticker=HELP elapsed=0.001s
+[TIMING] 2026-06-29T01:17:29 section=analyst_ratings_check event=start ticker=HELP
+[TIMING] 2026-06-29T01:17:29 section=analyst_ratings_check event=end ticker=HELP elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:29 section=news_catalyst_check event=start ticker=HELP
+[TIMING] 2026-06-29T01:17:29 section=news_catalyst_check event=end ticker=HELP elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:29 section=sector_sweep_trigger event=start ticker=HELP
+[TIMING] 2026-06-29T01:17:29 section=sector_sweep_trigger event=end ticker=HELP elapsed=0.000s peers=0
+  skip  HELP   ⚪ WATCH  (2/4 Pillars)
+[TIMING] 2026-06-29T01:17:29 section=ticker event=start ticker=FCEL idx=90/94
+[TIMING] 2026-06-29T01:17:29 section=pending_pullback event=start ticker=FCEL
+[TIMING] 2026-06-29T01:17:29 section=pending_pullback event=end ticker=FCEL elapsed=0.001s
+[TIMING] 2026-06-29T01:17:29 section=analyst_ratings_check event=start ticker=FCEL
+[TIMING] 2026-06-29T01:17:29 section=analyst_ratings_check event=end ticker=FCEL elapsed=0.000s rating={'firm': 'Jefferies', 'analyst': 'Dushyant Ailani', 'benzinga_analyst_id': '635001642cec4c00018c23d3', 'benzinga_firm_id': '6065ca27a93f970001f2c7fe', 'rating': 'buy', 'rating_action': 'upgrades', 'price_target': 24.0, 'adjusted_price_target': 24.0, 'previous_price_target': 16.0, 'price_percent_change': 50.0, 'date': '2026-06-26', 'pt_raised': True, 'analyst_quality': {'benzinga_firm_id': '6065ca27a93f970001f2c7fe', 'benzinga_id': '635001642cec4c00018c23d3', 'firm_match': True, 'firm_name': 'Jefferies', 'full_name': 'Dushyant Ailani', 'overall_avg_return': -29.62, 'overall_success_rate': 50.0, 'smart_score': 37.08, 'summary': None, 'top_analyst': False, 'total_ratings': 16.0}, 'top_analyst_backed': False, 'note': 'Upgrades by Jefferies → PT $24 (PT raised)'}
+[TIMING] 2026-06-29T01:17:29 section=news_catalyst_check event=start ticker=FCEL
+[TIMING] 2026-06-29T01:17:29 section=news_catalyst_check event=end ticker=FCEL elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:29 section=sector_sweep_trigger event=start ticker=FCEL
+[TIMING] 2026-06-29T01:17:29 section=sector_sweep_trigger event=end ticker=FCEL elapsed=0.000s peers=0
+  block FCEL   (3/4 Pillars) LATE_SESSION_CUTOFF: no new entries after 14:30 ET (17:17 ET)
+[TIMING] 2026-06-29T01:17:32 section=ticker event=start ticker=LCID idx=91/94
+[TIMING] 2026-06-29T01:17:32 section=pending_pullback event=start ticker=LCID
+[TIMING] 2026-06-29T01:17:32 section=pending_pullback event=end ticker=LCID elapsed=0.001s
+[TIMING] 2026-06-29T01:17:32 section=analyst_ratings_check event=start ticker=LCID
+[TIMING] 2026-06-29T01:17:32 section=analyst_ratings_check event=end ticker=LCID elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:32 section=news_catalyst_check event=start ticker=LCID
+[TIMING] 2026-06-29T01:17:32 section=news_catalyst_check event=end ticker=LCID elapsed=0.000s catalyst=no
+[TIMING] 2026-06-29T01:17:32 section=sector_sweep_trigger event=start ticker=LCID
+[TIMING] 2026-06-29T01:17:32 section=sector_sweep_trigger event=end ticker=LCID elapsed=0.000s peers=0
+  skip  LCID   🔴 AVOID  (1/4 Pillars)
+[TIMING] 2026-06-29T01:17:32 section=ticker event=start ticker=ATAI idx=92/94
+[TIMING] 2026-06-29T01:17:32 section=pending_pullback event=start ticker=ATAI
+[TIMING] 2026-06-29T01:17:32 section=pending_pullback event=end ticker=ATAI elapsed=0.001s
+[TIMING] 2026-06-29T01:17:32 section=analyst_ratings_check event=start ticker=ATAI
+[TIMING] 2026-06-29T01:17:32 section=analyst_ratings_check event=end ticker=ATAI elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:32 section=news_catalyst_check event=start ticker=ATAI
+[TIMING] 2026-06-29T01:17:32 section=news_catalyst_check event=end ticker=ATAI elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:32 section=sector_sweep_trigger event=start ticker=ATAI
+[TIMING] 2026-06-29T01:17:32 section=sector_sweep_trigger event=end ticker=ATAI elapsed=0.000s peers=0
+  skip  ATAI   ⚪ WATCH  (2/4 Pillars)
+[TIMING] 2026-06-29T01:17:32 section=ticker event=start ticker=SPT idx=93/94
+[TIMING] 2026-06-29T01:17:32 section=pending_pullback event=start ticker=SPT
+[TIMING] 2026-06-29T01:17:32 section=pending_pullback event=end ticker=SPT elapsed=0.001s
+[TIMING] 2026-06-29T01:17:32 section=analyst_ratings_check event=start ticker=SPT
+[TIMING] 2026-06-29T01:17:32 section=analyst_ratings_check event=end ticker=SPT elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:32 section=news_catalyst_check event=start ticker=SPT
+[TIMING] 2026-06-29T01:17:32 section=news_catalyst_check event=end ticker=SPT elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:32 section=sector_sweep_trigger event=start ticker=SPT
+[TIMING] 2026-06-29T01:17:32 section=sector_sweep_trigger event=end ticker=SPT elapsed=0.000s peers=0
+  block SPT    (2/4 Pillars) LATE_SESSION_CUTOFF: no new entries after 14:30 ET (17:17 ET)
+[TIMING] 2026-06-29T01:17:32 section=ticker event=start ticker=GENI idx=94/94
+[TIMING] 2026-06-29T01:17:32 section=pending_pullback event=start ticker=GENI
+[TIMING] 2026-06-29T01:17:32 section=pending_pullback event=end ticker=GENI elapsed=0.001s
+[TIMING] 2026-06-29T01:17:32 section=analyst_ratings_check event=start ticker=GENI
+[TIMING] 2026-06-29T01:17:32 section=analyst_ratings_check event=end ticker=GENI elapsed=0.000s rating=none
+[TIMING] 2026-06-29T01:17:32 section=news_catalyst_check event=start ticker=GENI
+[TIMING] 2026-06-29T01:17:32 section=news_catalyst_check event=end ticker=GENI elapsed=0.000s catalyst=yes
+[TIMING] 2026-06-29T01:17:32 section=sector_sweep_trigger event=start ticker=GENI
+[TIMING] 2026-06-29T01:17:32 section=sector_sweep_trigger event=end ticker=GENI elapsed=0.000s peers=0
+  skip  GENI   ⚪ WATCH  (2/4 Pillars)
+[TIMING] 2026-06-29T01:17:32 section=ticker_loop event=end elapsed=180.301s processed=94 scanned=75 candidates_final=94
+  [handoff] saved 0 BUY / 77 WATCH for 2026-06-26
+
+====================================================================
+  SUMMARY
+====================================================================
+  Sells planned  : 0
+  Buys planned   : 0
+  Cash now       : $22,472.74
+  Equity now     : $29,125.74
+--------------------------------------------------------------------
+  This was a DRY-RUN. Re-run with --live to execute.
+====================================================================
+
+Errors/Warnings: [2026-06-28T21:14:40+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:41+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:41+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:41+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:41+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:42+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:42+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:42+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:46+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:46+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:47+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:47+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:47+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:47+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:48+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:48+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:52+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:53+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:53+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:53+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:54+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:54+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:54+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:55+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:58+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:59+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:59+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:14:59+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:00+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:00+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:00+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:05+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:05+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:06+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:06+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:06+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:07+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:07+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:07+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:11+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:11+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:12+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:12+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:12+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:13+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:13+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:14+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:20+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:21+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:21+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:21+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:22+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:22+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:22+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:23+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:26+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:28+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:28+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:29+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:29+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:29+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:29+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:30+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:32+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:35+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:35+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:35+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:35+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:36+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:36+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:37+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:38+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:41+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:41+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:42+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:43+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:43+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:45+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:45+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:46+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:47+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:48+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:48+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:48+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:15:49+00:00] vault_client: pushed signal {'signals': 1} synced={'signals': 1, 'positions': 0, 'handoff': 0, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+[2026-06-28T21:17:32+00:00] vault_client: pushed handoff {'handoff': 1} synced={'signals': 0, 'positions': 0, 'handoff': 1, 'trades': 0, 'cash': 0, 'decisions': 0, 'documents': 0, 'thesis': 0, 'valueSnapshots': 0}
+
+Result: DO NOTHING. No new buys, no exits this cycle.
+
+[intraday] telegram report body begin
+🦅 ATLAS INTRADAY — 5:17 PM ET
+📡 🟢 RISK-ON · SPY $728.99 · ⚠️ Fed/CPI day — cautious · 🧠 CAUTION: broad market/semis pressure
+💰 Equity $29,126 · Cash $22,473 · 3 positions
+
+━━━ ACTIONS ━━━
+🛒 BUY (29)
+   • AAL (American Airlines Group) — $18 · stop $17 · target $22 · 4/4 Pillars · 0.5% risk
+   • ELVN (Enliven Therapeutics) — $50 · stop $44 · target $63 · 4/4 Pillars · 0.5% risk
+   • JNJ (Johnson & Johnson) — $255 · stop $246 · target $318 · 4/4 Pillars · 0.5% risk
+   • MRK (Merck) — $129 · stop $124 · target $161 · 4/4 Pillars · 0.5% risk
+   • RL (Ralph Lauren) — $411 · stop $391 · target $514 · 4/4 Pillars · 0.5% risk
+   • SLS (SELLAS Life Sciences Group) — $12 · stop $11 · target $15 · 4/4 Pillars · 0.5% risk
+   • ABBV (AbbVie) — $253 · stop $243 · target $317 · 3/4 Pillars · 0.5% risk
+   • ABSI (Absci) — $11 · stop $9 · target $14 · 3/4 Pillars · 0.5% risk
+   • ALGM (Allegro MicroSystems) — $58 · stop $51 · target $72 · 3/4 Pillars · 0.5% risk
+   • AMAT (Applied Materials) — $627 · stop $558 · target $784 · 3/4 Pillars · 0.5% risk
+   • APGE (Apogee Therapeutics) — $133 · stop $123 · target $166 · 3/4 Pillars · 0.5% risk
+   • BAC (Bank of America) — $58 · stop $56 · target $72 · 3/4 Pillars · 0.5% risk
+   • BLZE (Backblaze) — $15 · stop $13 · target $18 · 3/4 Pillars · 0.5% risk
+   • CAT (Caterpillar) — $997 · stop $934 · target $1,247 · 3/4 Pillars · 0.5% risk
+   • CGEM (Cullinan Therapeutics) — $18 · stop $16 · target $23 · 3/4 Pillars · 0.5% risk
+   • CSCO (Cisco Systems) — $114 · stop $108 · target $142 · 3/4 Pillars · 0.5% risk
+   • CWAN (Clearwater Analytics) — $25 · stop $24 · target $31 · 3/4 Pillars · 0.5% risk
+   • EWTX (Edgewise Therapeutics) — $41 · stop $37 · target $52 · 3/4 Pillars · 0.5% risk
+   • FCEL (FuelCell Energy Inc NEW) — $24 · stop $19 · target $30 · 3/4 Pillars · 0.5% risk
+   • HON (Honeywell International) — $232 · stop $221 · target $290 · 3/4 Pillars · 0.5% risk
+   • JPM (JPMorgan Chase) — $329 · stop $317 · target $411 · 3/4 Pillars · 0.5% risk
+   • KLIC (Kulicke & Soffa Industries) — $125 · stop $112 · target $157 · 3/4 Pillars · 0.5% risk
+   • KO (Coca-Cola) — $83 · stop $80 · target $103 · 3/4 Pillars · 0.5% risk
+   • MKSI (Mks) — $389 · stop $349 · target $486 · 3/4 Pillars · 0.5% risk
+   • MSM (MSC Industrial Direct) — $118 · stop $114 · target $148 · 3/4 Pillars · 0.5% risk
+   • SPCX (SpaceX) — $153 · stop $116 · target $192 · 3/4 Pillars · 0.5% risk
+   • SYNA (Synaptics) — $121 · stop $106 · target $151 · 3/4 Pillars · 0.5% risk
+   • TGT (Target) — $140 · stop $134 · target $175 · 3/4 Pillars · 0.5% risk
+   • UNF (Unifirst) — $266 · stop $257 · target $333 · 3/4 Pillars · 0.5% risk
+💰 SELL: none — holding all
+
+━━━ ⏳ PENDING ENTRIES (0) ━━━
+✅ none
+
+━━━ 💼 HOLDING (3) ━━━
+
+🔴 SYNA (Synaptics) ~$845  $126.44 → $120.70  −5% (−$40)
+   🛑 $113.35  🎯 $156.61
+
+🔴 INTC (Intel) ~$893  $129.78 → $127.62  −2% (−$15)
+   🛑 $113.02  🎯 $162.25
+
+🟢 LRCX (Lam Research) ~$4,915  $368.39 → $378.06  +3% (+$126)
+   🛑 $368.40  🎯 $446.95
+
+━━━ 🚀 GAP-UP BREAKOUTS (0) ━━━
+
+✅ none
+
+━━━ 📈 INTRADAY BREAKOUTS (0) ━━━
+
+✅ none
+
+━━━ 🎣 WAITING FOR DIP (20) ━━━
+
+🔸 MU (Micron Technology) buy $105.80 · now $113.35 (+4%)
+   3/4 · ✅ fundamentals 56% · 📉 RSI 59 · 📈 MACD+ · ⚠️ momentum weak
+
+🔸 CGEM (Cullinan Therapeutics) buy $15.20 · now $18.04 (+9%)
+   3/4 · ⚠️ weak/no earnings · 📉 RSI 67 · 📈 MACD+ · 🟢 +0.7
+
+🔸 CAT (Caterpillar) buy $961.93 · now $999.81 (+2%)
+   3/4 · ✅ fundamentals 13% · 📉 RSI 63 · 📈 MACD+ · ⚠️ momentum weak · 🟢 +0.8
+
+🔸 ELVN (Enliven Therapeutics) buy $44.79 · now $50.00 (+8%)
+   3/4 · ⚠️ weak/no earnings · 📉 RSI 67 · 📈 MACD+ · 🟢 +1.0
+
+🔸 EWTX (Edgewise Therapeutics) buy $36.84 · now $41.46 (+8%)
+   3/4 · ⚠️ weak/no earnings · 📉 RSI 65 · 📈 MACD+ · 🟢 +0.2
+
+🔸 AAL (American Airlines Group) buy $15.79 · now $17.85 (+9%)
+   3/4 · fundamentals 0% · 📉 RSI 76 · 📈 MACD+ · ⚠️ momentum weak · 🔴 -0.0
+
+🔸 SLDB (Solid Biosciences) buy $8.01 · now $9.29 (+11%)
+   3/4 · ⚠️ weak/no earnings · 📉 RSI 70 · 📈 MACD+ · ⚠️ momentum weak · 🟢 +0.0
+
+🔸 JNJ (Johnson & Johnson) buy $238.39 · now $254.61 (+6%)
+   3/4 · ✅ fundamentals · 📉 RSI 65 · 📈 MACD+ · 🟢 +1.0
+
+🔸 AMAT (Applied Materials) buy $587.24 · now $627.25 (+5%)
+   3/4 · ✅ fundamentals 29% · 📉 RSI 69 · 📈 MACD+ · ⚠️ momentum weak · 🟢 +0.9
+
+🔸 BAC (Bank of America) buy $57.02 · now $57.93 (+2%)
+   3/4 · ✅ fundamentals 27% · 📉 RSI 75 · 📈 MACD+ · ⚠️ momentum weak · 🟢 +0.9
+
+🔸 RL (Ralph Lauren) buy $407.11 · now $411.16 (+1%)
+   3/4 · ✅ fundamentals 12% · 📉 RSI 65 · 📈 MACD+ · ⚠️ momentum weak · 🟢 +1.0
+
+🔸 CWAN (Clearwater Analytics) buy $24.54 · now $24.55 (+0%)
+   3/4 · ⚠️ weak/no earnings · 📉 RSI 68 · 📈 MACD+
+
+🔸 MRK (Merck) buy $119.39 · now $127.53 (+6%)
+   3/4 · ✅ fundamentals 14% · 📉 RSI 64 · 📈 MACD+ · 🟢 +0.5
+
+🔸 GLW (Corning) buy $199.06 · now $220.28 (+9%)
+   3/4 · ✅ fundamentals 12% · 📉 RSI 64 · 📈 MACD+ · 🟢 +0.9
+
+🔸 MKSI (Mks) buy $381.34 · now $388.61 (+2%)
+   4/4 · ✅ fundamentals · 📉 RSI 67 · 📈 MACD+ · 🟢 +1.0
+
+🔸 ALGM (Allegro MicroSystems) buy $55.54 · now $56.82 (+2%)
+   3/4 · ⚠️ weak/no earnings · 📉 RSI 63 · 📈 MACD+ · 🟢 +1.0
+
+🔸 KLIC (Kulicke & Soffa Industries) buy $120.68 · now $121.01 (+0%)
+   4/4 · ✅ fundamentals · 📉 RSI 74 · 📈 MACD+ · ⚠️ momentum weak · 🟢 +1.0
+
+🔸 TGT (Target) buy $135.72 · now $140.21 (+4%)
+   3/4 · ✅ fundamentals 3% · 📉 RSI 66 · 📈 MACD+ · 🟢 +1.0
+
+🔸 KO (Coca-Cola) buy $81.19 · now $82.43 (+2%)
+   3/4 · ✅ fundamentals 27% · 📉 RSI 61 · 📈 MACD+ · 🟢 +0.8
+
+🔸 APGE (Apogee Therapeutics) buy $116.41 · now $132.55 (+14%)
+   3/4 · ⚠️ weak/no earnings · 📉 RSI 81 · 📈 MACD+ · ⚠️ momentum weak · 🟢 +1.0
+
+
+━━━ 🚦 TOO HOT (3) ━━━
+
+1. BLZE (Backblaze) +35% over EMA
+
+2. SLS (SELLAS Life Sciences Group) +30% over EMA
+
+3. ABSI (Absci) +26% over EMA
+
+
+━━━ 👀 WATCHING (15) ━━━
+
+1. ARM (Arm Holdings)
+2. ATAI (AtaiBeckley)
+3. CDE (Coeur Mining)
+4. DFTX (Definium Therapeutics)
+5. FDS (Factset Research Systems)
+6. GE (GE Aerospace)
+7. GENI (Genius Sports)
+8. HELP (Cybin)
+9. INTC (Intel)
+10. KEEL (Keel Infrastructure)
+11. LRCX (Lam Research)
+12. ONDS (Ondas)
+13. SDOT (Sadot Group)
+14. UNH (UnitedHealth Group)
+15. WMT (Walmart)
+[intraday] telegram report body end
+[intraday] dry-run: final telegram send suppressed
+[intraday] forced dry-run temp DB removed: /tmp/atlas_intraday_force_dryrun_11134.db

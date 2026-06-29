@@ -64,7 +64,7 @@ def _fetch_trade_rows(ids):
         SELECT id, ticker, status, quantity, entry_price, entry_at,
                exit_price, exit_at, entry_fees, exit_fees,
                realized_pnl, realized_pnl_pct, parent_id,
-               stop_loss, risk_pct, target_price, notes, updated_at
+               stop_loss, risk_pct, target_price, manual_stop_lock, notes, updated_at
         FROM trades WHERE id IN ({placeholders})
     ''', ids)
     cols = [d[0] for d in cursor.description]
@@ -226,6 +226,7 @@ def init_db():
         "risk_pct": "ALTER TABLE trades ADD COLUMN risk_pct REAL",
         "target_price": "ALTER TABLE trades ADD COLUMN target_price REAL",
         "broker_ref": "ALTER TABLE trades ADD COLUMN broker_ref TEXT DEFAULT NULL",
+        "manual_stop_lock": "ALTER TABLE trades ADD COLUMN manual_stop_lock INTEGER DEFAULT 0",
     }.items():
         if _col not in _trade_cols:
             cursor.execute(_ddl)
@@ -321,8 +322,7 @@ def log_signal(ticker, signal, score, rvol, entry_price, stop_loss, max_loss_per
         "score": score, "rvol": rvol, "entry_price": entry_price,
         "stop_loss": stop_loss, "max_loss_per_share": max_loss_per_share,
         "atr": atr, "trend_stack": trend_stack, "relative_strength": relative_strength,
-        "volume": volume, "catalyst": catalyst, "warnings": warnings,
-    })
+        })
 
 
 # --------------------------------------------------------------------------- #
@@ -379,7 +379,7 @@ def open_trade(ticker, entry_price, quantity, fees=0.0, notes=None, entry_at=Non
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO trades (ticker, status, quantity, entry_price, entry_at,
-                            entry_fees, stop_loss, risk_pct, target_price, notes, updated_at)
+                            entry_fees, stop_loss, risk_pct, target_price, manual_stop_lock, notes, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (ticker, status, quantity, entry_price, entry_at or _now(), float(fees or 0),
           None if stop_loss is None else float(stop_loss),
@@ -503,7 +503,7 @@ def get_pending_fill_trades():
         SELECT id, ticker, status, quantity, entry_price, entry_at,
                exit_price, exit_at, entry_fees, exit_fees,
                realized_pnl, realized_pnl_pct, parent_id,
-               stop_loss, risk_pct, target_price, notes, updated_at
+               stop_loss, risk_pct, target_price, manual_stop_lock, notes, updated_at
         FROM trades WHERE status = 'PENDING_FILL'
         ORDER BY entry_at ASC, id ASC
     ''')
@@ -590,7 +590,7 @@ def close_trade(ticker, exit_price, quantity=None, fees=0.0, exit_at=None):
                 INSERT INTO trades (ticker, status, quantity, entry_price, entry_at,
                                     exit_price, exit_at, entry_fees, exit_fees,
                                     realized_pnl, realized_pnl_pct, parent_id,
-                                    stop_loss, risk_pct, target_price, notes, updated_at)
+                                    stop_loss, risk_pct, target_price, manual_stop_lock, notes, updated_at)
                 VALUES (?, 'CLOSED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (ticker, take, entry_price, entry_at, exit_price, exit_at,
                   entry_fee_share, sell_fee_share, realized, realized_pct, lot_id,
@@ -626,7 +626,7 @@ def get_trades(status=None, limit=500):
             SELECT id, ticker, status, quantity, entry_price, entry_at,
                    exit_price, exit_at, entry_fees, exit_fees,
                    realized_pnl, realized_pnl_pct, parent_id,
-                   stop_loss, risk_pct, target_price, notes, updated_at
+                   stop_loss, risk_pct, target_price, manual_stop_lock, notes, updated_at
             FROM trades WHERE status = ?
             ORDER BY COALESCE(exit_at, entry_at) DESC, id DESC LIMIT ?
         ''', (status.upper(), limit))
@@ -635,7 +635,7 @@ def get_trades(status=None, limit=500):
             SELECT id, ticker, status, quantity, entry_price, entry_at,
                    exit_price, exit_at, entry_fees, exit_fees,
                    realized_pnl, realized_pnl_pct, parent_id,
-                   stop_loss, risk_pct, target_price, notes, updated_at
+                   stop_loss, risk_pct, target_price, manual_stop_lock, notes, updated_at
             FROM trades
             ORDER BY COALESCE(exit_at, entry_at) DESC, id DESC LIMIT ?
         ''', (limit,))
@@ -677,6 +677,28 @@ def update_trade_stop(trade_id, stop_loss):
     return changed
 
 
+def set_manual_stop_lock(trade_id, locked=True):
+    """Set or clear manual stop-lock on one OPEN trade lot."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE trades SET manual_stop_lock=?, updated_at=? WHERE id=? AND status='OPEN'",
+        (1 if locked else 0, _now(), int(trade_id)),
+    )
+    conn.commit()
+    changed = cursor.rowcount
+    conn.close()
+    if changed:
+        _audit_db_event("trades", "UPDATE", int(trade_id), None, "set_manual_stop_lock")
+        _safe_push("push_trades", _fetch_trade_rows([int(trade_id)]))
+    return changed
+
+
+def get_trade(trade_id):
+    rows = _fetch_trade_rows([int(trade_id)])
+    return rows[0] if rows else None
+
+
 def get_realized_pnl():
     """Aggregate realized P&L across all CLOSED lots."""
     conn = get_connection()
@@ -707,7 +729,7 @@ def get_open_positions():
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT ticker, quantity, entry_price, entry_at, stop_loss, risk_pct, target_price
+        SELECT ticker, quantity, entry_price, entry_at, stop_loss, risk_pct, target_price, manual_stop_lock
         FROM trades WHERE status = 'OPEN'
         ORDER BY entry_at ASC, id ASC
     ''')
@@ -723,6 +745,7 @@ def get_open_positions():
             "stop_loss": r[4],
             "risk_pct": r[5],
             "target_price": r[6],
+            "manual_stop_lock": int(r[7] or 0),
         }
         for r in rows
     ]

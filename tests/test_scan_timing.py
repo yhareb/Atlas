@@ -19,7 +19,7 @@ import types
 from pathlib import Path
 from types import SimpleNamespace
 
-SCRIPTS_DIR = Path("/Users/yasser/scripts")
+SCRIPTS_DIR = Path(os.environ.get("ATLAS_SCRIPTS_DIR", "/Users/yasser/scripts"))
 PROD_DB = SCRIPTS_DIR / "atlas.db"
 MAX_SECONDS = 8 * 60
 
@@ -90,6 +90,7 @@ def main() -> int:
         "log_signal", "update_handoff", "open_trade", "close_trade",
         "upsert_pending_pullback", "expire_pending_pullback", "mark_pending_pullback_filled",
         "delete_pending_pullback", "confirm_trade_fill", "void_pending_fill_trade",
+        "update_trade_stop", "set_manual_stop_lock",
     ):
         if hasattr(atlas_db, name):
             setattr(atlas_db, name, _noop)
@@ -97,6 +98,12 @@ def main() -> int:
     import atlas_manage  # noqa: WPS433
 
     atlas_manage._atlas_log_signal = None
+    try:
+        if hasattr(atlas_manage, "port") and hasattr(atlas_manage.port, "sector_catalyst_sweep_trigger"):
+            atlas_manage.port.sector_catalyst_sweep_trigger = lambda *args, **kwargs: None
+            print("[GATE2] report-first mode: sector sweep peer enrichment disabled for timing harness")
+    except Exception as e:
+        print(f"[GATE2] sector sweep deferral warning: {e}")
 
     scan_args = SimpleNamespace(tickers=[], file=None, live=False, exits_only=False, json=False)
     print(f"[GATE2] source_db={source_db}")

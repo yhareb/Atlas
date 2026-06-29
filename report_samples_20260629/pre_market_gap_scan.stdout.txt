@@ -1,0 +1,4 @@
+No significant pre-market gaps today.
+
+[meta] mode=dry-run now_et=2026-06-29T08:30:00-04:00 scanned=100 priced=0 flagged=0 failures=100 elapsed=29.58s
+[meta] price_failures_sample=LCID, ABSI, ATAI, GENI, ZURA, FCEL, HELP, SPT, APGE, GRPN, LILAK, HON

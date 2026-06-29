@@ -41,7 +41,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-sys.path.insert(0, "/Users/yasser/scripts")
+SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPTS_DIR)
 
 import atlas_db
 import atlas_account as acct
@@ -62,6 +63,10 @@ DEFAULT_UNIVERSE = [
     "TSLA", "NFLX", "PLTR", "SNOW", "CRWD",
     "LLY", "JPM", "COIN", "ORCL", "NOW",
 ]
+
+# Provider 404 / delisted exclusions that must not enter the active scan list,
+# including restart-surviving pending rows.
+SCAN_EXCLUDED_TICKERS = {"PRA", "AMED", "CWAN", "TTNI"}
 
 LINE = "=" * 68
 THIN = "-" * 68
@@ -320,6 +325,13 @@ def run(args):
     ema_retry_scan = [r.get("ticker", "").upper() for r in ema_retry_rows if r.get("ticker")]
     held_scan = [r.get("ticker", "").upper() for r in atlas_db.get_trades(status="OPEN") if r.get("ticker")]
     candidates = list(dict.fromkeys(pending_scan + ema_retry_scan + held_scan + [t.upper() for t in candidates]))
+    excluded = set(SCAN_EXCLUDED_TICKERS)
+    try:
+        from market_scout import EXCLUDED_TICKERS as _SCAN_EXCLUDED_TICKERS
+        excluded.update(str(t or "").upper() for t in (_SCAN_EXCLUDED_TICKERS or set()))
+    except Exception:
+        pass
+    candidates = [t for t in candidates if str(t or "").upper() not in excluded]
     _hdr(f"SCAN & ENTRIES  ({len(candidates)} candidates)")
     buys = []
     watch = []
@@ -798,7 +810,23 @@ def main():
     p.add_argument("--live", action="store_true", help="Execute orders (default is dry-run)")
     p.add_argument("--exits-only", action="store_true", help="Only run the exit engine")
     p.add_argument("--json", action="store_true", help="Also dump machine-readable JSON")
+    p.add_argument("--lock-stop", type=int, help="Lock one OPEN trade stop against automatic trailing by trade id")
+    p.add_argument("--unlock-stop", type=int, help="Unlock one OPEN trade stop so automatic trailing can resume by trade id")
     args = p.parse_args()
+    if args.lock_stop and args.unlock_stop:
+        raise SystemExit("Use only one of --lock-stop or --unlock-stop")
+    if args.lock_stop:
+        atlas_db.init_db()
+        changed = atlas_db.set_manual_stop_lock(args.lock_stop, True)
+        trade = atlas_db.get_trade(args.lock_stop)
+        print(f"LOCK_STOP trade_id={args.lock_stop} changed={changed} trade={json.dumps(trade, default=str, sort_keys=True)}")
+        return
+    if args.unlock_stop:
+        atlas_db.init_db()
+        changed = atlas_db.set_manual_stop_lock(args.unlock_stop, False)
+        trade = atlas_db.get_trade(args.unlock_stop)
+        print(f"UNLOCK_STOP trade_id={args.unlock_stop} changed={changed} trade={json.dumps(trade, default=str, sort_keys=True)}")
+        return
     summary = run(args)
     if args.json:
         print(json.dumps(summary, default=str))

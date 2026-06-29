@@ -1,0 +1,56 @@
+─────────────────────────────────────────
+🤖 ATLAS HANDOFF — JUNE 26 → 29, 2026
+═══════════════════════════════
+
+1️⃣ OPEN POSITIONS
+
+   🟡 LRCX (Lam Research) — entry $368 · close $378 · P/L +3%
+      Stop: $368 (BE) · Target: $447
+
+   🔴 INTC (Intel) — entry $130 · close $128 · P/L -2%
+      Stop: $113 · Target: $162
+      ⚡ Goldman initiated · PT $150
+
+   🔴 SYNA (Synaptics) — entry $126 · close $121 · P/L -5%
+      Stop: $113 · Target: $157
+
+─────────────────────────────────────────
+
+2️⃣ WATCH TOMORROW
+
+   🚀 Gap-up window 9:30–10:00 ET — FIRST LIVE TEST
+   📈 Intraday breakout window 10:00–12:00 ET — FIRST LIVE TEST
+
+   🎣 CWAN — trigger $25 · at EMA · could fire on any dip
+   🎣 KO — trigger $81 · 2% above EMA · needs pullback
+   🎣 RL — trigger $407 · 2% above EMA · needs pullback
+   🎣 BAC — trigger $57 · 3% above EMA · needs pullback
+   🎣 JNJ — trigger $238 · 4% above EMA · needs pullback
+   🎣 CAT — trigger $962 · 4% above EMA · needs pullback
+   🎣 MRK — trigger $119 · 4% above EMA · needs pullback
+   🎣 TGT — trigger $136 · 5% above EMA · needs pullback
+   ⚠️ 11 more armed names hidden to keep this short
+
+   ⚠️ LRCX — stop $368 · watch for drift
+   ⚠️ INTC — stop $113 · watch for drift
+   ⚠️ SYNA — stop $113 · watch for drift
+
+─────────────────────────────────────────
+
+3️⃣ ENTRY TYPES
+
+   🚀 Gap-Up Breakout    · 9:30–10:00 AM · RVOL >1.5x · Catalyst required · Risk 0.25%
+   📈 Intraday Breakout  · 10:00–12:00 PM · RVOL >2.0x · Catalyst required · Risk 0.25%
+   🎣 Pullback to EMA    · All day        · RVOL any   · Catalyst optional  · Risk 0.50%
+
+─────────────────────────────────────────
+
+4️⃣ IF SOMETHING BREAKS
+
+   ❌ No intraday reports — restart com.atlas.intraday on M2
+   ❌ Atlas silent on Telegram — run: hermes -p atlas gateway restart
+   ⛔ AtlasOps must NOT touch Telegram .env — correct chat ID ends 9320
+
+─────────────────────────────────────────
+   ✅ All fixes verified · June 26, 2026
+─────────────────────────────────────────

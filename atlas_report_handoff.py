@@ -7,7 +7,8 @@ import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, "/Users/yasser/scripts")
+SCRIPTS_DIR = __import__("os").environ.get("ATLAS_SCRIPTS_DIR") or __import__("os").path.dirname(__import__("os").path.abspath(__file__))
+sys.path.insert(0, SCRIPTS_DIR)
 
 import atlas_db
 import atlas_portfolio as port
@@ -137,8 +138,9 @@ def _watch_tomorrow_lines():
     lines = [
         "2️⃣ WATCH TOMORROW",
         "",
-        "   🚀 Gap-up window 9:30–10:00 ET — FIRST LIVE TEST",
-        "   📈 Intraday breakout window 10:00–12:00 ET — FIRST LIVE TEST",
+        "   🚀 Gap-up window 9:30–10:00 ET",
+        "",
+        "   📈 Intraday breakout window 10:00–12:00 ET",
         "",
     ]
     lines += pullbacks or ["   🎣 No armed pullbacks"]
@@ -156,7 +158,9 @@ def _entry_type_lines():
         "3️⃣ ENTRY TYPES",
         "",
         "   🚀 Gap-Up Breakout    · 9:30–10:00 AM · RVOL >1.5x · Catalyst required · Risk 0.25%",
+        "",
         "   📈 Intraday Breakout  · 10:00–12:00 PM · RVOL >2.0x · Catalyst required · Risk 0.25%",
+        "",
         "   🎣 Pullback to EMA    · All day        · RVOL any   · Catalyst optional  · Risk 0.50%",
         "",
     ]
@@ -167,7 +171,9 @@ def _break_lines():
         "4️⃣ IF SOMETHING BREAKS",
         "",
         "   ❌ No intraday reports — restart com.atlas.intraday on M2",
+        "",
         "   ❌ Atlas silent on Telegram — run: hermes -p atlas gateway restart",
+        "",
         "   ⛔ AtlasOps must NOT touch Telegram .env — correct chat ID ends 9320",
         "",
     ]

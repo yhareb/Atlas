@@ -31,6 +31,10 @@ EXCLUDED_TICKERS = {
     "FMCC",  # Freddie Mac: OTC/government conservatorship entity
     "SUUN",  # invalid/non-tradeable ticker surfaced by discovery feeds
     "MUZ",   # Nuveen bond ETF slipping through provider metadata
+    "PRA",   # ProAssurance: active reference, but Massive snapshot 404; exclude from active scan universe
+    "AMED",  # Amedisys: delisted in Massive/EODHD; exclude from active scan universe
+    "CWAN",  # Clearwater Analytics: active reference, but Massive snapshot 404; exclude from active scan universe
+    "TTNI",  # EODHD TTNI.US fundamentals/splits 404; exclude from active scan universe
 }
 
 def _is_tradeable_equity(sym):

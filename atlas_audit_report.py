@@ -160,6 +160,21 @@ def _fetch_window():
             pass
 
 
+def _space_report_items(message: str) -> str:
+    out = []
+    prev_item = False
+    for line in str(message).splitlines():
+        stripped = line.strip()
+        is_item = stripped.startswith('- ')
+        if is_item and prev_item and out and out[-1].strip():
+            out.append("")
+        out.append(line)
+        prev_item = is_item
+        if not stripped:
+            prev_item = False
+    return "\n".join(out)
+
+
 def build_report(now_et=None):
     now_et = now_et or datetime.now(ET)
     data, audit_error = _fetch_window()
@@ -229,6 +244,7 @@ def build_report(now_et=None):
         lines.append("🚨 ALERTS")
         for alert in alerts[:4]:
             lines.append(f"- {alert[:115]}")
+            lines.append("")
     else:
         lines.append("✅ All systems healthy")
 
@@ -236,22 +252,26 @@ def build_report(now_et=None):
     for p in PROVIDERS:
         c = provider_counts.get(p, {"calls": 0, "errors": 0})
         lines.append(f"- {p}: {c['calls']} calls · {c['errors']} errors")
+        lines.append("")
 
     lines.append("🎯 Signals")
     lines.append(f"- {len(tickers)} tickers · {sig_actions['WAITING']} WAITING · {sig_actions['SKIP']} SKIP · {sig_actions['TOO HOT']} TOO HOT")
+    lines.append("")
 
     lines.append("💾 DB Events")
     lines.append(f"- {db_total} writes (trades: {db_trades} · pending_pullbacks: {db_pending} · other: {db_other})")
+    lines.append("")
 
     lines.append("🛠️ Code Changes")
     if data["code_changes"]:
         for work_order, file_path in data["code_changes"][:3]:
             lines.append(f"- {work_order or 'NO-WO'} · {Path(file_path or '').name}")
+            lines.append("")
     else:
         lines.append("- None")
 
     # Keep hard cap; preserve top alerts and summary if future edits add lines.
-    return "\n".join(lines[:20]), counts
+    return _space_report_items("\n".join(lines[:20])), counts
 
 
 def main():
