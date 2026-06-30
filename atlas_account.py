@@ -126,7 +126,7 @@ def _open_lots(c):
     c.execute(
         "SELECT ticker, quantity, entry_price FROM trades WHERE status = 'OPEN'"
     )
-    return [(r[0], int(r[1]), float(r[2])) for r in c.fetchall()]
+    return [(r[0], float(r[1]), float(r[2])) for r in c.fetchall()]
 
 
 def get_open_invested():
@@ -141,37 +141,28 @@ def get_open_invested():
 def get_cash():
     """Free cash available to deploy.
 
-    cash = starting_cash + manual_cash_changes + realized_pnl - open_invested
+    cash_ledger.balance_after is the source of truth. It already reflects
+    every buy debit, sell credit, and manual correction recorded in Atlas.
     """
     conn = _conn()
     c = conn.cursor()
-    cash = (
-        _starting_cash(c)
-        + _manual_cash_changes(c)
-        + _realized_pnl(c)
-        - sum(p * q for (_t, q, p) in _open_lots(c))
-    )
+    c.execute("SELECT balance_after FROM cash_ledger ORDER BY id DESC LIMIT 1")
+    row = c.fetchone()
     conn.close()
-    return round(cash, 2)
+    return round(float(row[0]), 2) if row and row[0] is not None else 0.0
 
 
 def get_equity(price_lookup=None):
-    """Total account equity (mark-to-market if price_lookup provided).
+    """Total account equity.
 
-    price_lookup: optional callable(ticker) -> last price (float) or None.
-    If omitted/unavailable for a name, that lot is valued at its cost basis,
-    which makes equity degrade gracefully to (cash + invested) = starting +
-    manual changes + realized_pnl.
+    equity = latest cash_ledger.balance_after + mark-to-market value of OPEN lots.
+    If price_lookup is omitted/unavailable for a ticker, fall back to cost basis.
     """
+    cash = get_cash()
     conn = _conn()
     c = conn.cursor()
-    starting = _starting_cash(c)
-    manual = _manual_cash_changes(c)
-    realized = _realized_pnl(c)
     lots = _open_lots(c)
     conn.close()
-
-    cash = starting + manual + realized - sum(p * q for (_t, q, p) in lots)
 
     holdings_value = 0.0
     for ticker, qty, entry in lots:
@@ -181,7 +172,7 @@ def get_equity(price_lookup=None):
                 last = price_lookup(ticker)
             except Exception:
                 last = None
-        holdings_value += (last if last else entry) * qty
+        holdings_value += (float(last) if last else entry) * qty
 
     return round(cash + holdings_value, 2)
 

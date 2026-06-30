@@ -13,7 +13,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 import atlas_db
 import atlas_portfolio as port
 from atlas_symbol_meta import ticker_label
-from atlas_time import current_et_market_date, add_trading_days
+from atlas_time import current_et_market_date, add_trading_days, previous_et_trading_date_str
 
 SEP = "─────────────────────────────────────────"
 DOUBLE = "═══════════════════════════════"
@@ -23,6 +23,31 @@ ET = ZoneInfo("America/New_York")
 def _money_whole(value):
     try:
         return f"${float(value):,.0f}"
+    except Exception:
+        return "N/A"
+
+
+def _money(value):
+    try:
+        return f"${float(value):,.2f}"
+    except Exception:
+        return "N/A"
+
+
+def _signed_money(value):
+    try:
+        v = float(value)
+        sign = "+" if v >= 0 else "-"
+        return f"{sign}${abs(v):,.0f}"
+    except Exception:
+        return "N/A"
+
+
+def _signed_pct(value):
+    try:
+        v = float(value)
+        sign = "+" if v >= 0 else ""
+        return f"{sign}{v:.1f}%"
     except Exception:
         return "N/A"
 
@@ -70,29 +95,39 @@ def _latest_price(ticker, fallback=None):
     return fallback
 
 
+def _append_entry_gap(lines):
+    if lines and lines[-1] != "":
+        lines.append("")
+
+
 def _open_position_lines():
     rows = atlas_db.get_open_positions()
-    lines = ["1️⃣ OPEN POSITIONS", ""]
+    lines = [f"━━━ 💼 HOLDING ({len(rows)}) ━━━"]
     if not rows:
-        lines += ["   📭 None", ""]
+        lines += ["📭 none", ""]
         return lines, 0
-    for row in rows:
+    lines.append("")
+    for idx, row in enumerate(rows, 1):
         ticker = str(row.get("ticker") or "?").upper()
         entry = _num(row.get("price"))
-        close = _latest_price(ticker, fallback=entry)
-        pnl_pct = ((close - entry) / entry * 100.0) if entry and close is not None else 0.0
-        icon = "🟢" if pnl_pct >= 3 else ("🟡" if pnl_pct >= 0 else "🔴")
+        qty = _num(row.get("quantity"), 0.0)
+        now = _latest_price(ticker, fallback=entry)
+        pnl = ((now or 0.0) - (entry or 0.0)) * qty if entry and now is not None else 0.0
+        pnl_pct = ((now - entry) / entry * 100.0) if entry and now is not None else 0.0
+        value = (now or 0.0) * qty if qty and now is not None else None
+        icon = "🟢" if pnl >= 0 else "🔴"
         label = ticker_label(ticker, row)
-        stop = _num(row.get("stop_loss"), None)
-        target = _num(row.get("target_price"), None)
-        stop_note = " (BE)" if stop is not None and entry and abs(stop - entry) <= 0.5 else ""
         lines += [
-            f"   {icon} {label} — entry {_money_whole(entry)} · close {_money_whole(close)} · P/L {_pct_whole(pnl_pct)}",
-            f"      Stop: {_money_whole(stop)}{stop_note} · Target: {_money_whole(target)}",
+            f"{idx}. {icon} {label}",
+            f"   💵 Entry {_money(entry)}",
+            f"   👀 Now {_money(now)}",
+            f"   🚦 Stop {_money(row.get('stop_loss'))}",
+            f"   🎯 Target {_money(row.get('target_price'))}",
+            f"   ({_signed_pct(pnl_pct)} · {_signed_money(pnl)} · ~{_money_whole(value)})",
         ]
         note = _position_note(ticker)
         if note:
-            lines.append(f"      ⚡ {note}")
+            lines.append(f"   ⚡ {note}")
         lines.append("")
     return lines, len(rows)
 
@@ -105,52 +140,81 @@ def _position_note(ticker):
     return notes.get((ticker or "").upper())
 
 
-def _pending_pullback_lines(limit=8):
+def _pending_stop_target(row):
+    trigger = _num(row.get("trigger_price"), None)
+    if trigger is None:
+        return None, None
+    sig = row.get("signal_result") or {}
+    rc = sig.get("risk_card") or {}
+    entry_ref = _num(sig.get("entry_price"), _num(row.get("reference_price"), trigger))
+    stop_ref = _num(rc.get("stop_loss"), None)
+    stop = None
+    if entry_ref is not None and stop_ref is not None:
+        risk_ref = entry_ref - stop_ref
+        if risk_ref > 0:
+            stop = round(trigger - risk_ref, 2)
+    if stop is None:
+        return None, None
+    target = round(trigger + (2 * (trigger - stop)), 2)
+    return stop, target
+
+
+def _pending_pullback_lines(limit=None):
     rows = atlas_db.get_pending_pullbacks(status="WAITING")
+    today = current_et_market_date().strftime("%Y-%m-%d")
+    rows = [r for r in rows if str((r or {}).get("expires_at") or "9999-12-31") >= today]
+
     def sort_key(row):
         return abs(_num(row.get("pct_over_ema"), 999.0))
-    selected = sorted(rows, key=sort_key)[:limit]
-    lines = []
-    for row in selected:
+
+    selected = sorted(rows, key=sort_key)
+    if limit is not None:
+        selected = selected[:limit]
+    lines = [f"━━━ 🎣 ARMED PULLBACKS ({len(selected)}) ━━━"]
+    if not selected:
+        lines += ["✅ none", ""]
+        return lines, len(rows)
+    lines.append("")
+    for idx, row in enumerate(selected, 1):
         ticker = str(row.get("ticker") or "?").upper()
-        pct = _num(row.get("pct_over_ema"), 0.0)
-        if abs(pct) <= 2:
-            status = "at EMA · could fire on any dip"
-        else:
-            status = f"{abs(pct):.0f}% above EMA · needs pullback"
-        lines.append(f"   🎣 {ticker} — trigger {_money_whole(row.get('trigger_price'))} · {status}")
+        label = ticker_label(ticker, row)
+        trigger = _num(row.get("trigger_price"), None)
+        stop, target = _pending_stop_target(row)
+        score = str(row.get("score") or "?/4").replace(" Pillars", "")
+        expires = row.get("expires_at") or "N/A"
+        lines += [
+            f"{idx}. {label}",
+            f"   💵 Trigger {_money(trigger)}",
+            f"   🚦 Stop {_money(stop)}",
+            f"   🎯 Target {_money(target)}",
+            f"   {score} · expires {expires}",
+            "",
+        ]
     return lines, len(rows)
 
 
-def _holding_watch_lines():
-    lines = []
-    for row in atlas_db.get_open_positions():
-        ticker = str(row.get("ticker") or "?").upper()
-        stop = row.get("stop_loss")
-        if stop not in (None, ""):
-            lines.append(f"   ⚠️ {ticker} — stop {_money_whole(stop)} · watch for drift")
-    return lines
+def _latest_handoff(market_day):
+    today = market_day.strftime("%Y-%m-%d")
+    previous = previous_et_trading_date_str(market_day)
+    return atlas_db.get_handoff(today) or atlas_db.get_handoff(previous) or {}
 
 
-def _watch_tomorrow_lines():
-    pullbacks, total_armed = _pending_pullback_lines(limit=8)
-    watch_holds = _holding_watch_lines()[:3]
-    lines = [
-        "2️⃣ WATCH TOMORROW",
-        "",
-        "   🚀 Gap-up window 9:30–10:00 ET",
-        "",
-        "   📈 Intraday breakout window 10:00–12:00 ET",
-        "",
-    ]
-    lines += pullbacks or ["   🎣 No armed pullbacks"]
-    if total_armed > len(pullbacks):
-        lines.append(f"   ⚠️ {total_armed - len(pullbacks)} more armed names hidden to keep this short")
-    if watch_holds:
-        lines.append("")
-        lines += watch_holds
+def _watch_list_lines(data):
+    raw = data.get("WATCH", []) if isinstance(data, dict) else []
+    seen = []
+    for item in raw or []:
+        ticker = str(item or "").upper().strip()
+        if ticker and ticker not in seen:
+            seen.append(ticker)
+    lines = [f"━━━ 👀 WATCH LIST ({len(seen)}) ━━━"]
+    if not seen:
+        lines += ["none", ""]
+        return lines
     lines.append("")
-    return lines, total_armed
+    for idx, ticker in enumerate(seen, 1):
+        lines.append(f"{idx}. {ticker_label(ticker)}")
+    lines.append("")
+    return lines
 
 
 def _entry_type_lines():
@@ -181,10 +245,14 @@ def _break_lines():
 
 def build_atlas_handoff_report(context=None, report_date=None):
     day = report_date or current_et_market_date()
+    data = _latest_handoff(day)
     lines = _header(day)
     open_lines, open_count = _open_position_lines()
-    watch_lines, armed_count = _watch_tomorrow_lines()
+    armed_lines, armed_count = _pending_pullback_lines()
+    watch_lines = _watch_list_lines(data)
     lines += open_lines
+    lines += [SEP, ""]
+    lines += armed_lines
     lines += [SEP, ""]
     lines += watch_lines
     lines += [SEP, ""]

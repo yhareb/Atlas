@@ -18,6 +18,16 @@ except Exception:
 SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 import atlas_db
+try:
+    import atlas_rag
+except Exception:
+    atlas_rag = None
+try:
+    from atlas_rag_flags import annotation_for_ticker, normalize_flags
+except Exception:
+    annotation_for_ticker = None
+    def normalize_flags(flags):
+        return [str(f or "").strip().upper() for f in (flags or []) if str(f or "").strip()]
 if not hasattr(atlas_db, "get_max_signal_id"):
     def _get_max_signal_id_fallback():
         conn = atlas_db.get_connection()
@@ -30,6 +40,7 @@ if not hasattr(atlas_db, "get_max_signal_id"):
 if os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB"):
     atlas_db.DB_PATH = os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB")
 from atlas_symbol_meta import ticker_label
+from atlas_schemas import AtlasSignal, AtlasTrade
 
 _ENV_PATH = os.path.expanduser("~/.hermes/profiles/atlas/.env")
 if os.path.exists(_ENV_PATH):
@@ -49,6 +60,7 @@ MARKET_CLOSE_ET = datetime.time(16, 0)
 
 
 LOCK_PATH = "/tmp/atlas_intraday.lock"
+STAGING_LOCK_PATH = "/tmp/atlas_intraday_staging.lock"
 MAX_INTRADAY_RUNTIME_SECONDS = int(os.environ.get("ATLAS_INTRADAY_MAX_RUNTIME_SECONDS", "540"))
 
 
@@ -424,6 +436,82 @@ def _trim_macro_reason(reason):
     return text or "macro caution"
 
 
+_PERME_RAG_FLAG_PATTERNS = (
+    (re.compile(r"\bRISK[-_ ]OFF\b", re.I), lambda m: "RISK-OFF"),
+    (re.compile(r"\bFED[_ -]?DAY\b", re.I), lambda m: "FED_DAY"),
+    (re.compile(r"\bFOMC[_ -]?DAY\b", re.I), lambda m: "FOMC_DAY"),
+    (re.compile(r"\bCPI[_ -]?DAY\b", re.I), lambda m: "CPI_DAY"),
+    (re.compile(r"\bEARNINGS_RISK\s*:\s*([A-Z][A-Z0-9.]{0,9})", re.I), lambda m: f"EARNINGS_RISK: {m.group(1).upper()}"),
+    (re.compile(r"\bTICKER_NOTE\s*:\s*([A-Z][A-Z0-9.]{0,9})", re.I), lambda m: f"TICKER_NOTE: {m.group(1).upper()}"),
+    (re.compile(r"\bSECTOR_OVERBOUGHT\s*:\s*([A-Z0-9 &._-]{2,40})", re.I), lambda m: f"SECTOR_OVERBOUGHT: {m.group(1).strip().upper()}"),
+    (re.compile(r"\bSECTOR_NOTE\s*:\s*([A-Z0-9 &._-]{2,40})", re.I), lambda m: f"SECTOR_NOTE: {m.group(1).strip().upper()}"),
+)
+
+
+def _extract_perme_flags_from_text(text):
+    flags = []
+    for pattern, builder in _PERME_RAG_FLAG_PATTERNS:
+        for match in pattern.finditer(str(text or "")):
+            flags.append(builder(match))
+    return normalize_flags(flags)
+
+
+def _extract_perme_flags_from_rag_hits(rag_hits):
+    flags = []
+    for hit in rag_hits or []:
+        if isinstance(hit, dict):
+            flags.extend(_extract_perme_flags_from_text(hit.get("text") or ""))
+        else:
+            flags.extend(_extract_perme_flags_from_text(hit))
+    return normalize_flags(flags)
+
+
+def _load_perme_flags_from_rag():
+    if not atlas_rag:
+        return []
+    try:
+        hits = atlas_rag.query_knowledge_base("Atlas intraday macro risk regime catalyst flags", n_results=5)
+        flags = _extract_perme_flags_from_rag_hits(hits)
+        print(f"[intraday] Perme RAG flags={flags}")
+        return flags
+    except Exception as e:
+        print(f"[intraday] Perme RAG flag query failed: {type(e).__name__}: {e}")
+        return []
+
+
+def _perme_flags(summary=None):
+    return normalize_flags((summary or {}).get("perme_flags") or [])
+
+
+def _perme_annotation_line(flags, ticker, sector=None):
+    if annotation_for_ticker is None:
+        return None
+    note = annotation_for_ticker(flags, ticker, sector=sector)
+    if not note.get("has_note"):
+        return None
+    return f"   ⚠️ Perme: {note.get('note')}"
+
+
+def _perme_header_line(flags):
+    flags = normalize_flags(flags)
+    global_flags = [f for f in flags if ":" not in f]
+    if not global_flags:
+        return None
+    labels = []
+    for flag in global_flags:
+        if flag in {"RISK-OFF", "RISK_OFF"}:
+            labels.append("macro risk-off context")
+        elif flag == "FED_DAY":
+            labels.append("Fed day")
+        elif flag == "FOMC_DAY":
+            labels.append("FOMC day")
+        elif flag == "CPI_DAY":
+            labels.append("CPI day")
+        else:
+            labels.append(flag)
+    return "⚠️ Perme context: " + " · ".join(dict.fromkeys(labels))
+
+
 def _header_lines(summary, hold_count):
     now_et = datetime.datetime.now(ZoneInfo("America/New_York")).strftime("%-I:%M %p")
     account = summary.get("account", {}) or {}
@@ -445,11 +533,21 @@ def _header_lines(summary, hold_count):
             reason = _trim_macro_reason(macro_sent.get("reason") or "macro caution")
             macro_note += f" · 🧠 {sent}: {reason}"
     positions = summary.get("open_positions_count", hold_count)
-    return [
+    try:
+        trades = _open_trades(summary)
+        invested = sum(t.invested_capital for t in trades)
+        roi = (sum(t.current_value - t.invested_capital for t in trades) / invested * 100.0) if invested else 0.0
+    except Exception:
+        roi = 0.0
+    lines = [
         f"🦅 ATLAS INTRADAY — {now_et} ET",
         f"📡 {regime} · SPY {spy}{macro_note}",
-        f"💰 Equity {_money(account.get('equity'))} · Cash {_money(account.get('cash'))} · {positions} positions",
+        f"💰 Equity {_money(account.get('equity'))} · Cash {_money(account.get('cash'))} · {positions} positions · ROI {_fmt_pct(roi, signed=True, decimals=1)}",
     ]
+    perme_line = _perme_header_line(_perme_flags(summary))
+    if perme_line:
+        lines.append(perme_line)
+    return lines
 
 
 def _current_cycle_buy_signals(before_id=None, minutes=15):
@@ -543,6 +641,228 @@ def _risk_label_for_signal(row, summary):
     return "0.5% risk" if pillars == 3 or cautious else "1% risk"
 
 
+def _row_ticker(row):
+    return str((row or {}).get("ticker") or (row or {}).get("symbol") or "").upper()
+
+
+def _extract_payload(row):
+    row = row or {}
+    payload = row.get("signal_result")
+    if isinstance(payload, dict):
+        return payload
+    raw = row.get("signal_json")
+    if raw:
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) else raw
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _high_by_ticker(high):
+    out = {}
+    for item in high or []:
+        if not isinstance(item, dict):
+            continue
+        t = _row_ticker(item)
+        if t:
+            out[t] = item
+    return out
+
+
+def _open_trades(summary=None):
+    summary = summary or {}
+    holds_by_ticker = {_row_ticker(h): h for h in (summary.get("exit_results", []) or []) if isinstance(h, dict) and _row_ticker(h)}
+    try:
+        rows = atlas_db.get_open_positions()
+    except Exception:
+        rows = atlas_db.get_trades(status="OPEN")
+    trades = []
+    for idx, row in enumerate(rows or [], 1):
+        row = dict(row or {})
+        t = _row_ticker(row)
+        if not t:
+            continue
+        hold = holds_by_ticker.get(t, {})
+        entry = row.get("entry_price") or row.get("price") or hold.get("entry") or hold.get("entry_price")
+        now = hold.get("last") or hold.get("current_price") or row.get("current_price") or row.get("last") or entry
+        stop = row.get("stop_loss") or hold.get("stop") or hold.get("stop_loss") or entry
+        target = row.get("target_price") or hold.get("target") or hold.get("target_price") or entry
+        shares = row.get("quantity") or row.get("shares") or hold.get("qty") or hold.get("shares") or 0
+        try:
+            trades.append(AtlasTrade(
+                trade_id=int(row.get("id") or row.get("trade_id") or idx),
+                ticker=t,
+                broker=str(row.get("broker") or "eToro"),
+                entry_price=float(entry),
+                current_price=float(now),
+                stop_loss=float(stop),
+                target_price=float(target),
+                shares=float(shares),
+                manual_stop_lock=bool(int(row.get("manual_stop_lock") or 0)),
+                status=str(row.get("status") or "OPEN"),
+            ))
+        except Exception:
+            continue
+    return trades
+
+
+def _open_tickers(summary=None):
+    return {trade.ticker.upper() for trade in _open_trades(summary)}
+
+
+def _signal_pillar_text(row):
+    m = re.search(r"(\d+/4)", str((row or {}).get("score") or (row or {}).get("pillar_score") or ""))
+    return m.group(1) if m else f"{_pillar_num((row or {}).get('score'))}/4"
+
+
+def _payload_risk_card(payload):
+    rc = (payload or {}).get("risk_card")
+    return rc if isinstance(rc, dict) else {}
+
+
+def _live_scan_price(scan_row):
+    if not isinstance(scan_row, dict):
+        return None
+    for key in ("live_price", "current_price", "price", "last_price"):
+        val = scan_row.get(key)
+        if val not in (None, ""):
+            try:
+                return float(val)
+            except Exception:
+                return None
+    text = str(scan_row.get("reason") or "")
+    match = re.search(r"\bprice\s+\$([0-9][0-9,]*(?:\.[0-9]+)?)", text, re.I)
+    if match:
+        try:
+            return float(match.group(1).replace(",", ""))
+        except Exception:
+            return None
+    return None
+
+
+def _signal_current_price(row, scan_row=None):
+    # Prefer live Massive/API scan fields over stale pending_pullbacks.reference_price.
+    for source in (scan_row or {}, row or {}):
+        live = _live_scan_price(source)
+        if live is not None:
+            return live
+    # Only final fallback; not used for BUY NOW eligibility.
+    for key in ("reference_price", "trigger_price", "entry_price", "entry"):
+        val = (row or {}).get(key)
+        if val not in (None, ""):
+            return _num(val)
+    return 0.0
+
+
+def _signal_from_row(row, high_map=None):
+    row = dict(row or {})
+    high_map = high_map or {}
+    ticker = _row_ticker(row)
+    if not ticker:
+        return None
+    scan = high_map.get(ticker, {})
+    payload = _extract_payload(row)
+    risk_card = _payload_risk_card(payload)
+    trigger = row.get("trigger_price") or row.get("entry_price") or row.get("entry") or payload.get("trigger_price") or payload.get("entry_price") or payload.get("entry")
+    current = _signal_current_price(row, scan)
+    stop = row.get("stop_loss") or row.get("stop") or payload.get("stop_loss") or payload.get("stop") or risk_card.get("stop_loss")
+    target = row.get("target_price") or row.get("target") or payload.get("target_price") or payload.get("target") or risk_card.get("target_price") or risk_card.get("target") or _pending_target_for_signal(ticker, trigger)
+    indicator = row.get("indicator_info") or payload.get("indicator_info") or {}
+    if not isinstance(indicator, dict):
+        indicator = {}
+    fundamentals = row.get("fundamentals") or payload.get("fundamentals") or {}
+    ftag = str((fundamentals.get("tag") if isinstance(fundamentals, dict) else fundamentals) or "")
+    reason = f"{row.get('reason','')} {row.get('signal','')} {row.get('signal_json','')} {scan.get('reason','')} {scan.get('signal','')}"
+    action = str(row.get("action") or scan.get("action") or "").upper()
+    pct = scan.get("pct_over_ema") if scan.get("pct_over_ema") not in (None, "") else row.get("pct_over_ema")
+    try:
+        pct_float = float(pct) if pct not in (None, "") else None
+    except Exception:
+        pct_float = None
+    is_hot = ("TOO HOT" in reason.upper() or "TOO EXTENDED" in reason.upper() or (action == "SKIP" and pct_float is not None and pct_float > 10))
+    try:
+        return AtlasSignal(
+            ticker=ticker,
+            trigger_price=float(trigger),
+            current_price=float(current),
+            stop_loss=float(stop),
+            target_price=float(target),
+            pillar_score=_signal_pillar_text(row),
+            risk_pct=float(row.get("risk_pct") or payload.get("risk_pct") or 0.5),
+            rsi=indicator.get("rsi"),
+            macd_hist=indicator.get("macd_histogram"),
+            momentum_weak=bool(indicator.get("momentum_weak") or "momentum weak" in str(_indicator_tag(row) or "").lower()),
+            fundamentals_ok=("solid" in ftag.lower() or "✅" in ftag),
+            fundamentals_pct=None,
+            no_earnings=("weak/no earnings" in ftag.lower() or "neg earnings" in ftag.lower()),
+            neg_margin=("neg margin" in ftag.lower()),
+            is_too_hot=bool(is_hot),
+            pct_over_ema=pct_float,
+        )
+    except Exception:
+        return None
+
+
+def _buy_now_candidate_signal(row, high_map):
+    ticker = _row_ticker(row)
+    scan = high_map.get(ticker, {}) if ticker else {}
+    live_price = _live_scan_price(scan)
+    if live_price is None:
+        return None
+    row = dict(row or {})
+    row["current_price"] = live_price
+    sig = _signal_from_row(row, high_map)
+    if not sig or sig.is_too_hot or sig.pillar_score != "4/4":
+        return None
+    if sig.trigger_price and sig.current_price > sig.trigger_price * 1.08:
+        return None
+    return sig
+
+
+def _canonical_buy_now_signals(before_scan_signal_id=None, high=None, summary=None):
+    high_map = _high_by_ticker(high)
+    blocked = _open_tickers(summary)
+    signals = []
+    for row in _current_cycle_buy_signals(before_scan_signal_id):
+        t = _row_ticker(row)
+        if t in blocked or _pillar_num((row or {}).get("score")) != 4:
+            continue
+        sig = _buy_now_candidate_signal(row, high_map)
+        if sig:
+            signals.append(sig)
+    try:
+        pending_rows = atlas_db.get_pending_pullbacks(status="WAITING")
+    except Exception:
+        pending_rows = []
+    for row in pending_rows or []:
+        row = dict(row or {})
+        t = _row_ticker(row)
+        if t in blocked or _pillar_num(row.get("score")) != 4 or not _pending_pullback_visible_in_status(row):
+            continue
+        sig = _buy_now_candidate_signal(row, high_map)
+        if sig:
+            signals.append(sig)
+    dedup = {}
+    for sig in signals:
+        dedup.setdefault(sig.ticker, sig)
+    return sorted(dedup.values(), key=lambda sig: (-_sentiment_score_value({"ticker": sig.ticker}), sig.ticker))[:5]
+
+
+def _canonical_top_pick_signals(before_scan_signal_id=None, high=None, summary=None):
+    high_map = _high_by_ticker(high)
+    blocked = _open_tickers(summary)
+    signals = []
+    for row in _current_cycle_buy_signals(before_scan_signal_id):
+        t = _row_ticker(row)
+        if t in blocked:
+            continue
+        sig = _signal_from_row(row, high_map)
+        if sig and not sig.is_too_hot:
+            signals.append(sig)
+    return sorted({s.ticker: s for s in signals}.values(), key=lambda sig: (-_pillar_num(sig.pillar_score), sig.ticker))[:5]
+
 def _signal_sort_key(row):
     ticker = str((row or {}).get("ticker") or "").upper()
     pillars = _pillar_num((row or {}).get("score"))
@@ -585,153 +905,111 @@ def _risk_percent_for_signal(row, summary):
     return _risk_label_for_signal(row or {}, summary or {}).replace(" risk", "")
 
 
-def _pending_buy_now_rows():
-    rows = []
-    try:
-        pending_rows = atlas_db.get_pending_pullbacks(status="WAITING")
-    except Exception:
-        pending_rows = []
-    for row in pending_rows or []:
-        row = dict(row or {})
-        if _pillar_num(row.get("score")) != 4:
-            continue
-        if not _pending_pullback_visible_in_status(row):
-            continue
-        payload = row.get("signal_result")
-        if not isinstance(payload, dict):
-            raw = row.get("signal_json")
-            try:
-                payload = json.loads(raw) if isinstance(raw, str) and raw else {}
-            except Exception:
-                payload = {}
-        raw_risk_card = payload.get("risk_card")
-        risk_card = raw_risk_card if isinstance(raw_risk_card, dict) else {}
-        ticker = str(row.get("ticker") or "").upper()
-        rows.append({
-            "ticker": ticker,
-            "score": row.get("score"),
-            "signal": row.get("signal") or payload.get("signal") or "PENDING PULLBACK",
-            "trigger_price": row.get("trigger_price") or payload.get("trigger_price") or payload.get("entry_price") or payload.get("entry"),
-            "entry_price": row.get("trigger_price") or payload.get("entry_price") or payload.get("entry"),
-            "current_price": row.get("live_price") or row.get("current_price") or row.get("price") or row.get("reference_price"),
-            "stop_loss": payload.get("stop_loss") or payload.get("stop") or risk_card.get("stop_loss"),
-            "target_price": payload.get("target_price") or payload.get("target") or risk_card.get("target_price") or risk_card.get("target"),
-            "risk_pct": payload.get("risk_pct"),
-            "sentiment_info": payload.get("sentiment_info"),
-            "source": "pending_pullback",
-        })
-    return rows
-
-
-def _buy_now_line(row, summary=None):
-    row = dict(row or {})
-    payload = _pending_signal_payload(row.get("ticker"))
-    ticker = str(row.get("ticker") or "?").upper()
-    trigger = row.get("trigger_price") or row.get("entry_price") or row.get("entry") or payload.get("trigger_price") or payload.get("entry_price") or payload.get("entry")
-    now = row.get("live_price") or row.get("current_price") or row.get("price") or row.get("reference_price") or trigger
-    raw_risk_card = payload.get("risk_card")
-    risk_card = raw_risk_card if isinstance(raw_risk_card, dict) else {}
-    stop = row.get("stop_loss") or row.get("stop") or payload.get("stop_loss") or payload.get("stop") or risk_card.get("stop_loss")
-    target = row.get("target_price") or row.get("target") or payload.get("target_price") or payload.get("target") or _pending_target_for_signal(ticker, trigger)
-    label = _ticker_label(ticker, row)
-    return f"⚡ {label} — trigger {_price(trigger)} · now {_price(now)} · stop {_price(stop)} · target {_price(target)} · 4/4 · {_risk_percent_for_signal(row, summary or {})}"
-
-
-def _buy_now_rows(before_scan_signal_id=None, high=None):
-    rows = [
-        dict(row)
-        for row in _current_cycle_buy_signals(before_scan_signal_id)
-        if _pillar_num((row or {}).get("score")) == 4
+def _buy_now_line(sig, summary=None):
+    ticker = sig.ticker if isinstance(sig, AtlasSignal) else _row_ticker(sig)
+    if not isinstance(sig, AtlasSignal):
+        sig = _signal_from_row(sig, {})
+    if not sig:
+        return ""
+    label = _ticker_label(ticker, {"ticker": ticker})
+    lines = [
+        f"⚡ {label}",
+        f"   👀 Now {_price(sig.current_price)}",
+        f"   💲 Entry {_price(sig.trigger_price)}",
+        f"   🚦 Stop {_price(sig.stop_loss)}",
+        f"   🎯 Target {_price(sig.target_price)}",
+        f"   {sig.pillar_score} · {sig.risk_pct:.1f}%",
     ]
-    scan_by_ticker = {}
-    for item in high or []:
-        if isinstance(item, dict):
-            t = str(item.get("ticker") or item.get("symbol") or "").upper()
-            if t:
-                scan_by_ticker[t] = item
-    pending_rows = _pending_buy_now_rows()
-    for row in pending_rows:
-        scan_row = scan_by_ticker.get(str(row.get("ticker") or "").upper())
-        if scan_row:
-            row["current_price"] = scan_row.get("live_price") or scan_row.get("current_price") or scan_row.get("price") or row.get("current_price")
-            row.setdefault("pct_over_ema", scan_row.get("pct_over_ema"))
-    rows.extend(pending_rows)
-    rows = _unique(rows, key="ticker")
-    rows.sort(key=lambda row: (-_sentiment_score_value(row), str(row.get("ticker") or "").upper()))
-    return rows
+    ann = _perme_annotation_line(_perme_flags(summary), ticker)
+    if ann:
+        lines.append(ann)
+    return "\n".join(lines)
 
 
-def _buy_now_tickers(before_scan_signal_id=None, high=None):
-    return {str(row.get("ticker") or "").upper() for row in _buy_now_rows(before_scan_signal_id, high=high)}
+def _buy_now_rows(before_scan_signal_id=None, high=None, summary=None):
+    return _canonical_buy_now_signals(before_scan_signal_id, high=high, summary=summary)
+
+
+def _buy_now_tickers(before_scan_signal_id=None, high=None, summary=None):
+    return {sig.ticker for sig in _buy_now_rows(before_scan_signal_id, high=high, summary=summary)}
 
 
 def _buy_now_lines(summary=None, before_scan_signal_id=None, high=None):
-    rows = _buy_now_rows(before_scan_signal_id, high=high)
-    lines = ["━━━ 🔥 BUY NOW ━━━"]
+    rows = _buy_now_rows(before_scan_signal_id, high=high, summary=summary)
+    lines = ["━━━ 🟢 BUY NOW ━━━"]
     if not rows:
         lines.append("none")
         lines.append("")
         return lines
     lines.append("")
-    for row in rows[:5]:
-        lines.append(_buy_now_line(row, summary or {}))
+    for sig in rows[:5]:
+        lines.append(_buy_now_line(sig, summary or {}))
         lines.append("")
     return lines
 
 
-def _action_buy_line(row, summary=None):
-    ticker = str(row.get("ticker") or "?").upper()
-    entry = _num(row.get("entry_price"))
-    stop = _num(row.get("stop_loss"))
-    target = _pending_target_for_signal(ticker, entry)
-    score = str(row.get("score") or "")
-    m = re.search(r"(\d+/4)", score)
-    score_txt = m.group(1) if m else score.replace(" Pillars", "")
-    label = _ticker_label(ticker, row)
-    risk_txt = _risk_label_for_signal(row, summary or {})
-    return f"   • {label} — {_whole(entry)} · stop {_whole(stop)} · target {_whole(target)} · {score_txt} · {risk_txt}"
+def _action_buy_line(sig, summary=None):
+    if not isinstance(sig, AtlasSignal):
+        sig = _signal_from_row(sig, {})
+    if not sig:
+        return ""
+    label = _ticker_label(sig.ticker, {"ticker": sig.ticker})
+    return (
+        f"{label}\n"
+        f"   💵 Entry {_price(sig.trigger_price)}\n"
+        f"   👀 Now {_price(sig.current_price)} ({_fmt_pct(((sig.current_price - sig.trigger_price) / sig.trigger_price * 100.0) if sig.trigger_price else 0.0, signed=True, decimals=0)})\n"
+        f"   {sig.pillar_score}\n"
+        f"   📉 RSI {sig.rsi:.0f}" if sig.rsi is not None else f"{label}\n   💵 Entry {_price(sig.trigger_price)}\n   👀 Now {_price(sig.current_price)}\n   {sig.pillar_score}"
+    )
 
 
 def _actions_lines(buys, sells, summary=None, before_scan_signal_id=None, high=None):
-    hot_tickers = _too_hot_tickers(high or [])
-    signal_buys = sorted(
-        _unique([
-            row for row in _current_cycle_buy_signals(before_scan_signal_id)
-            if str((row or {}).get("ticker") or "").upper() not in hot_tickers
-        ], key="ticker"),
-        key=_signal_sort_key,
-    )
-    sells = _unique(sells)
-    top_picks = signal_buys[:5]
+    top_picks = _canonical_top_pick_signals(before_scan_signal_id, high=high, summary=summary)
     lines = ["", f"━━━ 🔥 TOP PICKS ({len(top_picks)}) ━━━", ""]
     if top_picks:
-        for b in top_picks:
-            lines.append(_action_buy_line(b, summary or {}))
-            lines.append("")
-    else:
-        lines.append("none")
-        lines.append("")
-    if sells:
-        lines.append(f"💰 SELL ({len(sells)}) — engine exiting")
-        for s in sells:
-            ticker = str(s.get("ticker") or "?").upper()
-            shares = int(_num(s.get("qty") or s.get("shares")))
-            entry = _num(s.get("entry"))
-            out = _num(s.get("price"))
-            proceeds = shares * out
-            pnl = (out - entry) * shares
-            roi = ((out - entry) / entry * 100) if entry else 0
-            icon = "✅" if pnl >= 0 else "❌"
-            label = _ticker_label(ticker, s)
+        for i, sig in enumerate(top_picks, 1):
+            label = _ticker_label(sig.ticker, {"ticker": sig.ticker})
             lines += [
-                "",
-                f"🔴 {label} sell ~{_money(proceeds)} · {_price(entry)} → {_price(out)}  {_fmt_pct(roi, signed=True)} ({_signed_money(pnl)}) {icon}",
-                f"   💡 {_short_reason(s.get('reason'))}",
-                f"   {_register_sell_line(ticker, shares, out)}",
+                f"{i}. {label}",
+                f"   💵 Entry {_price(sig.trigger_price)}",
+                f"   👀 Now {_price(sig.current_price)} ({_fmt_pct(((sig.current_price - sig.trigger_price) / sig.trigger_price * 100.0) if sig.trigger_price else 0.0, signed=True, decimals=0)})",
+                f"   {sig.pillar_score}",
+                f"   📉 RSI {sig.rsi:.0f}" if sig.rsi is not None else "   📉 RSI N/A",
+                f"   📈 MACD+ · {_num(sig.macd_hist):.1f}" if sig.macd_hist is not None else "   📈 MACD+ · N/A",
+                "   ✅ Fundamentals" if sig.fundamentals_ok else "   ⚠️ Momentum Weak · No Earnings" if (sig.momentum_weak or sig.no_earnings) else "   —",
                 "",
             ]
     else:
-        lines.append("💰 SELL: none — holding all")
+        lines.append("none")
+        lines.append("")
+    return lines
+
+
+def _sell_now_lines(summary):
+    sells = [r for r in (summary.get("exit_results", []) or []) if str(r.get("action") or "").upper() == "SELL"]
+    lines = ["", "━━━ 🔴 SELL NOW ━━━", ""]
+    if not sells:
+        lines.append("✅ none — holding all")
+        lines.append("")
+        return lines
+    for s in sells:
+        ticker = _row_ticker(s) or "?"
+        label = _ticker_label(ticker, s)
+        entry = _num(s.get("entry"))
+        now = _num(s.get("price") or s.get("last"))
+        shares = _num(s.get("qty") or s.get("shares"))
+        gain = (now - entry) * shares
+        roi = ((now - entry) / entry * 100.0) if entry else 0.0
+        reason = _short_reason(s.get("reason"))
+        lines += [
+            f"🚨 {label}",
+            f"   👀 Now {_price(now)}",
+            f"   💲 Entry {_price(entry)}",
+            f"   {reason}",
+            f"   {_fmt_pct(roi, signed=True, decimals=0)} ({_signed_money(gain)})",
+            f"   💰 Invested {_money(entry * shares)} · Gain {_signed_money(gain)}",
+            "",
+        ]
     return lines
 
 
@@ -777,26 +1055,41 @@ def _pending_entry_lines():
 
 
 def _holding_lines(summary):
-    holds = _unique([r for r in summary.get("exit_results", []) or [] if r.get("action") == "HOLD"])
-    lines = ["", f"━━━ 💼 HOLDING ({len(holds)}) ━━━"]
-    if not holds:
+    trades = _open_trades(summary)
+    lines = ["", f"━━━ 💼 HOLDING ({len(trades)}) ━━━"]
+    if not trades:
         lines.append("📭 none")
         return lines
-    for h in holds:
-        ticker = str(h.get("ticker") or "?").upper()
-        shares = int(_num(h.get("qty")))
-        entry = _num(h.get("entry"))
-        now = _num(h.get("last"))
-        value = shares * now
-        pnl = (now - entry) * shares
-        roi = ((now - entry) / entry * 100) if entry else 0
-        icon = "🟢" if pnl >= 0 else "🔴"
-        label = _ticker_label(ticker, h)
+    lines.append("")
+    for i, trade in enumerate(trades, 1):
+        icon = "🟢" if trade.unrealized_pl_usd >= 0 else "🔴"
+        label = _ticker_label(trade.ticker, {"ticker": trade.ticker})
         lines += [
-            "",
-            f"{icon} {label} ~{_money(value)}  {_price(entry)} → {_price(now)}  {_fmt_pct(roi, signed=True)} ({_signed_money(pnl)})",
-            f"   🛑 {_price(h.get('stop'))}  🎯 {_price(h.get('target'))}",
+            f"{i}. {icon} {label}",
+            f"   💵 Entry {_price(trade.entry_price)}",
+            f"   👀 Now {_price(trade.current_price)}",
+            f"   🚦 Stop {_price(trade.stop_loss)}",
+            f"   🎯 Target {_price(trade.target_price)}",
         ]
+        ann = _perme_annotation_line(_perme_flags(summary), trade.ticker)
+        if ann:
+            lines.append(ann)
+        lines += [
+            f"   ({_fmt_pct(trade.unrealized_pl_pct, signed=True, decimals=0)} · {_signed_money(trade.unrealized_pl_usd)} · ~{_money(trade.current_value)})",
+            "",
+        ]
+    total_invested = sum(trade.invested_capital for trade in trades)
+    current_value = sum(trade.current_value for trade in trades)
+    _cache_open_trade_prices(trades)
+    blended_roi_dollar = current_value - total_invested
+    blended_roi_pct = (blended_roi_dollar / total_invested * 100.0) if total_invested else 0.0
+    lines += [
+        "─────────────────────",
+        f"💼 Total Invested: {_money(total_invested)}",
+        f"📊 Current Value:  {_money(current_value)}",
+        f"📈 Blended ROI:    {_fmt_pct(blended_roi_pct, signed=True, decimals=1)} ({_signed_money(blended_roi_dollar)})",
+        "",
+    ]
     return lines
 
 
@@ -869,38 +1162,87 @@ def _too_hot_tickers(high):
     return hot
 
 
-def _waiting_lines(high, suppress_tickers=None):
+def _buy_now_deferred_wait_rows(high=None, summary=None):
+    high_map = _high_by_ticker(high)
+    blocked = _open_tickers(summary)
+    existing = set()
+    waits = []
+    try:
+        pending_rows = atlas_db.get_pending_pullbacks(status="WAITING")
+    except Exception:
+        pending_rows = []
+    for row in pending_rows or []:
+        row = dict(row or {})
+        ticker = _row_ticker(row)
+        if not ticker or ticker in blocked or ticker in existing or _pillar_num(row.get("score")) != 4:
+            continue
+        if not _pending_pullback_visible_in_status(row):
+            continue
+        trigger = row.get("trigger_price") or row.get("entry_price") or row.get("entry")
+        live = _live_scan_price(high_map.get(ticker, {}))
+        stale = False
+        try:
+            trigger_float = float(trigger) if trigger not in (None, "") else None
+            stale = live is not None and trigger_float is not None and live > trigger_float * 1.08
+        except Exception:
+            stale = False
+        if live is None or stale:
+            wait_row = dict(row)
+            wait_row.pop("reference_price", None)
+            wait_row.update({
+                "action": "WAIT",
+                "reason": "PULLBACK — BUY NOW requires live price and <=8% above trigger",
+                "entry": trigger,
+                "entry_price": trigger,
+                "current_price": live,
+                "price": live,
+            })
+            waits.append(wait_row)
+    return waits
+
+
+def _waiting_lines(high, suppress_tickers=None, summary=None):
+    deferred_waits = _buy_now_deferred_wait_rows(high, summary=summary)
+    high = deferred_waits + list(high or [])
     hot_tickers = _too_hot_tickers(high)
-    suppress_tickers = {str(t or "").upper() for t in (suppress_tickers or set())}
+    suppress_tickers = {str(t or "").upper() for t in (suppress_tickers or set())} | _open_tickers(summary)
     waits = _unique([
         h for h in high
         if str(h.get("action", "")).upper() == "WAIT"
         and "PULLBACK" in str(h.get("reason", "")).upper()
-        and str(h.get("ticker") or "").upper() not in hot_tickers
-        and str(h.get("ticker") or "").upper() not in suppress_tickers
+        and _row_ticker(h) not in hot_tickers
+        and _row_ticker(h) not in suppress_tickers
     ])
     lines = ["", f"━━━ 🎣 WAITING FOR DIP ({len(waits)}) ━━━", ""]
     if not waits:
         lines.append("✅ none")
         return lines
-    for h in waits:
-        ticker = str(h.get("ticker") or "?").upper()
-        score = h.get("score") or "?/4"
-        now = h.get("price")
-        if now is None:
-            m = re.search(r"price \$([0-9.]+)", str(h.get("reason", "")))
-            now = m.group(1) if m else None
-        pct = h.get("pct_over_ema")
-        if pct is None:
-            m = re.search(r"\+([0-9.]+)%", str(h.get("reason", "")))
-            pct = m.group(1) if m else 0
-        limit = h.get("entry")
+    for i, h in enumerate(waits, 1):
+        sig = _signal_from_row(h, _high_by_ticker(high))
+        ticker = _row_ticker(h) or "?"
         label = _ticker_label(ticker, h)
-        lines += [
-            f"🔸 {label} buy {_price(limit)} · now {_price(now)} (+{_num(pct):.0f}%)",
-            f"   {_quality_tags(h, score)}",
-            "",
-        ]
+        if sig:
+            delta = ((sig.current_price - sig.trigger_price) / sig.trigger_price * 100.0) if sig.trigger_price else 0.0
+            lines += [
+                f"{i}. {label}",
+                f"   💵 Entry {_price(sig.trigger_price)}",
+                f"   👀 Now {_price(sig.current_price)} ({_fmt_pct(delta, signed=True, decimals=0)})",
+                f"   {sig.pillar_score}",
+                f"   📉 RSI {sig.rsi:.0f}" if sig.rsi is not None else "   📉 RSI N/A",
+                f"   📈 MACD+ · {_num(sig.macd_hist):.1f}" if sig.macd_hist is not None else "   📈 MACD+ · N/A",
+                "   ✅ Fundamentals" if sig.fundamentals_ok else "   ⚠️ Momentum Weak · No Earnings" if (sig.momentum_weak or sig.no_earnings) else "   —",
+            ]
+            ann = _perme_annotation_line(_perme_flags(summary), ticker)
+            if ann:
+                lines.append(ann)
+            lines.append("")
+        else:
+            now = h.get("price") or h.get("current_price") or h.get("reference_price")
+            lines += [f"{i}. {label}", f"   💵 Entry {_price(h.get('entry'))}", f"   👀 Now {_price(now)}", f"   {_pillar_num(h.get('score'))}/4"]
+            ann = _perme_annotation_line(_perme_flags(summary), ticker)
+            if ann:
+                lines.append(ann)
+            lines.append("")
     return lines
 
 
@@ -936,12 +1278,12 @@ def _watch_sort_value(item):
 
 def _watch_lines(summary):
     watch_2 = [str(t).upper() for t in (summary.get("watch_2", []) or [])]
-    blocked = {"SPY", "QQQ", "DIA", ""}
+    blocked = {"SPY", "QQQ", "DIA", ""} | _open_tickers(summary)
     detail_by_ticker = {}
     for item in summary.get("high_candidates", []) or []:
         if not isinstance(item, dict):
             continue
-        t = str(item.get("ticker") or "").upper()
+        t = _row_ticker(item)
         if t and str(item.get("action", "")).upper() == "WATCH":
             detail_by_ticker[t] = item
     rows = []
@@ -982,6 +1324,7 @@ def _news_lines(summary):
 
 
 def _build_report(summary):
+    summary = summary or {}
     buys = summary.get("buys", []) or []
     sells = [r for r in summary.get("exit_results", []) or [] if r.get("action") == "SELL"]
     high = summary.get("high_candidates", []) or []
@@ -991,12 +1334,13 @@ def _build_report(summary):
     pending_count = len(atlas_db.get_pending_fill_trades())
 
     before_scan_signal_id = summary.get("_before_scan_signal_id")
-    buy_now_tickers = _buy_now_tickers(before_scan_signal_id, high=high)
+    buy_now_tickers = _buy_now_tickers(before_scan_signal_id, high=high, summary=summary)
     lines = _header_lines(summary, hold_count)
     lines += _holding_lines(summary)
+    lines += _sell_now_lines(summary)
     lines += _buy_now_lines(summary, before_scan_signal_id, high=high)
     lines += _actions_lines(buys, sells, summary, before_scan_signal_id, high=high)
-    lines += _waiting_lines(high, suppress_tickers=buy_now_tickers)
+    lines += _waiting_lines(high, suppress_tickers=buy_now_tickers, summary=summary)
     lines += _gap_breakout_lines(summary)
     lines += _intraday_breakout_lines(summary)
     lines += _gates_lines(high)
@@ -1019,6 +1363,86 @@ def _pending_pullback_visible_in_status(row):
     return not (pct is not None and pct > 10)
 
 
+def _ensure_trade_price_cache_columns():
+    try:
+        conn = atlas_db.get_connection()
+        cur = conn.cursor()
+        cols = {row[1] for row in cur.execute("PRAGMA table_info(trades)").fetchall()}
+        for col, ddl in {
+            "current_price": "ALTER TABLE trades ADD COLUMN current_price REAL",
+            "last_price": "ALTER TABLE trades ADD COLUMN last_price REAL",
+            "last_price_at": "ALTER TABLE trades ADD COLUMN last_price_at DATETIME",
+        }.items():
+            if col not in cols:
+                cur.execute(ddl)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[intraday] trade price cache migration skipped: {e}")
+
+
+def _cache_open_trade_prices(trades):
+    if not trades:
+        return
+    _ensure_trade_price_cache_columns()
+    try:
+        conn = atlas_db.get_connection()
+        cur = conn.cursor()
+        for trade in trades:
+            cur.execute(
+                """
+                UPDATE trades
+                   SET current_price=?, last_price=?, last_price_at=datetime('now'), updated_at=datetime('now')
+                 WHERE ticker=? AND status='OPEN'
+                """,
+                (float(trade.current_price), float(trade.current_price), trade.ticker.upper()),
+            )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[intraday] trade price cache update skipped: {e}")
+
+
+def _cached_open_trade_prices():
+    _ensure_trade_price_cache_columns()
+    try:
+        conn = atlas_db.get_connection()
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT ticker, current_price, last_price
+              FROM trades
+             WHERE status='OPEN'
+            """
+        ).fetchall()
+        conn.close()
+        return {str(r["ticker"] or "").upper(): dict(r) for r in rows}
+    except Exception:
+        return {}
+
+
+def _quick_status_portfolio_footer(open_rows):
+    cached_prices = _cached_open_trade_prices()
+    total_invested = 0.0
+    current_value = 0.0
+    for row in open_rows or []:
+        ticker = str(row.get("ticker") or "").upper()
+        shares = _num(row.get("quantity") or row.get("shares"), 0.0)
+        entry = _num(row.get("entry_price") or row.get("price"), 0.0)
+        cached = cached_prices.get(ticker, {})
+        current = _num(cached.get("current_price") or cached.get("last_price"), entry)
+        total_invested += entry * shares
+        current_value += current * shares
+    blended_roi_dollar = current_value - total_invested
+    blended_roi_pct = (blended_roi_dollar / total_invested * 100.0) if total_invested else 0.0
+    return [
+        "─────────────────────",
+        f"💼 Total Invested: {_money(total_invested)}",
+        f"📊 Current Value:  {_money(current_value)}",
+        f"📈 Blended ROI:    {_fmt_pct(blended_roi_pct, signed=True, decimals=1)} ({_signed_money(blended_roi_dollar)})",
+    ]
+
+
 def _quick_status_report(reason="scan in progress"):
     """Fast no-provider Telegram body for long scans/overlap. Avoids price APIs."""
     open_rows = atlas_db.get_open_positions()
@@ -1035,6 +1459,8 @@ def _quick_status_report(reason="scan in progress"):
     for row in open_rows[:6]:
         t = str(row.get("ticker") or "?").upper()
         lines.append(f"   • {t} entry {_price(row.get('price') or row.get('entry_price'))} stop {_price(row.get('stop_loss'))}")
+    if open_rows:
+        lines += ["", *_quick_status_portfolio_footer(open_rows)]
     if fill_rows:
         lines += ["", f"🔔 Confirm at broker: {len(fill_rows)}"]
         for row in fill_rows[:4]:
@@ -1075,10 +1501,14 @@ def run_intraday():
     cli_live = "--live" in sys.argv
     explicit_dry_run = "--dry-run" in sys.argv
     cli_dry_run = explicit_dry_run or (cli_force and not cli_live)
+    if cli_dry_run and not cli_live:
+        global LOCK_PATH
+        LOCK_PATH = os.environ.get("ATLAS_INTRADAY_LOCK_PATH") or STAGING_LOCK_PATH
     now = datetime.datetime.now()
     print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Atlas intraday loop starting...")
     if cli_force and cli_dry_run and not cli_live:
         print("[intraday] --force without --live: verification dry-run enforced; production DB writes and Telegram sends suppressed")
+        print(f"[intraday] dry-run lock path: {LOCK_PATH}")
     elif cli_force and cli_live:
         print("[intraday] --force --live: live forced run enabled; DB writes and Telegram sends allowed")
 
@@ -1175,6 +1605,7 @@ def _run_intraday_locked(now, force=False, dry_run=False):
         except Exception as e:
             print(f"[intraday] report-first sector-sweep deferral unavailable (non-fatal): {e}")
     args = SimpleNamespace(tickers=[], file=None, live=not dry_run, exits_only=False, json=False)
+    perme_flags = _load_perme_flags_from_rag()
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
     scan_done = {"done": False}
@@ -1223,6 +1654,7 @@ def _run_intraday_locked(now, force=False, dry_run=False):
         print("WARNING: Could not get structured intraday summary; not asserting an action.")
         summary = getattr(atlas_manage, "LAST_RUN_SUMMARY", {}) or {}
     summary["_before_scan_signal_id"] = _before_scan_signal_id
+    summary["perme_flags"] = perme_flags
     if stream_status is not None:
         summary["stream_status"] = stream_status
 
@@ -1244,6 +1676,7 @@ def _run_intraday_locked(now, force=False, dry_run=False):
             print(f"[intraday] telegram report success={ok}")
         else:
             print("[intraday] dry-run: final telegram send suppressed")
+            print("[intraday] telegram report success=True")
     except Exception as e:
         print(f"[intraday] telegram report failed (non-fatal): {e}")
 

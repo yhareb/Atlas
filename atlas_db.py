@@ -201,7 +201,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'OPEN',
-            quantity INTEGER NOT NULL,
+            quantity REAL NOT NULL,
             entry_price REAL NOT NULL,
             entry_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             exit_price REAL,
@@ -380,11 +380,11 @@ def open_trade(ticker, entry_price, quantity, fees=0.0, notes=None, entry_at=Non
     cursor.execute('''
         INSERT INTO trades (ticker, status, quantity, entry_price, entry_at,
                             entry_fees, stop_loss, risk_pct, target_price, manual_stop_lock, notes, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (ticker, status, quantity, entry_price, entry_at or _now(), float(fees or 0),
           None if stop_loss is None else float(stop_loss),
           None if risk_pct is None else float(risk_pct),
-          None if target_price is None else float(target_price), notes, _now()))
+          None if target_price is None else float(target_price), 0, notes, _now()))
     trade_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -615,6 +615,79 @@ def close_trade(ticker, exit_price, quantity=None, fees=0.0, exit_at=None):
     # Real-time push of every affected lot (fire-and-forget; never raises).
     _safe_push("push_trades", _fetch_trade_rows(sorted(set(affected_ids))))
     return closed_ids
+
+
+def close_trade_broker_confirmed(ticker, trade_id, exit_price, quantity, fees, broker_ref,
+                                 realized_pnl=None, realized_pnl_pct=None, exit_at=None):
+    """Close a specific OPEN trade lot from broker-confirmed execution data.
+
+    Unlike close_trade(), this targets one trade_id instead of FIFO. Broker-provided
+    realized P/L values are preserved when supplied; otherwise they are computed
+    from the stored entry, quantity, and fees.
+    """
+    ticker = (ticker or "").upper()
+    trade_id = int(trade_id)
+    exit_price = float(exit_price)
+    quantity = float(quantity)
+    fees = float(fees or 0.0)
+    broker_ref = str(broker_ref or "").strip() or None
+    exit_at = exit_at or _now()
+    if not ticker or trade_id <= 0 or exit_price <= 0 or quantity <= 0:
+        raise ValueError("close_trade_broker_confirmed requires ticker, trade_id, positive exit_price, positive quantity")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT ticker, status, quantity, entry_price, entry_fees, notes
+        FROM trades WHERE id=?
+    ''', (trade_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise ValueError(f"Trade id {trade_id} not found")
+    db_ticker, status, open_qty, entry_price, entry_fees, notes = row
+    db_ticker = (db_ticker or "").upper()
+    if db_ticker != ticker:
+        conn.close()
+        raise ValueError(f"Trade id {trade_id} is {db_ticker}, not {ticker}")
+    if status != "OPEN":
+        conn.close()
+        raise ValueError(f"Trade id {trade_id} is {status}, not OPEN")
+    open_qty = float(open_qty or 0.0)
+    if abs(open_qty - quantity) > 0.0001:
+        conn.close()
+        raise ValueError(f"Trade id {trade_id} quantity mismatch: open {open_qty}, broker {quantity}")
+
+    entry_price = float(entry_price)
+    entry_fees = float(entry_fees or 0.0)
+    if realized_pnl is None:
+        realized = ((exit_price - entry_price) * quantity) - entry_fees - fees
+    else:
+        realized = float(realized_pnl)
+    if realized_pnl_pct is None:
+        cost_basis = entry_price * quantity
+        realized_pct = (realized / cost_basis * 100.0) if cost_basis else None
+    else:
+        realized_pct = float(realized_pnl_pct)
+    close_note = f"Broker confirmed close ref {broker_ref}" if broker_ref else "Broker confirmed close"
+    notes = (notes or "").rstrip()
+    notes = f"{notes} | {close_note}" if notes else close_note
+    cursor.execute('''
+        UPDATE trades
+           SET status='CLOSED', exit_price=?, exit_at=?, exit_fees=?, broker_ref=?,
+               realized_pnl=?, realized_pnl_pct=?, notes=?, updated_at=?
+         WHERE id=? AND status='OPEN'
+    ''', (exit_price, exit_at, fees, broker_ref, realized, realized_pct, notes, _now(), trade_id))
+    if cursor.rowcount != 1:
+        conn.rollback(); conn.close()
+        raise RuntimeError(f"Failed to close trade id {trade_id}")
+    credit = (exit_price * quantity) - fees
+    _append_cash_ledger(cursor, credit, f"Broker sell {ticker} {broker_ref or ''}: {quantity} sh @ {exit_price} net credit {round(credit, 2)} fees {fees}".strip())
+    conn.commit()
+    conn.close()
+    _audit_db_event("trades", "UPDATE", trade_id, ticker, "close_trade_broker_confirmed")
+    _safe_push("push_trades", _fetch_trade_rows([trade_id]))
+    return _fetch_trade_rows([trade_id])[0]
 
 
 def get_trades(status=None, limit=500):

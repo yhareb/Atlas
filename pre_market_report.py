@@ -6,6 +6,10 @@ from zoneinfo import ZoneInfo
 SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 import atlas_db
+try:
+    import atlas_rag
+except Exception:
+    atlas_rag = None
 if os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB"):
     atlas_db.DB_PATH = os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB")
 from atlas_symbol_meta import normalize_price, normalize_snapshot_fields, ticker_label
@@ -756,8 +760,12 @@ def _open_position_lines(macro_lines):
         pct = (((now or 0) / entry - 1.0) * 100.0) if entry else 0
         icon = "🟢" if pnl >= 0 else "🔴"
         sign_money = f"+${abs(pnl):,.0f}" if pnl >= 0 else f"−${abs(pnl):,.0f}"
-        lines.append(f"{icon} {ticker_label(ticker, row)} ~${value:,.0f}  {_fmt_price(entry)} → {_fmt_price(now)}  {_fmt_pct(pct)} ({sign_money})")
-        lines.append(f"   🛑 {_fmt_price(stop)}  🎯 {_fmt_price(target)}")
+        lines.append(f"{icon} {ticker_label(ticker, row)}")
+        lines.append(f"   💵 Entry {_fmt_price(entry)}")
+        lines.append(f"   👀 Now {_fmt_price(now)}")
+        lines.append(f"   🚦 Stop {_fmt_price(stop)}")
+        lines.append(f"   🎯 Target {_fmt_price(target)}")
+        lines.append(f"   ({_fmt_pct(pct)} · {sign_money} · ~${value:,.0f})")
         note = _macro_relevant_note(ticker, macro_lines)
         if note:
             lines.append(f"   ⚠️ Watch: {note}")
@@ -955,8 +963,40 @@ def _catalyst_override_lines(candidates):
     return lines
 
 
+def _pending_stop_target(row):
+    trigger = _to_float(row.get("trigger_price"))
+    if trigger is None:
+        return None, None
+    sig = row.get("signal_result") or {}
+    rc = sig.get("risk_card") or {}
+    entry_ref = _to_float(sig.get("entry_price"), _to_float(row.get("reference_price"), trigger))
+    stop_ref = _to_float(rc.get("stop_loss"))
+    stop = None
+    if entry_ref is not None and stop_ref is not None:
+        risk_ref = entry_ref - stop_ref
+        if risk_ref > 0:
+            stop = round(trigger - risk_ref, 2)
+    if stop is None:
+        return None, None
+    target = round(trigger + (2 * (trigger - stop)), 2)
+    return stop, target
+
+
+def _pullback_detail_flags(sig):
+    flags = []
+    fundamentals = sig.get("fundamentals") if isinstance(sig, dict) else None
+    if isinstance(fundamentals, dict):
+        flags.append(fundamentals.get("tag") or "fundamentals")
+    elif fundamentals:
+        flags.append("fundamentals")
+    if isinstance(sig, dict) and sig.get("warnings"):
+        flags.append("warnings")
+    return " · ".join([str(x) for x in flags if x]) or "—"
+
+
 def _pullback_and_hot_lines():
     pullbacks, hot = [], []
+    item_no = 1
     for row in atlas_db.get_pending_pullbacks(status="WAITING"):
         ticker = str(row.get("ticker") or "?").upper()
         trigger = _to_float(row.get("trigger_price"))
@@ -964,18 +1004,19 @@ def _pullback_and_hot_lines():
         pct = (((now / trigger) - 1.0) * 100.0) if now and trigger else None
         score = row.get("score") or "?/4"
         sig = row.get("signal_result") or {}
-        flags = []
-        if sig.get("catalyst_reason"):
-            flags.append("catalyst")
-        if sig.get("warnings"):
-            flags.append("warnings")
-        if sig.get("fundamentals"):
-            flags.append((sig.get("fundamentals") or {}).get("tag") or "fundamentals")
-        flag_txt = " · ".join([str(x) for x in flags if x]) or "—"
         if pct is not None and pct > 10:
             hot.append(f"{ticker_label(ticker, row)} +{pct:.0f}%")
             continue
-        pullbacks.append(f"🔸 {ticker_label(ticker, row)} Trigger {_fmt_price(trigger)} · Now {_fmt_price(now)} ({_fmt_pct(pct)}) · {score} · {flag_txt}")
+        stop, target = _pending_stop_target(row)
+        pullbacks.append("\n".join([
+            f"{item_no}. {ticker_label(ticker, row)}",
+            f"   💵 Trigger {_fmt_price(trigger)}",
+            f"   👀 Now {_fmt_price(now)} ({_fmt_pct(pct)})",
+            f"   🚦 Stop {_fmt_price(stop)}",
+            f"   🎯 Target {_fmt_price(target)}",
+            f"   {score} · {_pullback_detail_flags(sig)}",
+        ]))
+        item_no += 1
     return pullbacks, hot
 
 
@@ -1014,6 +1055,11 @@ def _current_premarket_day(now_et=None):
 
 def generate_wavef_pre_market_brief(send=False, market_day=None):
     _t0 = _audit_time.perf_counter()
+    try:
+        rag_hits = atlas_rag.query_knowledge_base("Atlas pre-market report context open positions risk gaps catalysts", n_results=3) if atlas_rag else []
+        print(f"[pre-market] rag query hits={len(rag_hits)}")
+    except Exception as e:
+        print(f"[pre-market] rag query failed: {type(e).__name__}: {e}")
 
     def _timed(label, fn):
         st = _audit_time.perf_counter()

@@ -1,0 +1,57 @@
+─────────────────────────────────────────
+📊 POST-MARKET REPORT — 2026-06-23
+═══════════════════════════════
+
+1️⃣ ENGINE DECISIONS
+   ✅ BOUGHT (0)
+   ⛔ BLOCKED — EARNINGS (0)
+   🎣 ARMED — WAITING PULLBACK (2)
+      • CGEM — $16.97 (+12.70% > EMA) · limit $15.13
+      • PGEN — $5.43 (+13.80% > EMA) · limit $4.80
+   🚀 TOO HOT — SKIPPED (1)
+      • BLZE — +25.50% > EMA
+   ⏸️ NO DATA (0)
+
+2️⃣ OPEN POSITIONS (2)
+   • LRCX — 4 sh · entry $368.65 · stop $329.50 · close $370.78 · P/L $8.52 (+0.58%)
+   • TSM — 11.34288404 sh · entry $440.81 · stop $412.00 · close $443.40 · P/L $29.34 (+0.59%)
+
+3️⃣ WATCHLIST CLOSE (13)
+   🟢 BLZE       $10.64    +31.96%
+   🟢 PTGX      $116.84     +1.57%
+   🟢 PGEN        $5.42     +1.02%
+   🟢 APGE      $132.59     +0.04%
+   🔴 SPCX      $153.19     -1.24%
+   🔴 CGEM       $16.97     -1.91%
+   🔴 ABSI        $8.11     -2.80%
+   🔴 TSM       $443.40     -4.97%
+   🔴 TE          $9.84     -5.87%
+   🔴 VIAV       $49.65     -5.97%
+   🔴 LRCX      $370.78     -9.30%
+   🔴 MU      $1,084.36     -9.84%
+   🔴 CRDO      $270.44    -10.38%
+
+4️⃣ MARKET MOVERS
+   🏆 Top Gainers
+      • ATLN        $1.08   ▲ +170.58%
+      • HSCSW       $0.11   ▲ +119.16%
+      • ORGNW       $0.00   ▲ +100.00%
+      • FCUV        $3.91    ▲ +80.02%
+      • HSCS        $3.13    ▲ +66.67%
+   💀 Top Losers
+      • RQIR        $0.01    ▼ -63.33%
+      • NXTS        $6.03    ▼ -53.69%
+      • INLF        $0.06    ▼ -43.24%
+      • TMS        $10.13    ▼ -42.08%
+      • WHLR        $2.36    ▼ -36.84%
+
+5️⃣ CATALYST WATCH — TOMORROW (0 hits / 40 checked)
+   ⏱️ Window: 06/23 16:00 ET → 06/23 16:45 ET
+   • No strong per-ticker catalysts found.
+
+6️⃣ BOTTOM LINE
+   • 📈 Decisions: 3  ·  ✅ Bought: 0  ·  🎣 Armed: 2  ·  ⛔ Blocked: 0
+   • 💼 Open positions: 2
+   • 💰 Cash: $31,994.80  ·  Equity: $37,000.00
+   • 🌙 Market closed. Handoff written. See you tomorrow, Prof.
+─────────────────────────────────────────
