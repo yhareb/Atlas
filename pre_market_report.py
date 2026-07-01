@@ -777,8 +777,8 @@ def _macro_relevant_note(ticker, macro_lines):
 def _open_position_lines(macro_lines):
     rows = atlas_db.get_open_positions()
     lines = []
-    total_pnl = 0.0
-    total_value = 0.0
+    total_invested = 0.0
+    current_value = 0.0
     n = 0
     for row in rows:
         ticker = str(row.get("ticker") or "?").upper()
@@ -789,8 +789,8 @@ def _open_position_lines(macro_lines):
         target = row.get("target_price")
         value = shares * (now or 0)
         pnl = ((now or 0) - (entry or 0)) * shares
-        total_value += value
-        total_pnl += pnl
+        total_invested += shares * (entry or 0)
+        current_value += value
         n += 1
         pct = (((now or 0) / entry - 1.0) * 100.0) if entry else 0
         icon = "🟢" if pnl >= 0 else "🔴"
@@ -805,9 +805,14 @@ def _open_position_lines(macro_lines):
         if note:
             lines.append(f"   ⚠️ Watch: {note}")
     if n:
-        sign = "+" if total_pnl >= 0 else "−"
+        dollar_pnl = current_value - total_invested
+        roi = (dollar_pnl / total_invested * 100.0) if total_invested else 0.0
+        sign = "+" if roi >= 0 else "−"
+        sign_dollar = "+" if dollar_pnl >= 0 else "−"
         lines.append("──────────────────")
-        lines.append(f"📊 {n} positions · deployed ~${total_value:,.0f} · net {sign}${abs(total_pnl):,.0f}")
+        lines.append(f"💼 Total Invested: ${total_invested:,.0f}")
+        lines.append(f"📊 Current Value:  ${current_value:,.0f}")
+        lines.append(f"📈 Blended ROI:    {sign}{abs(roi):.1f}% ({sign_dollar}${abs(dollar_pnl):,.0f})")
     return lines
 
 
