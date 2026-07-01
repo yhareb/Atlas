@@ -25,6 +25,9 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
+from atlas_notify import send_telegram  # noqa: E402
+from atlas_rag_flags import parse_flags  # noqa: E402
+
 ET = ZoneInfo("America/New_York")
 SCRIPTS_DIR = Path("/Users/yasser/scripts")
 ATLAS_ENV = Path("/Users/yasser/.hermes/profiles/atlas/.env")
@@ -308,6 +311,72 @@ def output_path(now_et: datetime | None = None) -> Path:
     OUTBOX.mkdir(parents=True, exist_ok=True)
     return OUTBOX / f"perme_brief_{now_et.strftime('%Y%m%d_%H%M')}.md"
 
+def _markdown_section(text: str, heading: str) -> list[str]:
+    lines = str(text or "").splitlines()
+    target = heading.strip().lower()
+    in_section = False
+    found: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            if in_section:
+                break
+            in_section = stripped[3:].strip().lower() == target
+            continue
+        if in_section:
+            found.append(line.rstrip())
+    return found
+
+
+def _clean_section_line(line: str) -> str:
+    cleaned = line.strip()
+    while cleaned.startswith(("-", "*", "•")):
+        cleaned = cleaned[1:].strip()
+    return cleaned
+
+
+def _first_section_line(text: str, heading: str, default: str = "Unknown") -> str:
+    for line in _markdown_section(text, heading):
+        cleaned = _clean_section_line(line)
+        if cleaned:
+            return cleaned
+    return default
+
+
+def _section_block(text: str, heading: str) -> str:
+    body = "\n".join(_markdown_section(text, heading)).strip()
+    return f"## {heading}\n{body}" if body else f"## {heading}\nNone."
+
+
+def format_telegram_brief(briefing: str, routine: str, now_et: datetime) -> str:
+    flags_text = "\n".join(_clean_section_line(line) for line in _markdown_section(briefing, "FLAGS"))
+    flags = parse_flags(flags_text)
+    flags_line = "🚩 " + " · ".join(flags) if flags else "✅ No flags"
+    regime = _first_section_line(briefing, "REGIME", default="Regime unavailable")
+    evidence = _section_block(briefing, "EVIDENCE")
+    risk_factors = _section_block(briefing, "RISK FACTORS")
+    return (
+        f"📡 Perme — {routine} · {now_et.strftime('%Y-%m-%d %H:%M ET')}\n\n"
+        f"{flags_line}\n"
+        f"Regime: {regime}\n\n"
+        f"{evidence}\n\n"
+        f"{risk_factors}"
+    )
+
+
+def deliver_telegram_brief(message: str, dry_run: bool = False) -> None:
+    if dry_run:
+        print("PERME_TELEGRAM_MESSAGE_BEGIN")
+        print(message)
+        print("PERME_TELEGRAM_MESSAGE_END")
+        return
+    try:
+        ok = send_telegram(message, label="atlas", parse_mode="", print_fallback=True)
+        print(f"[perme] telegram brief success={ok}")
+    except Exception as exc:
+        print(f"[perme] telegram brief failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Atlas Perme briefing engine")
@@ -324,8 +393,12 @@ def main(argv: list[str] | None = None) -> int:
     path = Path(args.output).expanduser() if args.output else output_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(briefing.rstrip() + "\n")
+    routine = str(context.get("routine") or args.routine)
+    generated_at = _now_et()
+    telegram_message = format_telegram_brief(briefing, routine, generated_at)
+    deliver_telegram_brief(telegram_message, dry_run=args.dry_run)
     print("PERME_RESULT_JSON=" + json.dumps({
-        "routine": context.get("routine"),
+        "routine": routine,
         "source_mode": context.get("source_mode"),
         "output_path": str(path),
         "bytes": path.stat().st_size,

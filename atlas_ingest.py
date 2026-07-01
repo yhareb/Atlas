@@ -25,6 +25,7 @@ for _path in (SCRIPTS_DIR, "/Users/yasser/scripts"):
         sys.path.insert(0, _path)
 
 from atlas_notify import send_telegram  # noqa: E402
+from atlas_rag_flags import parse_flags  # noqa: E402
 
 SUPPORTED_EXTS = {".pdf", ".docx", ".html", ".htm", ".txt", ".md", ".jpg", ".jpeg", ".png"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
@@ -81,6 +82,60 @@ def _iter_new_files(inbox: Path, processed: Path) -> Iterable[Path]:
 def _chunk_text(text: str, size: int = 1200) -> list[str]:
     text = str(text or "").strip()
     return [text[i:i+size] for i in range(0, len(text), size) if text[i:i+size].strip()]
+
+
+def _brief_timestamp_from_name(name: str) -> str:
+    stem = Path(name).stem
+    prefix = "perme_brief_"
+    if not stem.startswith(prefix):
+        return stem
+    raw = stem[len(prefix):]
+    try:
+        dt = datetime.strptime(raw, "%Y%m%d_%H%M")
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return raw
+
+
+def _markdown_section(text: str, heading: str) -> list[str]:
+    lines = str(text or "").splitlines()
+    target = heading.strip().lower()
+    in_section = False
+    found: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            if in_section:
+                break
+            in_section = stripped[3:].strip().lower() == target
+            continue
+        if in_section:
+            found.append(line.rstrip())
+    return found
+
+
+def _clean_section_line(line: str) -> str:
+    cleaned = line.strip()
+    while cleaned.startswith(("-", "*", "•")):
+        cleaned = cleaned[1:].strip()
+    return cleaned
+
+
+def _perme_brief_ingest_message(path: Path) -> str | None:
+    name = path.name
+    if not name.startswith("perme_brief_"):
+        return None
+    try:
+        text = path.read_text(errors="replace")
+    except Exception as exc:
+        _log(f"perme brief summary warning for {name}: {type(exc).__name__}: {exc}")
+        text = ""
+    flags_text = "\n".join(_clean_section_line(line) for line in _markdown_section(text, "FLAGS"))
+    flags = parse_flags(flags_text)
+    flags_summary = ", ".join(flags) if flags else "None · Clean bill"
+    regime_lines = [_clean_section_line(line) for line in _markdown_section(text, "REGIME")]
+    regime = next((line for line in regime_lines if line), "Unknown")
+    return f"📡 Perme brief ingested — {_brief_timestamp_from_name(name)}\nFlags: {flags_summary}\nRegime: {regime}"
 
 
 def _ocr_image(path: Path) -> str:
@@ -194,8 +249,10 @@ def ingest_file(path: Path, inbox: Path, vector_db: Path, dry_run: bool = False)
         metas = [{"source": name, "sha256": digest, "chunk": i, "ingested_at": datetime.now().isoformat()} for i in range(len(chunks))]
         collection.add(ids=ids, documents=chunks, embeddings=embeddings, metadatas=metas)
         broker_result = _post_ingest_trade_hook(chunks, name, dry_run=dry_run)
+        msg = _perme_brief_ingest_message(path)
         moved = _move_unique(path, processed)
-        msg = f"📚 Ingested: {name} → {len(chunks)} chunks added to Atlas knowledge base"
+        if msg is None:
+            msg = f"📚 Ingested: {name} → {len(chunks)} chunks added to Atlas knowledge base"
         _log(msg)
         _log("broker_hook_result=" + json.dumps(broker_result, sort_keys=True, default=str))
         if dry_run:
