@@ -12,6 +12,7 @@ pycache/
 *.pyo
 
 # Virtual environments / dependency installs
+.atlas_audit_vendor/
 .atlasingestvenv/
 .venv/
 *venv/
