@@ -777,6 +777,9 @@ def _macro_relevant_note(ticker, macro_lines):
 def _open_position_lines(macro_lines):
     rows = atlas_db.get_open_positions()
     lines = []
+    total_pnl = 0.0
+    total_value = 0.0
+    n = 0
     for row in rows:
         ticker = str(row.get("ticker") or "?").upper()
         shares = int(_to_float(row.get("quantity"), 0) or 0)
@@ -786,6 +789,9 @@ def _open_position_lines(macro_lines):
         target = row.get("target_price")
         value = shares * (now or 0)
         pnl = ((now or 0) - (entry or 0)) * shares
+        total_value += value
+        total_pnl += pnl
+        n += 1
         pct = (((now or 0) / entry - 1.0) * 100.0) if entry else 0
         icon = "🟢" if pnl >= 0 else "🔴"
         sign_money = f"+${abs(pnl):,.0f}" if pnl >= 0 else f"−${abs(pnl):,.0f}"
@@ -798,6 +804,10 @@ def _open_position_lines(macro_lines):
         note = _macro_relevant_note(ticker, macro_lines)
         if note:
             lines.append(f"   ⚠️ Watch: {note}")
+    if n:
+        sign = "+" if total_pnl >= 0 else "−"
+        lines.append("──────────────────")
+        lines.append(f"📊 {n} positions · deployed ~${total_value:,.0f} · net {sign}${abs(total_pnl):,.0f}")
     return lines
 
 
