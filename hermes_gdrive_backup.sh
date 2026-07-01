@@ -10,6 +10,15 @@ TS="$(/bin/date '+%Y-%m-%d_%H%M')"
 ARCHIVE_NAME="hermes_backup_${TS}.tar.gz"
 ARCHIVE_PATH="${BACKUP_ROOT}/${ARCHIVE_NAME}"
 TMP_LOG="${BACKUP_ROOT}/last_run.tmp.log"
+BACKUP_ITEMS=(
+  ".hermes"
+  "scripts/atlas_perme.py"
+  "scripts/atlas_rag_flags.py"
+  "scripts/atlas_rag.py"
+  ".hermes/profiles/perme"
+  "atlas_inbox"
+  "atlas_vectordb"
+)
 
 mkdir -p "$BACKUP_ROOT"
 touch "$LOG_FILE"
@@ -107,8 +116,14 @@ if [ ! -x "$RCLONE" ]; then
   fail 3 "check rclone"
 fi
 
+for item in "${BACKUP_ITEMS[@]}"; do
+  if [ ! -e "/Users/yasser/${item}" ]; then
+    fail 7 "check backup item ${item}"
+  fi
+done
+
 run_step "create Google Drive folder" "$RCLONE" mkdir "$REMOTE_DIR"
-run_step "create tar.gz archive" /usr/bin/tar -czf "$ARCHIVE_PATH" -C /Users/yasser .hermes
+run_step "create tar.gz archive" /usr/bin/tar -czf "$ARCHIVE_PATH" -C /Users/yasser "${BACKUP_ITEMS[@]}"
 
 if [ ! -s "$ARCHIVE_PATH" ]; then
   fail 4 "verify local archive non-empty"
