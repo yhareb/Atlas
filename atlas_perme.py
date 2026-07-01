@@ -33,6 +33,8 @@ HERMES_HOME = "/Users/yasser/.hermes/profiles/perme"
 HERMES_BIN = os.environ.get("HERMES_BIN", "hermes")
 OUTBOX = Path(os.environ.get("PERME_OUTBOX", "/Users/yasser/atlas_inbox"))
 MASSIVE_BASE = os.environ.get("MASSIVE_BASE", "https://api.massive.com")
+WEEKEND_ROUTINES = {"weekend", "weekend_afternoon", "sunday_evening"}
+
 SECTOR_ETFS = {
     "XLK": "TECH",
     "XLF": "FINANCIALS",
@@ -73,11 +75,11 @@ def _now_et() -> datetime:
 
 
 def _routine_from_time(now_et: datetime) -> str:
-    if now_et.weekday() == 5 and now_et.hour == 9:
-        return "weekend"
-    if now_et.weekday() >= 5:
-        return "weekend"
     hm = now_et.strftime("%H:%M")
+    if now_et.weekday() == 5:  # Saturday
+        return "weekend_afternoon" if hm >= "15:00" else "weekend"
+    if now_et.weekday() == 6:  # Sunday
+        return "sunday_evening" if hm >= "18:00" else "weekend"
     if hm < "09:30":
         return "pre_market"
     if "09:30" <= hm <= "16:00":
@@ -137,7 +139,7 @@ def fetch_benzinga_earnings(routine: str, now_et: datetime, mock: bool = False) 
     token = os.environ.get("BENZINGA_API_KEY")
     if not token:
         return []
-    if routine == "weekend":
+    if routine in WEEKEND_ROUTINES:
         start = now_et.date().isoformat()
         end = (now_et.date() + timedelta(days=7)).isoformat()
     else:
@@ -169,7 +171,7 @@ def fetch_eodhd_economic_calendar(routine: str, now_et: datetime, mock: bool = F
     if not token:
         return []
     start = now_et.date()
-    end = start + (timedelta(days=7) if routine == "weekend" else timedelta(days=1))
+    end = start + (timedelta(days=7) if routine in WEEKEND_ROUTINES else timedelta(days=1))
     data = _json_get(
         "https://eodhd.com/api/economic-events",
         {"api_token": token, "fmt": "json", "from": start.isoformat(), "to": end.isoformat(), "country": "US"},
@@ -309,7 +311,7 @@ def output_path(now_et: datetime | None = None) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Atlas Perme briefing engine")
-    parser.add_argument("--routine", required=True, choices=["auto", "pre_market", "intraday", "post_market", "weekend"])
+    parser.add_argument("--routine", required=True, choices=["auto", "pre_market", "intraday", "post_market", "weekend", "weekend_afternoon", "sunday_evening"])
     parser.add_argument("--dry-run", action="store_true", help="Print diagnostics; still writes the Markdown file")
     parser.add_argument("--mock-data", action="store_true", help="Use deterministic mock API payloads for Gate 1")
     parser.add_argument("--output", default="", help="Optional explicit output path")
