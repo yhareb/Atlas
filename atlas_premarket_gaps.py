@@ -244,6 +244,7 @@ def _clean_title(title):
 def benzinga_catalyst(ticker, now_et):
     if not BENZINGA_API_KEY:
         return None
+    ticker = (ticker or "").upper()
     start = _dt.datetime.combine(_previous_trading_day(now_et.date()), _dt.time(16, 0), ET)
     end = min(now_et, _dt.datetime.combine(now_et.date(), _dt.time(9, 30), ET))
     url = "https://api.benzinga.com/api/v2/news"
@@ -266,7 +267,28 @@ def benzinga_catalyst(ticker, now_et):
     for item in data:
         stocks = item.get("stocks") or []
         stock_names = {str(s.get("name") or "").upper() for s in stocks if isinstance(s, dict)}
-        if stock_names and ticker.upper() not in stock_names:
+        if stock_names and ticker not in stock_names:
+            continue
+        title = _clean_title(item.get("title"))
+        if title:
+            return title
+    if data:
+        return None
+
+    fallback_params = dict(params)
+    fallback_params.pop("tickers", None)
+    fallback_params["pageSize"] = 20
+    try:
+        fallback_data = _get_json(url, fallback_params, timeout=HTTP_TIMEOUT)
+    except Exception as e:
+        _log(f"Benzinga catalyst fallback failed {ticker}: {e}")
+        return None
+    if not isinstance(fallback_data, list):
+        return None
+    for item in fallback_data:
+        stocks = item.get("stocks") or []
+        stock_names = {str(s.get("name") or "").upper() for s in stocks if isinstance(s, dict)}
+        if ticker not in stock_names:
             continue
         title = _clean_title(item.get("title"))
         if title:

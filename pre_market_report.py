@@ -821,23 +821,40 @@ def _benzinga_catalyst_for_ticker(ticker, hours=24):
         return None
     now_utc = datetime.now(timezone.utc)
     since_utc = now_utc - timedelta(hours=hours)
+    endpoint = "https://api.benzinga.com/api/v2/news"
+    params = {
+        "token": BENZINGA_API_KEY,
+        "tickers": ticker,
+        "dateFrom": since_utc.astimezone(ZoneInfo("America/New_York")).date().isoformat(),
+        "dateTo": now_utc.astimezone(ZoneInfo("America/New_York")).date().isoformat(),
+        "pageSize": 5,
+    }
     try:
-        r = _audit_get(
-            "https://api.benzinga.com/api/v2/news",
-            params={
-                "token": BENZINGA_API_KEY,
-                "tickers": ticker,
-                "dateFrom": since_utc.astimezone(ZoneInfo("America/New_York")).date().isoformat(),
-                "dateTo": now_utc.astimezone(ZoneInfo("America/New_York")).date().isoformat(),
-                "pageSize": 5,
-            },
-            timeout=PRE_MARKET_HTTP_TIMEOUT,
-        )
+        r = _audit_get(endpoint, params=params, timeout=PRE_MARKET_HTTP_TIMEOUT)
         if r.status_code != 200:
             return None
         data = r.json() or []
         articles = data if isinstance(data, list) else (data.get("data") or data.get("articles") or [])
         for item in articles:
+            title = (item.get("title") or item.get("headline") or "").strip()
+            if title:
+                return title
+        if articles:
+            return None
+
+        fallback_params = dict(params)
+        fallback_params.pop("tickers", None)
+        fallback_params["pageSize"] = 15
+        fallback = _audit_get(endpoint, params=fallback_params, timeout=PRE_MARKET_HTTP_TIMEOUT)
+        if fallback.status_code != 200:
+            return None
+        fallback_data = fallback.json() or []
+        fallback_articles = fallback_data if isinstance(fallback_data, list) else (fallback_data.get("data") or fallback_data.get("articles") or [])
+        for item in fallback_articles:
+            stocks = item.get("stocks") or []
+            stock_names = {str(s.get("name") or "").upper() for s in stocks if isinstance(s, dict)}
+            if ticker not in stock_names:
+                continue
             title = (item.get("title") or item.get("headline") or "").strip()
             if title:
                 return title
