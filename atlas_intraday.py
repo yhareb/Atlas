@@ -1686,12 +1686,13 @@ def run_intraday():
 
 def _make_prescan_timing_wrapper(label, func):
     def _wrapped(*args, **kwargs):
+        section = "pre_scan_market_scout_candidates" if label == "market_scout_candidates" else f"pre_scan_{label}"
         start = time.perf_counter()
-        print(f"[TIMING] {datetime.datetime.now().isoformat(timespec='seconds')} section=pre_scan_{label} event=start")
+        print(f"[TIMING] {datetime.datetime.now().isoformat(timespec='seconds')} section={section} event=start")
         try:
             return func(*args, **kwargs)
         finally:
-            print(f"[TIMING] {datetime.datetime.now().isoformat(timespec='seconds')} section=pre_scan_{label} event=end elapsed={time.perf_counter() - start:.3f}s")
+            print(f"[TIMING] {datetime.datetime.now().isoformat(timespec='seconds')} section={section} event=end elapsed={time.perf_counter() - start:.3f}s")
     return _wrapped
 
 
