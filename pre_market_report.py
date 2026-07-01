@@ -654,6 +654,21 @@ def _section(title):
     return f"━━━ {title} ━━━"
 
 
+def _eodhd_vix_quote():
+    """Secondary VIX source for Massive/Polygon entitlement failures (403/plan gaps)."""
+    try:
+        rows = eodhd_get("/eod/VIX.INDX", {"limit": 2}) or []
+        if isinstance(rows, list) and len(rows) >= 2:
+            rows = sorted(rows, key=lambda x: str(x.get("date") or ""))
+            prev_close = _to_float(rows[-2].get("close"))
+            price = _to_float(rows[-1].get("close"))
+            pct = ((price / prev_close) - 1.0) * 100.0 if price and prev_close else None
+            return {"ticker": "VIX.INDX", "price": price, "prev_close": prev_close, "pct": pct, "volume": None, "prev_volume": None}
+    except Exception:
+        return None
+    return None
+
+
 def _yahoo_vix_quote():
     """Fallback quote for VIX only when Polygon/Massive I:VIX is unavailable."""
     try:
@@ -686,16 +701,30 @@ def _yahoo_vix_quote():
 def _snapshot_quote(sym):
     sym = (sym or "").upper()
     if sym in {"VIX", "I:VIX"}:
-        # Polygon/Massive VIX is an index ticker. Stock snapshots 404; use I:VIX prev close.
-        data = massive_get("/v2/aggs/ticker/I:VIX/prev", {"adjusted": "true"}) or {}
-        rows = data.get("results") or []
+        # Polygon/Massive VIX is an index ticker. If entitlement blocks it (403),
+        # fall through to secondary sources instead of rendering N/A.
+        rows = []
+        try:
+            r = _audit_get(
+                f"{MASSIVE_BASE}/v2/aggs/ticker/I:VIX/prev",
+                params={"apiKey": MASSIVE_API_KEY, "adjusted": "true"},
+                timeout=PRE_MARKET_HTTP_TIMEOUT,
+            )
+            if r.status_code == 200:
+                rows = (r.json() or {}).get("results") or []
+            elif r.status_code == 403:
+                print("[pre_market] Massive VIX 403; using secondary VIX fallback")
+            else:
+                print(f"[pre_market] Massive VIX HTTP {r.status_code}; using secondary VIX fallback")
+        except Exception as e:
+            print(f"[pre_market] Massive VIX error; using secondary VIX fallback: {e}")
         row = rows[0] if rows else {}
         price = _to_float(row.get("c"))
         open_price = _to_float(row.get("o"))
         pct = ((price / open_price) - 1.0) * 100.0 if price and open_price else None
         if price:
             return {"ticker": "I:VIX", "price": price, "prev_close": open_price, "pct": pct, "volume": _to_float(row.get("v")), "prev_volume": None}
-        return _yahoo_vix_quote() or {"ticker": "^VIX", "price": None, "prev_close": None, "pct": None, "volume": None, "prev_volume": None}
+        return _eodhd_vix_quote() or _yahoo_vix_quote() or {"ticker": "^VIX", "price": None, "prev_close": None, "pct": None, "volume": None, "prev_volume": None}
 
     data = massive_get(f"/v2/snapshot/locale/us/markets/stocks/tickers/{sym}") or {}
     t = normalize_snapshot_fields(sym, data.get("ticker") or {})
@@ -1302,6 +1331,47 @@ def _launchd_market_open_window(now_et=None):
     return time(9, 15) <= t < time(9, 20)
 
 
+PREMARKET_LOCK_PATH = "/tmp/atlas_premarket.lock"
+PREMARKET_LOCK_STALE_SECONDS = 2 * 60 * 60
+
+
+def _acquire_premarket_lock(path=PREMARKET_LOCK_PATH, stale_seconds=PREMARKET_LOCK_STALE_SECONDS):
+    now_ts = datetime.now(timezone.utc).timestamp()
+    try:
+        existing_age = now_ts - os.path.getmtime(path)
+        if existing_age > stale_seconds:
+            os.unlink(path)
+            print(f"[pre_market] stale lock cleared: {path} age={existing_age:.0f}s")
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[pre_market] lock stale-check warning: {type(e).__name__}: {e}")
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps({
+                "pid": os.getpid(),
+                "created_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }, sort_keys=True))
+        return True
+    except FileExistsError:
+        try:
+            age = now_ts - os.path.getmtime(path)
+        except Exception:
+            age = -1
+        print(f"[pre_market] duplicate run suppressed by lock: {path} age={age:.0f}s")
+        return False
+
+
+def _release_premarket_lock(path=PREMARKET_LOCK_PATH):
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[pre_market] lock release warning: {type(e).__name__}: {e}")
+
+
 def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser(description="Atlas pre-market report")
@@ -1314,14 +1384,20 @@ def main(argv=None):
         print("[pre_market] launchd gate closed; outside 09:15-09:20 ET trading window")
         return 0
 
-    message = generate_pre_market_report(send=not args.dry_run)
-    if not message:
-        print("[pre_market] no report generated")
-        return 1
-    if args.dry_run:
-        print(message)
-        print(f"[pre_market] dry-run generated {len(message)} chars; Telegram not sent")
-    return 0
+    lock_acquired = _acquire_premarket_lock()
+    if not lock_acquired:
+        return 0
+    try:
+        message = generate_pre_market_report(send=not args.dry_run)
+        if not message:
+            print("[pre_market] no report generated")
+            return 1
+        if args.dry_run:
+            print(message)
+            print(f"[pre_market] dry-run generated {len(message)} chars; Telegram not sent")
+        return 0
+    finally:
+        _release_premarket_lock()
 
 
 if __name__ == "__main__":

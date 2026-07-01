@@ -756,6 +756,95 @@ def _signal_current_price(row, scan_row=None):
     return 0.0
 
 
+def _portfolio_module():
+    try:
+        import atlas_portfolio as port
+        return port
+    except Exception as e:
+        print(f"[intraday] live quote/indicator bridge unavailable: {type(e).__name__}: {e}")
+        return None
+
+
+def _batch_live_price_map(tickers):
+    """Batch bridge for live prices used by pending pullback promotion/rendering."""
+    port = _portfolio_module()
+    if port is None or not hasattr(port, "_price_lookup"):
+        return {}
+    prices = {}
+    for ticker in sorted({str(t or "").upper() for t in (tickers or []) if str(t or "").strip()}):
+        try:
+            price = port._price_lookup(ticker)
+            if price not in (None, ""):
+                prices[ticker] = float(price)
+        except Exception as e:
+            print(f"[intraday] live price fetch warning {ticker}: {type(e).__name__}: {e}")
+    return prices
+
+
+def _indicator_info_map(tickers, summary=None):
+    """Fetch RSI/MACD indicator payloads for report-only signal rendering."""
+    summary = summary if isinstance(summary, dict) else {}
+    cache = summary.setdefault("_indicator_info_map", {}) if isinstance(summary, dict) else {}
+    needed = [str(t or "").upper() for t in (tickers or []) if str(t or "").strip() and str(t or "").upper() not in cache]
+    if needed:
+        port = _portfolio_module()
+        fetch = getattr(port, "check_massive_indicators", None) if port is not None else None
+        if callable(fetch):
+            for ticker in sorted(set(needed)):
+                try:
+                    info = fetch(ticker)
+                    if isinstance(info, dict):
+                        cache[ticker] = info
+                except Exception as e:
+                    print(f"[intraday] indicator fetch warning {ticker}: {type(e).__name__}: {e}")
+    return cache
+
+
+def _pending_live_price_map(rows=None, summary=None):
+    summary = summary if isinstance(summary, dict) else {}
+    cache = summary.setdefault("_pending_live_price_map", {}) if isinstance(summary, dict) else {}
+    tickers = {_row_ticker(row) for row in (rows or []) if _row_ticker(row)}
+    missing = sorted(t for t in tickers if t not in cache)
+    if missing:
+        cache.update(_batch_live_price_map(missing))
+    return cache
+
+
+def _normalize_indicator_payload(indicator):
+    if isinstance(indicator, str):
+        try:
+            indicator = json.loads(indicator)
+        except Exception:
+            indicator = {}
+    if not isinstance(indicator, dict):
+        return {}
+    out = dict(indicator)
+    if out.get("macd_histogram") in (None, "") and out.get("macd_hist") not in (None, ""):
+        out["macd_histogram"] = out.get("macd_hist")
+    return out
+
+
+def _enrich_signal_row(row, high_map=None, live_prices=None, indicator_map=None):
+    row = dict(row or {})
+    ticker = _row_ticker(row)
+    if not ticker:
+        return row
+    high_map = high_map or {}
+    live_prices = live_prices or {}
+    indicator_map = indicator_map or {}
+    live = _live_scan_price(high_map.get(ticker, {}))
+    if live is None and ticker in live_prices:
+        live = live_prices.get(ticker)
+    if live is not None:
+        row.update({"live_price": live, "current_price": live, "price": live, "last_price": live})
+    payload = _extract_payload(row)
+    indicator = row.get("indicator_info") or payload.get("indicator_info") or indicator_map.get(ticker)
+    indicator = _normalize_indicator_payload(indicator)
+    if indicator:
+        row["indicator_info"] = indicator
+    return row
+
+
 def _signal_from_row(row, high_map=None):
     row = dict(row or {})
     high_map = high_map or {}
@@ -770,8 +859,7 @@ def _signal_from_row(row, high_map=None):
     stop = row.get("stop_loss") or row.get("stop") or payload.get("stop_loss") or payload.get("stop") or risk_card.get("stop_loss")
     target = row.get("target_price") or row.get("target") or payload.get("target_price") or payload.get("target") or risk_card.get("target_price") or risk_card.get("target") or _pending_target_for_signal(ticker, trigger)
     indicator = row.get("indicator_info") or payload.get("indicator_info") or {}
-    if not isinstance(indicator, dict):
-        indicator = {}
+    indicator = _normalize_indicator_payload(indicator)
     fundamentals = row.get("fundamentals") or payload.get("fundamentals") or {}
     ftag = str((fundamentals.get("tag") if isinstance(fundamentals, dict) else fundamentals) or "")
     reason = f"{row.get('reason','')} {row.get('signal','')} {row.get('signal_json','')} {scan.get('reason','')} {scan.get('signal','')}"
@@ -805,14 +893,15 @@ def _signal_from_row(row, high_map=None):
         return None
 
 
-def _buy_now_candidate_signal(row, high_map):
+def _buy_now_candidate_signal(row, high_map, live_prices=None, indicator_map=None):
     ticker = _row_ticker(row)
     scan = high_map.get(ticker, {}) if ticker else {}
     live_price = _live_scan_price(scan)
+    if live_price is None and ticker:
+        live_price = (live_prices or {}).get(ticker)
     if live_price is None:
         return None
-    row = dict(row or {})
-    row["current_price"] = live_price
+    row = _enrich_signal_row(row, high_map=high_map, live_prices={ticker: live_price}, indicator_map=indicator_map)
     sig = _signal_from_row(row, high_map)
     if not sig or sig.is_too_hot or sig.pillar_score != "4/4":
         return None
@@ -822,26 +911,32 @@ def _buy_now_candidate_signal(row, high_map):
 
 
 def _canonical_buy_now_signals(before_scan_signal_id=None, high=None, summary=None):
+    summary = summary if isinstance(summary, dict) else {}
     high_map = _high_by_ticker(high)
     blocked = _open_tickers(summary)
     signals = []
-    for row in _current_cycle_buy_signals(before_scan_signal_id):
+    current_rows = list(_current_cycle_buy_signals(before_scan_signal_id))
+    try:
+        pending_rows = list(atlas_db.get_pending_pullbacks(status="WAITING") or [])
+    except Exception:
+        pending_rows = []
+    pending_live = _pending_live_price_map(pending_rows, summary=summary)
+    indicator_map = _indicator_info_map([_row_ticker(r) for r in (current_rows + pending_rows)], summary=summary)
+    for row in current_rows:
         t = _row_ticker(row)
         if t in blocked or _pillar_num((row or {}).get("score")) != 4:
             continue
-        sig = _buy_now_candidate_signal(row, high_map)
+        row = _enrich_signal_row(row, high_map=high_map, live_prices=pending_live, indicator_map=indicator_map)
+        sig = _buy_now_candidate_signal(row, high_map, live_prices=pending_live, indicator_map=indicator_map)
         if sig:
             signals.append(sig)
-    try:
-        pending_rows = atlas_db.get_pending_pullbacks(status="WAITING")
-    except Exception:
-        pending_rows = []
     for row in pending_rows or []:
         row = dict(row or {})
         t = _row_ticker(row)
         if t in blocked or _pillar_num(row.get("score")) != 4 or not _pending_pullback_visible_in_status(row):
             continue
-        sig = _buy_now_candidate_signal(row, high_map)
+        row = _enrich_signal_row(row, high_map=high_map, live_prices=pending_live, indicator_map=indicator_map)
+        sig = _buy_now_candidate_signal(row, high_map, live_prices=pending_live, indicator_map=indicator_map)
         if sig:
             signals.append(sig)
     dedup = {}
@@ -851,13 +946,14 @@ def _canonical_buy_now_signals(before_scan_signal_id=None, high=None, summary=No
 
 
 def _canonical_top_pick_signals(before_scan_signal_id=None, high=None, summary=None):
+    summary = summary if isinstance(summary, dict) else {}
     high_map = _high_by_ticker(high)
     blocked = _open_tickers(summary)
     signals = []
-    for row in _current_cycle_buy_signals(before_scan_signal_id):
-        t = _row_ticker(row)
-        if t in blocked:
-            continue
+    rows = [row for row in _current_cycle_buy_signals(before_scan_signal_id) if _row_ticker(row) not in blocked]
+    indicator_map = _indicator_info_map([_row_ticker(row) for row in rows], summary=summary)
+    for row in rows:
+        row = _enrich_signal_row(row, high_map=high_map, indicator_map=indicator_map)
         sig = _signal_from_row(row, high_map)
         if sig and not sig.is_too_hot:
             signals.append(sig)
@@ -1163,23 +1259,26 @@ def _too_hot_tickers(high):
 
 
 def _buy_now_deferred_wait_rows(high=None, summary=None):
+    summary = summary if isinstance(summary, dict) else {}
     high_map = _high_by_ticker(high)
     blocked = _open_tickers(summary)
     existing = set()
     waits = []
     try:
-        pending_rows = atlas_db.get_pending_pullbacks(status="WAITING")
+        pending_rows = list(atlas_db.get_pending_pullbacks(status="WAITING") or [])
     except Exception:
         pending_rows = []
+    pending_live = _pending_live_price_map(pending_rows, summary=summary)
+    indicator_map = _indicator_info_map([_row_ticker(row) for row in pending_rows], summary=summary)
     for row in pending_rows or []:
-        row = dict(row or {})
+        row = _enrich_signal_row(row, high_map=high_map, live_prices=pending_live, indicator_map=indicator_map)
         ticker = _row_ticker(row)
         if not ticker or ticker in blocked or ticker in existing or _pillar_num(row.get("score")) != 4:
             continue
         if not _pending_pullback_visible_in_status(row):
             continue
         trigger = row.get("trigger_price") or row.get("entry_price") or row.get("entry")
-        live = _live_scan_price(high_map.get(ticker, {}))
+        live = _live_scan_price(row) or _live_scan_price(high_map.get(ticker, {}))
         stale = False
         try:
             trigger_float = float(trigger) if trigger not in (None, "") else None
@@ -1202,8 +1301,17 @@ def _buy_now_deferred_wait_rows(high=None, summary=None):
 
 
 def _waiting_lines(high, suppress_tickers=None, summary=None):
+    summary = summary if isinstance(summary, dict) else {}
     deferred_waits = _buy_now_deferred_wait_rows(high, summary=summary)
     high = deferred_waits + list(high or [])
+    try:
+        pending_rows = list(atlas_db.get_pending_pullbacks(status="WAITING") or [])
+    except Exception:
+        pending_rows = []
+    pending_live = _pending_live_price_map(pending_rows, summary=summary)
+    indicator_map = _indicator_info_map([_row_ticker(row) for row in pending_rows], summary=summary)
+    high_map = _high_by_ticker(high)
+    high = [_enrich_signal_row(h, high_map=high_map, live_prices=pending_live, indicator_map=indicator_map) for h in high]
     hot_tickers = _too_hot_tickers(high)
     suppress_tickers = {str(t or "").upper() for t in (suppress_tickers or set())} | _open_tickers(summary)
     waits = _unique([
@@ -1348,8 +1456,25 @@ def _build_report(summary):
     return "\n".join(lines)
 
 
+def _pending_price_positive(value):
+    try:
+        return float(value) > 0
+    except Exception:
+        return False
+
+
+def _pending_pullback_has_valid_prices(row):
+    row = row or {}
+    payload = _extract_payload(row)
+    trigger = row.get("trigger_price") or payload.get("trigger_price")
+    entry = row.get("entry_price") or row.get("entry") or payload.get("entry_price") or payload.get("entry") or trigger
+    return _pending_price_positive(trigger) and _pending_price_positive(entry)
+
+
 def _pending_pullback_visible_in_status(row):
     row = row or {}
+    if not _pending_pullback_has_valid_prices(row):
+        return False
     text = " ".join(str(row.get(k) or "") for k in ("status", "signal", "signal_json"))
     if "TOO HOT" in text.upper() or "TOO EXTENDED" in text.upper():
         return False
@@ -1456,7 +1581,7 @@ def _quick_status_report(reason="scan in progress"):
         "",
         f"💼 Holding: {len(open_rows)}",
     ]
-    for row in open_rows[:6]:
+    for row in open_rows:
         t = str(row.get("ticker") or "?").upper()
         lines.append(f"   • {t} entry {_price(row.get('price') or row.get('entry_price'))} stop {_price(row.get('stop_loss'))}")
     if open_rows:

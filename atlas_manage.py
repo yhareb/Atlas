@@ -66,7 +66,16 @@ DEFAULT_UNIVERSE = [
 
 # Provider 404 / delisted exclusions that must not enter the active scan list,
 # including restart-surviving pending rows.
-SCAN_EXCLUDED_TICKERS = {"PRA", "AMED", "CWAN", "TTNI"}
+PERMANENT_SCAN_REMOVED_TICKERS = {"CWAN"}
+SCAN_EXCLUDED_TICKERS = PERMANENT_SCAN_REMOVED_TICKERS | {"PRA", "AMED", "TTNI"}
+
+
+def _filter_scan_universe(tickers):
+    return [
+        str(t or "").upper()
+        for t in (tickers or [])
+        if str(t or "").strip() and str(t or "").upper() not in SCAN_EXCLUDED_TICKERS
+    ]
 
 LINE = "=" * 68
 THIN = "-" * 68
@@ -113,7 +122,7 @@ def _hdr(title):
 
 def load_candidates(args):
     if args.tickers:
-        return [t.upper() for t in args.tickers]
+        return _filter_scan_universe(args.tickers)
     if args.file and os.path.exists(args.file):
         with open(args.file) as f:
             toks = []
@@ -121,7 +130,7 @@ def load_candidates(args):
                 line = line.split("#", 1)[0].strip()
                 if line:
                     toks += [p.strip().upper() for p in line.replace(",", " ").split()]
-            return [t for t in toks if t]
+            return _filter_scan_universe(toks)
     # Default: reuse the SAME news-driven discovery the scout uses, so the
     # daily manager scans exactly the universe market_scout.py would. Falls
     # back to the built-in liquid list if the scout isn't importable.
@@ -129,10 +138,10 @@ def load_candidates(args):
         from market_scout import discover_tickers
         found = discover_tickers()
         if found:
-            return [t.upper() for t in found]
+            return _filter_scan_universe(found)
     except Exception:
         pass
-    return list(DEFAULT_UNIVERSE)
+    return _filter_scan_universe(DEFAULT_UNIVERSE)
 
 
 

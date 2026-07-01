@@ -50,6 +50,41 @@ def _contains_token(value: str, token: str) -> bool:
     return token.upper() in {p for p in parts if p}
 
 
+def parse_flags(text: str) -> list[str]:
+    """Extract canonical Perme flags from raw RAG/report text.
+
+    Canonical taxonomy:
+    RISK-OFF, FED_DAY, FOMC_DAY, CPI_DAY,
+    EARNINGS_RISK: <TICKER>, TICKER_NOTE: <TICKER>,
+    SECTOR_OVERBOUGHT: <SECTOR>, SECTOR_NOTE: <SECTOR>.
+    """
+    body = str(text or "")
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(flag: str) -> None:
+        flag = _clean_flag(flag)
+        if flag == "RISK_OFF":
+            flag = "RISK-OFF"
+        if flag and flag not in seen:
+            seen.add(flag)
+            out.append(flag)
+
+    for match in re.finditer(r"(?<![A-Z0-9_-])(RISK[-_]OFF|FED_DAY|FOMC_DAY|CPI_DAY)(?![A-Z0-9_-])", body, re.IGNORECASE):
+        add(match.group(1))
+
+    canonical_prefixes = ("EARNINGS_RISK", "TICKER_NOTE", "SECTOR_OVERBOUGHT", "SECTOR_NOTE")
+    pattern = r"(?im)^\s*(EARNINGS_RISK|TICKER_NOTE|SECTOR_OVERBOUGHT|SECTOR_NOTE)\s*:\s*([^\n\r#*`]+?)\s*$"
+    for match in re.finditer(pattern, body):
+        prefix = match.group(1).upper()
+        value = re.sub(r"\s+", " ", match.group(2)).strip(" -–—.,;:").upper()
+        if not value:
+            continue
+        add(f"{prefix}: {value}")
+
+    return out
+
+
 def flags_for_ticker(flags, ticker, sector=None) -> list[str]:
     """Return global + ticker/sector-specific flags relevant to ticker.
 

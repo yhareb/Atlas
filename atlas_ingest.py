@@ -26,7 +26,7 @@ for _path in (SCRIPTS_DIR, "/Users/yasser/scripts"):
 
 from atlas_notify import send_telegram  # noqa: E402
 
-SUPPORTED_EXTS = {".pdf", ".docx", ".html", ".htm", ".txt", ".jpg", ".jpeg", ".png"}
+SUPPORTED_EXTS = {".pdf", ".docx", ".html", ".htm", ".txt", ".md", ".jpg", ".jpeg", ".png"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 DEFAULT_INBOX = Path(os.environ.get("ATLAS_INGEST_INBOX", "/Users/yasser/atlas_inbox"))
 DEFAULT_VECTORDB = Path(os.environ.get("ATLAS_VECTORDB", "/Users/yasser/atlas_vectordb"))

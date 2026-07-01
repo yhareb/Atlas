@@ -199,12 +199,20 @@ def _latest_handoff(market_day):
     return atlas_db.get_handoff(today) or atlas_db.get_handoff(previous) or {}
 
 
+def _open_position_tickers():
+    try:
+        return {str(row.get("ticker") or "").upper().strip() for row in atlas_db.get_open_positions() if row.get("ticker")}
+    except Exception:
+        return set()
+
+
 def _watch_list_lines(data):
     raw = data.get("WATCH", []) if isinstance(data, dict) else []
+    open_tickers = _open_position_tickers()
     seen = []
     for item in raw or []:
         ticker = str(item or "").upper().strip()
-        if ticker and ticker not in seen:
+        if ticker and ticker not in open_tickers and ticker not in seen:
             seen.append(ticker)
     lines = [f"━━━ 👀 WATCH LIST ({len(seen)}) ━━━"]
     if not seen:

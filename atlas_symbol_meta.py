@@ -66,6 +66,9 @@ TICKER_NAME_OVERRIDES = {
     "FUL": "H.B. Fuller",
     "GE": "GE Aerospace",
     "JPM": "JPMorgan Chase",
+    "KLAC": "KLA",
+    "LLY": "Eli Lilly",
+    "MKS": "MKS Instruments",
     "MLKN": "MillerKnoll",
     "MRK": "Merck",
     "MU": "Micron Technology",
@@ -99,6 +102,7 @@ def _clean_company_name(name, ticker=None):
     text = re.sub(r",?\s+(Class|Ordinary|Common)\s+(Stock|Shares?).*$", "", text, flags=re.I).strip()
     text = re.sub(r",?\s+Common Stock$", "", text, flags=re.I).strip()
     text = re.sub(r",?\s+Class [A-Z]$", "", text, flags=re.I).strip()
+    text = re.sub(r",?\s+(?:&|and)\s+Company$", "", text, flags=re.I).strip()
     text = re.sub(r",?\s+(Inc\.?|Incorporated|Corp\.?|Corporation|Holdings|PLC|Ltd\.?|Limited|Co\.?|Company|SA|N\.V\.|NV|AG)$", "", text, flags=re.I).strip()
 
     key = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()

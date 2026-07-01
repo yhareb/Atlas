@@ -26,14 +26,14 @@ ETF_BLOCKLIST = {
 }
 
 # Non-ETF symbols unsuitable for Atlas even if they are technically common stock.
-EXCLUDED_TICKERS = {
+PERMANENT_SCAN_REMOVED_TICKERS = {"CWAN"}
+EXCLUDED_TICKERS = PERMANENT_SCAN_REMOVED_TICKERS | {
     "FNMA",  # Fannie Mae: OTC/government conservatorship entity
     "FMCC",  # Freddie Mac: OTC/government conservatorship entity
     "SUUN",  # invalid/non-tradeable ticker surfaced by discovery feeds
     "MUZ",   # Nuveen bond ETF slipping through provider metadata
     "PRA",   # ProAssurance: active reference, but Massive snapshot 404; exclude from active scan universe
     "AMED",  # Amedisys: delisted in Massive/EODHD; exclude from active scan universe
-    "CWAN",  # Clearwater Analytics: active reference, but Massive snapshot 404; exclude from active scan universe
     "TTNI",  # EODHD TTNI.US fundamentals/splits 404; exclude from active scan universe
 }
 
