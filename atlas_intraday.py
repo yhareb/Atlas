@@ -1,4 +1,5 @@
 import os, sys, datetime, contextlib, io, re, time, errno, signal, threading, subprocess, sqlite3, json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -766,18 +767,32 @@ def _portfolio_module():
 
 
 def _batch_live_price_map(tickers):
-    """Batch bridge for live prices used by pending pullback promotion/rendering."""
+    """Parallel bridge for live prices used by pending pullback promotion/rendering."""
     port = _portfolio_module()
     if port is None or not hasattr(port, "_price_lookup"):
         return {}
+    unique = sorted({str(t or "").upper() for t in (tickers or []) if str(t or "").strip()})
+    if not unique:
+        return {}
+    start = time.perf_counter()
     prices = {}
-    for ticker in sorted({str(t or "").upper() for t in (tickers or []) if str(t or "").strip()}):
-        try:
-            price = port._price_lookup(ticker)
-            if price not in (None, ""):
-                prices[ticker] = float(price)
-        except Exception as e:
-            print(f"[intraday] live price fetch warning {ticker}: {type(e).__name__}: {e}")
+
+    def _fetch(ticker):
+        price = port._price_lookup(ticker)
+        return ticker, price
+
+    workers = min(8, max(1, len(unique)))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_ticker = {executor.submit(_fetch, ticker): ticker for ticker in unique}
+        for future in as_completed(future_to_ticker):
+            ticker = future_to_ticker[future]
+            try:
+                got_ticker, price = future.result()
+                if price not in (None, ""):
+                    prices[got_ticker] = float(price)
+            except Exception as e:
+                print(f"[intraday] live price fetch warning {ticker}: {type(e).__name__}: {e}")
+    print(f"[TIMING] {datetime.datetime.now().isoformat(timespec='seconds')} section=pending_live_price_map event=end elapsed={time.perf_counter() - start:.3f}s tickers={len(unique)} workers={workers}")
     return prices
 
 
@@ -785,18 +800,28 @@ def _indicator_info_map(tickers, summary=None):
     """Fetch RSI/MACD indicator payloads for report-only signal rendering."""
     summary = summary if isinstance(summary, dict) else {}
     cache = summary.setdefault("_indicator_info_map", {}) if isinstance(summary, dict) else {}
-    needed = [str(t or "").upper() for t in (tickers or []) if str(t or "").strip() and str(t or "").upper() not in cache]
+    needed = sorted({str(t or "").upper() for t in (tickers or []) if str(t or "").strip() and str(t or "").upper() not in cache})
     if needed:
         port = _portfolio_module()
         fetch = getattr(port, "check_massive_indicators", None) if port is not None else None
         if callable(fetch):
-            for ticker in sorted(set(needed)):
-                try:
-                    info = fetch(ticker)
-                    if isinstance(info, dict):
-                        cache[ticker] = info
-                except Exception as e:
-                    print(f"[intraday] indicator fetch warning {ticker}: {type(e).__name__}: {e}")
+            start = time.perf_counter()
+
+            def _fetch(ticker):
+                return ticker, fetch(ticker)
+
+            workers = min(8, max(1, len(needed)))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                future_to_ticker = {executor.submit(_fetch, ticker): ticker for ticker in needed}
+                for future in as_completed(future_to_ticker):
+                    ticker = future_to_ticker[future]
+                    try:
+                        got_ticker, info = future.result()
+                        if isinstance(info, dict):
+                            cache[got_ticker] = info
+                    except Exception as e:
+                        print(f"[intraday] indicator fetch warning {ticker}: {type(e).__name__}: {e}")
+            print(f"[TIMING] {datetime.datetime.now().isoformat(timespec='seconds')} section=indicator_info_map event=end elapsed={time.perf_counter() - start:.3f}s tickers={len(needed)} workers={workers}")
     return cache
 
 
@@ -1657,6 +1682,51 @@ def run_intraday():
         _release_run_lock(lock_fd)
 
 
+
+
+def _make_prescan_timing_wrapper(label, func):
+    def _wrapped(*args, **kwargs):
+        start = time.perf_counter()
+        print(f"[TIMING] {datetime.datetime.now().isoformat(timespec='seconds')} section=pre_scan_{label} event=start")
+        try:
+            return func(*args, **kwargs)
+        finally:
+            print(f"[TIMING] {datetime.datetime.now().isoformat(timespec='seconds')} section=pre_scan_{label} event=end elapsed={time.perf_counter() - start:.3f}s")
+    return _wrapped
+
+
+def _install_prescan_timing(atlas_manage):
+    """Temporarily instrument major atlas_manage pre-scan blocks without changing strategy logic."""
+    patches = []
+
+    def patch_attr(obj, attr, label):
+        try:
+            original = getattr(obj, attr)
+        except Exception:
+            return
+        if not callable(original):
+            return
+        setattr(obj, attr, _make_prescan_timing_wrapper(label, original))
+        patches.append((obj, attr, original))
+
+    patch_attr(getattr(atlas_manage, "acct", None), "get_account_summary", "account_summary")
+    patch_attr(getattr(atlas_manage, "port", None), "run_exits", "run_exits")
+    patch_attr(atlas_manage, "check_regime", "regime_check")
+    patch_attr(atlas_manage, "check_macro_context", "macro_context")
+    patch_attr(atlas_manage, "load_candidates", "market_scout_candidates")
+    patch_attr(getattr(atlas_manage, "atlas_db", None), "get_pending_pullbacks", "pending_pullbacks_query")
+    patch_attr(getattr(atlas_manage, "atlas_db", None), "get_ema_retry_candidates", "ema_retry_query")
+    patch_attr(getattr(atlas_manage, "atlas_db", None), "get_trades", "held_trades_query")
+
+    def restore():
+        for obj, attr, original in reversed(patches):
+            try:
+                setattr(obj, attr, original)
+            except Exception:
+                pass
+
+    return restore
+
 def _run_intraday_locked(now, force=False, dry_run=False):
     ok, gate_detail = is_market_hours()
     if not ok and not force:
@@ -1758,10 +1828,15 @@ def _run_intraday_locked(now, force=False, dry_run=False):
     interim_timer = threading.Timer(180.0, _send_interim_report_if_slow)
     interim_timer.daemon = True
     interim_timer.start()
+    restore_prescan_timing = _install_prescan_timing(atlas_manage)
     try:
         with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
             summary = atlas_manage.run(args)
     finally:
+        try:
+            restore_prescan_timing()
+        except Exception:
+            pass
         scan_done["done"] = True
         try:
             interim_timer.cancel()
