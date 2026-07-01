@@ -44,6 +44,8 @@ _REQUESTS_GET = requests.get
 PRE_MARKET_HTTP_TIMEOUT = float(os.environ.get("PRE_MARKET_HTTP_TIMEOUT", "5"))
 PRE_MARKET_CATALYST_LIMIT = int(os.environ.get("PRE_MARKET_CATALYST_LIMIT", "15"))
 PRE_MARKET_CATALYST_MAX_HITS = int(os.environ.get("PRE_MARKET_CATALYST_MAX_HITS", "6"))
+BENZINGA_UNCOVERED = {"FCEL", "ZURA", "PCLA", "CNVS", "WSHP", "SDOT"}
+BENZINGA_SKIP_SET = set()
 PRE_MARKET_HANDOFF_BUY_LIMIT = int(os.environ.get("PRE_MARKET_HANDOFF_BUY_LIMIT", "6"))
 PRE_MARKET_HANDOFF_WATCH_LIMIT = int(os.environ.get("PRE_MARKET_HANDOFF_WATCH_LIMIT", "8"))
 
@@ -822,7 +824,7 @@ def _overnight_headlines(limit=5):
 
 def _benzinga_catalyst_for_ticker(ticker, hours=24):
     ticker = (ticker or "").upper()
-    if not ticker or not BENZINGA_API_KEY:
+    if not ticker or ticker in BENZINGA_UNCOVERED or ticker in BENZINGA_SKIP_SET or not BENZINGA_API_KEY:
         return None
     now_utc = datetime.now(timezone.utc)
     since_utc = now_utc - timedelta(hours=hours)
@@ -836,35 +838,46 @@ def _benzinga_catalyst_for_ticker(ticker, hours=24):
     }
     try:
         r = _audit_get(endpoint, params=params, timeout=PRE_MARKET_HTTP_TIMEOUT)
-        if r.status_code != 200:
-            return None
+    except requests.exceptions.RequestException:
+        return None
+    if r.status_code != 200:
+        return None
+    try:
         data = r.json() or []
-        articles = data if isinstance(data, list) else (data.get("data") or data.get("articles") or [])
-        for item in articles:
-            title = (item.get("title") or item.get("headline") or "").strip()
-            if title:
-                return title
-        if articles:
-            return None
+    except (json.JSONDecodeError, ValueError):
+        BENZINGA_SKIP_SET.add(ticker)
+        return None
+    articles = data if isinstance(data, list) else (data.get("data") or data.get("articles") or [])
+    for item in articles:
+        title = (item.get("title") or item.get("headline") or "").strip()
+        if title:
+            return title
+    if articles:
+        return None
 
-        fallback_params = dict(params)
-        fallback_params.pop("tickers", None)
-        fallback_params["pageSize"] = 15
+    fallback_params = dict(params)
+    fallback_params.pop("tickers", None)
+    fallback_params["pageSize"] = 15
+    try:
         fallback = _audit_get(endpoint, params=fallback_params, timeout=PRE_MARKET_HTTP_TIMEOUT)
-        if fallback.status_code != 200:
-            return None
+    except requests.exceptions.RequestException:
+        return None
+    if fallback.status_code != 200:
+        return None
+    try:
         fallback_data = fallback.json() or []
-        fallback_articles = fallback_data if isinstance(fallback_data, list) else (fallback_data.get("data") or fallback_data.get("articles") or [])
-        for item in fallback_articles:
-            stocks = item.get("stocks") or []
-            stock_names = {str(s.get("name") or "").upper() for s in stocks if isinstance(s, dict)}
-            if ticker not in stock_names:
-                continue
-            title = (item.get("title") or item.get("headline") or "").strip()
-            if title:
-                return title
-    except Exception as e:
-        print(f"[pre-market] Benzinga catalyst lookup failed for {ticker}: {e}")
+    except (json.JSONDecodeError, ValueError):
+        BENZINGA_SKIP_SET.add(ticker)
+        return None
+    fallback_articles = fallback_data if isinstance(fallback_data, list) else (fallback_data.get("data") or fallback_data.get("articles") or [])
+    for item in fallback_articles:
+        stocks = item.get("stocks") or []
+        stock_names = {str(s.get("name") or "").upper() for s in stocks if isinstance(s, dict)}
+        if ticker not in stock_names:
+            continue
+        title = (item.get("title") or item.get("headline") or "").strip()
+        if title:
+            return title
     return None
 
 

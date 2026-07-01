@@ -38,6 +38,8 @@ UTC = _dt.timezone.utc
 GAP_THRESHOLD = 5.0
 HTTP_TIMEOUT = float(os.environ.get("ATLAS_GAP_HTTP_TIMEOUT", "8"))
 MAX_WORKERS = int(os.environ.get("ATLAS_GAP_WORKERS", "10"))
+BENZINGA_UNCOVERED = {"FCEL", "ZURA", "PCLA", "CNVS", "WSHP", "SDOT"}
+BENZINGA_SKIP_SET = set()
 
 try:
     from atlas_notify import send_telegram as _send_telegram
@@ -242,9 +244,9 @@ def _clean_title(title):
 
 
 def benzinga_catalyst(ticker, now_et):
-    if not BENZINGA_API_KEY:
-        return None
     ticker = (ticker or "").upper()
+    if not ticker or ticker in BENZINGA_UNCOVERED or ticker in BENZINGA_SKIP_SET or not BENZINGA_API_KEY:
+        return None
     start = _dt.datetime.combine(_previous_trading_day(now_et.date()), _dt.time(16, 0), ET)
     end = min(now_et, _dt.datetime.combine(now_et.date(), _dt.time(9, 30), ET))
     url = "https://api.benzinga.com/api/v2/news"
@@ -259,8 +261,8 @@ def benzinga_catalyst(ticker, now_et):
     }
     try:
         data = _get_json(url, params, timeout=HTTP_TIMEOUT)
-    except Exception as e:
-        _log(f"Benzinga catalyst failed {ticker}: {e}")
+    except (json.JSONDecodeError, ValueError, requests.exceptions.RequestException):
+        BENZINGA_SKIP_SET.add(ticker)
         return None
     if not isinstance(data, list):
         return None
@@ -280,8 +282,8 @@ def benzinga_catalyst(ticker, now_et):
     fallback_params["pageSize"] = 20
     try:
         fallback_data = _get_json(url, fallback_params, timeout=HTTP_TIMEOUT)
-    except Exception as e:
-        _log(f"Benzinga catalyst fallback failed {ticker}: {e}")
+    except (json.JSONDecodeError, ValueError, requests.exceptions.RequestException):
+        BENZINGA_SKIP_SET.add(ticker)
         return None
     if not isinstance(fallback_data, list):
         return None
