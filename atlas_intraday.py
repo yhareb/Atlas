@@ -1812,12 +1812,12 @@ def _run_intraday_locked(now, force=False, dry_run=False):
         try:
             if not dry_run:
                 interim = _quick_status_report("full scan still running >180s")
-                _send_telegram_async(interim, label="atlas_interim_status")
-                print("[intraday] interim telegram report queued")
+                # Heartbeat Telegram intentionally disabled: keep timing/report build, suppress noisy send.
+                print("[intraday] interim heartbeat telegram suppressed")
             else:
                 print("[intraday] dry-run: interim telegram suppressed")
         except Exception as e:
-            print(f"[intraday] interim telegram report failed (non-fatal): {e}")
+            print(f"[intraday] interim heartbeat handling failed (non-fatal): {e}")
 
     try:
         _before_scan_signal_id = atlas_db.get_max_signal_id()
