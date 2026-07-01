@@ -67,8 +67,8 @@ MAX_INTRADAY_RUNTIME_SECONDS = int(os.environ.get("ATLAS_INTRADAY_MAX_RUNTIME_SE
 
 def _hard_timeout_handler(signum, frame):
     try:
-        print(f"[intraday] HARD TIMEOUT after {MAX_INTRADAY_RUNTIME_SECONDS}s; sending status and exiting so launchd can run next cycle.", flush=True)
-        _send_telegram_async(_quick_status_report(f"hard timeout after {MAX_INTRADAY_RUNTIME_SECONDS}s"), label="atlas_hard_timeout")
+        print(f"[intraday] HARD TIMEOUT after {MAX_INTRADAY_RUNTIME_SECONDS}s; status Telegram suppressed; exiting so launchd can run next cycle.", flush=True)
+        # Status/heartbeat Telegram intentionally disabled: hard-timeout timing logic preserved.
         time.sleep(2)
     except Exception as e:
         print(f"[intraday] hard-timeout status failed: {e}", flush=True)
@@ -1667,8 +1667,9 @@ def run_intraday():
         print(f"[intraday] overlap guard: another atlas_intraday run is still active ({LOCK_PATH}); sending status and exiting cleanly.")
         try:
             if not cli_dry_run:
-                _send_telegram_async(_quick_status_report("previous scan still running"), label="atlas_overlap_status")
-                print("[intraday] overlap status telegram queued")
+                _quick_status_report("previous scan still running")
+                # Status/heartbeat Telegram intentionally disabled: overlap logic preserved.
+                print("[intraday] overlap status telegram suppressed")
             else:
                 print("[intraday] dry-run: overlap status telegram suppressed")
         except Exception as e:
@@ -1739,8 +1740,9 @@ def _run_intraday_locked(now, force=False, dry_run=False):
         print(f"[intraday] market-hours gate: {gate_detail}")
     try:
         if not dry_run:
-            _send_telegram_async(_quick_status_report("scan starting"), label="atlas_start_status")
-            print("[intraday] start status telegram subprocess queued")
+            _quick_status_report("scan starting")
+            # Status/heartbeat Telegram intentionally disabled: scan-start logic preserved.
+            print("[intraday] start status telegram suppressed")
         else:
             print("[intraday] dry-run: start status telegram suppressed")
     except Exception as e:
