@@ -28,6 +28,7 @@ from atlas_notify import send_telegram  # noqa: E402
 
 SUPPORTED_EXTS = {".pdf", ".docx", ".html", ".htm", ".txt", ".md", ".jpg", ".jpeg", ".png"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
+BROKER_INGEST_EXTS = IMAGE_EXTS | {".pdf"}
 DEFAULT_INBOX = Path(os.environ.get("ATLAS_INGEST_INBOX", "/Users/yasser/atlas_inbox"))
 DEFAULT_VECTORDB = Path(os.environ.get("ATLAS_VECTORDB", "/Users/yasser/atlas_vectordb"))
 COLLECTION_NAME = os.environ.get("ATLAS_VECTOR_COLLECTION", "atlas_knowledge")
@@ -156,6 +157,9 @@ def _move_unique(src: Path, dest_dir: Path) -> Path:
 
 
 def _post_ingest_trade_hook(chunks: list[str], source_filename: str, dry_run: bool = False) -> dict:
+    suffix = Path(str(source_filename or "")).suffix.lower()
+    if suffix not in BROKER_INGEST_EXTS:
+        return {"event": "SKIPPED", "status": "ignored", "reason": "non_broker_file_type", "suffix": suffix}
     extracted_text = "\n\n".join(str(chunk or "") for chunk in chunks if str(chunk or "").strip())
     if not extracted_text.strip():
         return {"event": "UNKNOWN", "status": "ignored", "reason": "empty_text"}
