@@ -243,16 +243,45 @@ def fetch_sector_etfs(mock: bool = False) -> list[dict[str, Any]]:
     return rows
 
 
+def _normalize_eodhd_economic_calendar_times(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            normalized.append(row)
+            continue
+        item = dict(row)
+        raw_date = item.get("date")
+        if not raw_date:
+            normalized.append(item)
+            continue
+        try:
+            value = str(raw_date).strip().replace("Z", "+00:00")
+            dt = datetime.fromisoformat(value)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+            et_dt = dt.astimezone(ET)
+            item["date"] = et_dt.strftime("%Y-%m-%d %H:%M ET")
+            item["timezone"] = "ET"
+        except Exception:
+            pass
+        normalized.append(item)
+    return normalized
+
+
 def collect_context(routine: str, mock: bool = False) -> dict[str, Any]:
     now = _now_et()
     resolved_routine = _routine_from_time(now) if routine == "auto" else routine
+    economic_calendar = fetch_eodhd_economic_calendar(resolved_routine, now, mock=mock)
+    economic_calendar = _normalize_eodhd_economic_calendar_times(economic_calendar)
     return {
         "generated_at_et": now.isoformat(timespec="seconds"),
         "routine": resolved_routine,
         "source_mode": "mock" if mock else "live",
         "benzinga_news": fetch_benzinga_news(resolved_routine, now, mock=mock),
         "benzinga_earnings": fetch_benzinga_earnings(resolved_routine, now, mock=mock),
-        "eodhd_economic_calendar": fetch_eodhd_economic_calendar(resolved_routine, now, mock=mock),
+        "eodhd_economic_calendar": economic_calendar,
         "massive_sector_etfs": fetch_sector_etfs(mock=mock),
     }
 
