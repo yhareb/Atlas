@@ -37,6 +37,7 @@ import os
 import sys
 import math
 import json
+import re
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, date, timedelta, time
@@ -766,7 +767,10 @@ def evaluate_exit(lot, dry_run=True, regime=None):
 
     high_water = max(max(highs) if highs else last, last)
     peak_R = (high_water - entry) / risk if risk > 0 else 0.0
-    gain_R = (last - entry) / risk if risk > 0 else 0.0
+    # Guard: if stop is within $0.10 of entry, R-multiple is meaningless (near-zero denominator)
+    _risk_meaningful = abs(entry - hard_stop) >= 0.10
+    gain_R = ((last - entry) / risk if risk > 0 else 0.0) if _risk_meaningful else None
+    gain_R_text = f"{gain_R:+.2f}R" if gain_R is not None else "N/A"
 
     stop = hard_stop
     manual_stop_locked = bool(int(lot.get("manual_stop_lock") or 0))
@@ -788,6 +792,98 @@ def evaluate_exit(lot, dry_run=True, regime=None):
         risk_off_tightened = True
         trail_note = f"regime risk-OFF -> stop tightened to breakeven ({regime_detail})"
 
+    # ── Macro-stress full re-analysis ─────────────────────────────────────────
+    perme_ctx = _load_perme_context()
+    perme_sentiment = str((perme_ctx or {}).get("sentiment") or "NEUTRAL").upper()
+    perme_ticker_notes = [str(t).upper() for t in ((perme_ctx or {}).get("ticker_notes") or [])]
+    perme_suppressed_sectors = [str(s).upper() for s in ((perme_ctx or {}).get("suppressed_sectors") or [])]
+    perme_upcoming_events = (perme_ctx or {}).get("upcoming_events") or []
+    perme_cautious = bool((perme_ctx or {}).get("cautious", False))
+
+    # Event proximity check: assume context events are "imminent" only if Perme is cautious or RISK_OFF
+    # (Perme already elevates sentiment when an event is within 24h and high impact)
+    imminent_event_risk = bool(perme_upcoming_events) and (perme_cautious or perme_sentiment in ("RISK_OFF", "CAUTION"))
+
+    macro_stress_active = (
+        perme_sentiment in ("RISK_OFF", "CAUTION")
+        or ticker in perme_ticker_notes
+        or imminent_event_risk
+    )
+
+    macro_alert_reason = None
+    macro_recommendation = None
+    if macro_stress_active:
+        # Fetch live technicals for full re-analysis
+        indicators = check_massive_indicators(ticker)
+        rsi = indicators.get("rsi")
+        macd_hist = indicators.get("macd_histogram")
+        rvol = _compute_rvol(aggs)
+
+        # For EXIT re-analysis, momentum is only weak if breaking down (<35) or overbought (>70)
+        # We do not use the entry-side evaluate_indicator_confluence() here.
+        momentum_weak = False
+        rsi_float = None
+        macd_hist_float = None
+        if rsi is not None:
+            try:
+                rsi_float = float(rsi)
+                momentum_weak = rsi_float > 70 or rsi_float < 35
+            except Exception:
+                pass
+        if macd_hist is not None:
+            try:
+                macd_hist_float = float(macd_hist)
+            except Exception:
+                pass
+
+        dist_to_stop_pct = ((last - stop) / stop * 100) if stop > 0 else 100.0
+        ticker_flagged = ticker in perme_ticker_notes
+        near_stop = dist_to_stop_pct < 3.0  # within 3% of effective stop
+
+        stress_factors = []
+        if perme_sentiment in ("RISK_OFF", "CAUTION"):
+            stress_factors.append(perme_sentiment)
+        if ticker_flagged:
+            stress_factors.append("ticker flagged")
+        if perme_upcoming_events:
+            # Shorten event to first meaningful segment (before comma or semicolon), max 40 chars
+            _evt_raw = str(perme_upcoming_events[0] or "").strip()
+            _evt_short = re.split(r"[,;]", _evt_raw)[0].strip()
+            if len(_evt_short) > 40:
+                _evt_short = _evt_short[:40].rstrip()
+            stress_factors.append(_evt_short)
+        if momentum_weak:
+            stress_factors.append(f"RSI {rsi_float:.0f} weak" if rsi_float is not None else "momentum weak")
+        if rvol is not None and rvol < 0.7:
+            stress_factors.append(f"RVOL {rvol:.2f} low")
+        # NOTE: price/stop distance is NOT added here — it is shown explicitly in the report card
+
+        # Decision: if momentum is weak AND near stop under macro stress → ALERT
+        # If ticker explicitly flagged by Perme → ALERT regardless of distance
+        if stress_factors and (near_stop or ticker_flagged or momentum_weak):
+            # Compute structured recommendation — single canonical action, no ambiguity
+            # Rule 1: SELL NOW — near stop AND (RISK_OFF + imminent event OR RSI breakdown)
+            if near_stop and dist_to_stop_pct < 1.5 and (imminent_event_risk or (rsi_float is not None and rsi_float < 35)):
+                recommendation = "🔴 SELL NOW — price within 1.5% of stop under event/breakdown risk"
+            # Rule 2: SELL NOW — RSI breakdown (< 35), thesis broken regardless of distance
+            elif rsi_float is not None and rsi_float < 35:
+                recommendation = "🔴 SELL NOW — RSI breakdown (RSI {:.0f}), thesis invalidated".format(rsi_float)
+            # Rule 3: TIGHTEN STOP — overbought with fading MACD momentum
+            elif rsi_float is not None and rsi_float > 70 and macd_hist_float is not None and macd_hist_float < 0:
+                recommendation = "🟡 TIGHTEN STOP — overbought (RSI {:.0f}) + MACD fading; reduce risk, do not exit".format(rsi_float)
+            # Rule 4: TIGHTEN STOP — near stop under macro stress, momentum still intact
+            elif near_stop and perme_sentiment in ("RISK_OFF", "CAUTION"):
+                recommendation = "🟡 TIGHTEN STOP — within {:.1f}% of stop under {}; move stop to breakeven".format(dist_to_stop_pct, perme_sentiment)
+            # Rule 5: HOLD — thesis intact, no structural threat
+            else:
+                recommendation = "🟢 HOLD — no structural threat; monitor next cycle"
+            macro_alert_reason = (
+                f"MACRO STRESS: {'; '.join(stress_factors)}"
+            )
+            # Store recommendation separately so renderer can display it as a bold action line
+            macro_recommendation = recommendation
+    # ── End macro-stress block ─────────────────────────────────────────────────
+
     if not dry_run and lot.get("id") and stop > hard_stop:
         atlas_db.update_trade_stop(lot.get("id"), round(stop, 2))
 
@@ -802,16 +898,21 @@ def evaluate_exit(lot, dry_run=True, regime=None):
     elif days > MAX_HOLD_DAYS:
         action, reason, price = "SELL", f"Time exit (> {MAX_HOLD_DAYS} days open)", round(last, 2)
     else:
-        return {
+        result = {
             "ticker": ticker, "action": "HOLD", "qty": qty, "entry": round(entry, 2),
-            "reason": f"{trail_note}; gain {gain_R:+.2f}R; {days}d open",
+            "reason": f"{trail_note}; gain {gain_R_text}; {days}d open",
             "last": round(last, 2), "stop": round(stop, 2), "target": round(target, 2),
-            "gain_R": round(gain_R, 2), "regime_ok": regime_ok,
+            "gain_R": round(gain_R, 2) if gain_R is not None else None, "regime_ok": regime_ok,
             "earnings_context": earnings_ctx,
             "earnings_warning": earnings_ctx.get("holding_warning_note") if earnings_ctx.get("holding_warning") else None,
             "fda_calendar": fda_calendar,
             "fda_warning": fda_calendar.get("holding_warning_note") if isinstance(fda_calendar, dict) and fda_calendar.get("holding_warning") else None,
         }
+        if macro_alert_reason:
+            result["action"] = "ALERT"
+            result["reason"] = macro_alert_reason
+            result["recommendation"] = macro_recommendation
+        return result
 
     if not dry_run:
         try:
@@ -820,7 +921,44 @@ def evaluate_exit(lot, dry_run=True, regime=None):
             return {"ticker": ticker, "action": "ERROR", "reason": str(e)}
 
     return {"ticker": ticker, "action": action, "reason": reason, "price": price, "qty": qty,
-            "entry": round(entry, 2), "stop": round(stop, 2), "target": round(target, 2), "regime_ok": regime_ok}
+            "entry": round(entry, 2), "stop": round(stop, 2), "target": round(target, 2),
+            "regime_ok": regime_ok, "macro_alert": macro_alert_reason}
+
+
+def _load_perme_context():
+    """Load and validate Perme latest_context.json. Returns dict or None if stale/missing."""
+    import json as _json
+    from pathlib import Path as _Path
+    from datetime import datetime as _dt
+    _ctx_path = _Path("/Users/yasser/atlas_inbox/latest_context.json")
+    try:
+        if not _ctx_path.exists():
+            return None
+        _ctx = _json.loads(_ctx_path.read_text())
+        _generated_raw = str(_ctx.get("generated_at") or "").strip()
+        _ttl_minutes = int(_ctx.get("ttl_minutes") or 240)
+        _generated_at = _dt.strptime(_generated_raw, "%Y-%m-%dT%H:%M:%SZ")
+        _age_minutes = (_dt.utcnow() - _generated_at).total_seconds() / 60
+        if _age_minutes > _ttl_minutes:
+            return None  # stale
+        return _ctx
+    except Exception:
+        return None
+
+
+def _compute_rvol(aggs, lookback=20):
+    """Simple RVOL: last bar volume vs average of prior `lookback` bars. Returns float or None."""
+    if not aggs or len(aggs) < 2:
+        return None
+    vols = [d.get("v") for d in aggs if d.get("v") is not None]
+    if len(vols) < 2:
+        return None
+    current_vol = float(vols[-1])
+    prior_vols = vols[max(0, len(vols) - 1 - lookback): len(vols) - 1]
+    if not prior_vols:
+        return None
+    avg_vol = sum(prior_vols) / len(prior_vols)
+    return round(current_vol / avg_vol, 2) if avg_vol > 0 else None
 
 
 def run_exits(dry_run=True):

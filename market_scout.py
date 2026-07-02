@@ -159,7 +159,7 @@ def _reference_ticker(sym):
             f"{MASSIVE_BASE}/v3/reference/tickers/{s}",
             params={"apiKey": MASSIVE_API_KEY},
             headers={"Accept": "application/json"},
-            timeout=5,
+            timeout=15,
         )
         if r.status_code == 404:
             _REFERENCE_TICKER_CACHE[s] = None

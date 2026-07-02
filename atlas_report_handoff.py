@@ -13,6 +13,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 import atlas_db
 import atlas_portfolio as port
 from atlas_symbol_meta import ticker_label
+from atlas_report_blocks import holding_block, pullback_block, watch_list_block
 from atlas_time import current_et_market_date, add_trading_days, previous_et_trading_date_str
 
 SEP = "─────────────────────────────────────────"
@@ -102,35 +103,24 @@ def _append_entry_gap(lines):
 
 def _open_position_lines():
     rows = atlas_db.get_open_positions()
-    lines = [f"━━━ 💼 HOLDING ({len(rows)}) ━━━"]
-    if not rows:
-        lines += ["📭 none", ""]
-        return lines, 0
-    lines.append("")
-    for idx, row in enumerate(rows, 1):
+    positions = []
+    for row in rows:
         ticker = str(row.get("ticker") or "?").upper()
         entry = _num(row.get("price"))
         qty = _num(row.get("quantity"), 0.0)
         now = _latest_price(ticker, fallback=entry)
-        pnl = ((now or 0.0) - (entry or 0.0)) * qty if entry and now is not None else 0.0
-        pnl_pct = ((now - entry) / entry * 100.0) if entry and now is not None else 0.0
-        value = (now or 0.0) * qty if qty and now is not None else None
-        icon = "🟢" if pnl >= 0 else "🔴"
-        label = ticker_label(ticker, row)
-        lines += [
-            f"{idx}. {icon} {label}",
-            f"   💵 Entry {_money(entry)}",
-            f"   👀 Now {_money(now)}",
-            f"   🚦 Stop {_money(row.get('stop_loss'))}",
-            f"   🎯 Target {_money(row.get('target_price'))}",
-            f"   ({_signed_pct(pnl_pct)} · {_signed_money(pnl)} · ~{_money_whole(value)})",
-        ]
-        note = _position_note(ticker)
-        if note:
-            lines.append(f"   ⚡ {note}")
-        lines.append("")
+        positions.append({
+            "ticker": ticker,
+            "entry_price": entry,
+            "current_price": now,
+            "stop_loss": row.get("stop_loss"),
+            "target_price": row.get("target_price"),
+            "quantity": qty,
+        })
+    lines = holding_block(positions, {})
+    if lines and lines[0] == "":
+        lines = lines[1:]
     return lines, len(rows)
-
 
 def _position_note(ticker):
     notes = {
@@ -170,28 +160,22 @@ def _pending_pullback_lines(limit=None):
     selected = sorted(rows, key=sort_key)
     if limit is not None:
         selected = selected[:limit]
-    lines = [f"━━━ 🎣 ARMED PULLBACKS ({len(selected)}) ━━━"]
-    if not selected:
-        lines += ["✅ none", ""]
-        return lines, len(rows)
-    lines.append("")
-    for idx, row in enumerate(selected, 1):
-        ticker = str(row.get("ticker") or "?").upper()
-        label = ticker_label(ticker, row)
-        trigger = _num(row.get("trigger_price"), None)
-        stop, target = _pending_stop_target(row)
-        score = str(row.get("score") or "?/4").replace(" Pillars", "")
-        expires = row.get("expires_at") or "N/A"
-        lines += [
-            f"{idx}. {label}",
-            f"   💵 Trigger {_money(trigger)}",
-            f"   🚦 Stop {_money(stop)}",
-            f"   🎯 Target {_money(target)}",
-            f"   {score} · expires {expires}",
-            "",
-        ]
+    data = []
+    for row in selected:
+        item = dict(row)
+        item.update({
+            "action": "WAIT",
+            "reason": "PULLBACK — armed for handoff",
+            "entry": item.get("trigger_price"),
+            "entry_price": item.get("trigger_price"),
+            "current_price": item.get("reference_price"),
+            "price": item.get("reference_price"),
+        })
+        data.append(item)
+    lines = pullback_block(data)
+    if lines and lines[0] == "":
+        lines = lines[1:]
     return lines, len(rows)
-
 
 def _latest_handoff(market_day):
     today = market_day.strftime("%Y-%m-%d")
@@ -208,22 +192,11 @@ def _open_position_tickers():
 
 def _watch_list_lines(data):
     raw = data.get("WATCH", []) if isinstance(data, dict) else []
-    open_tickers = _open_position_tickers()
-    seen = []
-    for item in raw or []:
-        ticker = str(item or "").upper().strip()
-        if ticker and ticker not in open_tickers and ticker not in seen:
-            seen.append(ticker)
-    lines = [f"━━━ 👀 WATCH LIST ({len(seen)}) ━━━"]
-    if not seen:
-        lines += ["none", ""]
-        return lines
-    lines.append("")
-    for idx, ticker in enumerate(seen, 1):
-        lines.append(f"{idx}. {ticker_label(ticker)}")
-    lines.append("")
+    watch_rows = [{"ticker": str(item or "").upper().strip(), "action": "WATCH"} for item in (raw or [])]
+    lines = watch_list_block(watch_rows, open_tickers=_open_position_tickers())
+    if lines and lines[0] == "":
+        lines = lines[1:]
     return lines
-
 
 def _entry_type_lines():
     return [

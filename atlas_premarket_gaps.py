@@ -20,6 +20,12 @@ SCRIPT_DIR = "/Users/yasser/scripts"
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+from atlas_provider_guard import (
+    BENZINGA_UNCOVERED as PROVIDER_BENZINGA_UNCOVERED,
+    benzinga_get_json as _guard_benzinga_get_json,
+    massive_get_json as _guard_massive_get_json,
+)
+
 ENV_PATH = os.path.expanduser("~/.hermes/profiles/atlas/.env")
 if os.path.exists(ENV_PATH):
     with open(ENV_PATH) as _f:
@@ -45,6 +51,22 @@ try:
     from atlas_notify import send_telegram as _send_telegram
 except Exception:
     _send_telegram = None
+
+
+def _env_int(name):
+    try:
+        value = os.environ.get(name)
+        return int(value) if value not in (None, "") else None
+    except Exception:
+        return None
+
+
+def _reports_group_chat_id():
+    return os.environ.get("ATLAS_REPORTS_GROUP_CHAT_ID")
+
+
+def _premarket_thread_id():
+    return _env_int("ATLAS_TOPIC_PREMARKET_THREAD_ID")
 
 
 def _log(msg):
@@ -107,7 +129,23 @@ def atlas_universe(limit=100):
 
 
 def _get_json(url, params=None, timeout=HTTP_TIMEOUT):
-    r = requests.get(url, params=params or {}, timeout=timeout, headers={"Accept": "application/json"})
+    params = params or {}
+    lower_url = str(url or "").lower()
+    if "massive.com" in lower_url:
+        return _guard_massive_get_json(
+            url,
+            params=params,
+            request_tag="premarket_gaps_massive",
+        )
+    if "benzinga.com" in lower_url:
+        return _guard_benzinga_get_json(
+            params.get("tickers"),
+            url,
+            params=params,
+            headers={"Accept": "application/json"},
+            request_tag=f"premarket_gaps_benzinga:{params.get('tickers') or 'headlines'}",
+        )
+    r = requests.get(url, params=params, timeout=timeout, headers={"Accept": "application/json"})
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text[:180]}")
     return r.json()
@@ -143,7 +181,7 @@ def prior_close_massive(ticker, prev_day):
     if not MASSIVE_API_KEY:
         return None
     url = f"{MASSIVE_BASE}/v2/aggs/ticker/{ticker}/prev"
-    data = _get_json(url, {"apiKey": MASSIVE_API_KEY, "adjusted": "true"})
+    data = _get_json(url, {"apiKey": MASSIVE_API_KEY, "adjusted": "true"}) or {}
     rows = data.get("results") or []
     if not rows:
         return None
@@ -154,7 +192,7 @@ def premarket_price_massive(ticker, day):
     if not MASSIVE_API_KEY:
         return None
     url = f"{MASSIVE_BASE}/v2/aggs/ticker/{ticker}/range/1/minute/{day.isoformat()}/{day.isoformat()}"
-    data = _get_json(url, {"apiKey": MASSIVE_API_KEY, "adjusted": "true", "sort": "asc", "limit": 50000})
+    data = _get_json(url, {"apiKey": MASSIVE_API_KEY, "adjusted": "true", "sort": "asc", "limit": 50000}) or {}
     rows = data.get("results") or []
     if not rows:
         return None
@@ -245,7 +283,7 @@ def _clean_title(title):
 
 def benzinga_catalyst(ticker, now_et):
     ticker = (ticker or "").upper()
-    if not ticker or ticker in BENZINGA_UNCOVERED or ticker in BENZINGA_SKIP_SET or not BENZINGA_API_KEY:
+    if not ticker or ticker in BENZINGA_UNCOVERED or ticker in PROVIDER_BENZINGA_UNCOVERED or ticker in BENZINGA_SKIP_SET or not BENZINGA_API_KEY:
         return None
     start = _dt.datetime.combine(_previous_trading_day(now_et.date()), _dt.time(16, 0), ET)
     end = min(now_et, _dt.datetime.combine(now_et.date(), _dt.time(9, 30), ET))
@@ -407,7 +445,13 @@ def main(argv=None):
     if _send_telegram is None:
         print("[telegram] sender unavailable; not sent", file=sys.stderr)
         return 1
-    ok = _send_telegram(report, label="premarket_gaps", parse_mode=None)
+    ok = _send_telegram(
+        report,
+        label="premarket_gaps",
+        parse_mode=None,
+        chat_id=_reports_group_chat_id(),
+        message_thread_id=_premarket_thread_id(),
+    )
     print(f"[telegram] sent={ok}")
     return 0 if ok else 1
 

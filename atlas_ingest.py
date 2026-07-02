@@ -249,15 +249,14 @@ def ingest_file(path: Path, inbox: Path, vector_db: Path, dry_run: bool = False)
         metas = [{"source": name, "sha256": digest, "chunk": i, "ingested_at": datetime.now().isoformat()} for i in range(len(chunks))]
         collection.add(ids=ids, documents=chunks, embeddings=embeddings, metadatas=metas)
         broker_result = _post_ingest_trade_hook(chunks, name, dry_run=dry_run)
-        msg = _perme_brief_ingest_message(path)
+        perme_msg = _perme_brief_ingest_message(path)
         moved = _move_unique(path, processed)
-        if msg is None:
-            msg = f"📚 Ingested: {name} → {len(chunks)} chunks added to Atlas knowledge base"
+        msg = perme_msg or f"📚 Ingested: {name} → {len(chunks)} chunks added to Atlas knowledge base"
         _log(msg)
         _log("broker_hook_result=" + json.dumps(broker_result, sort_keys=True, default=str))
         if dry_run:
             _log("dry-run: telegram suppressed")
-        else:
+        elif perme_msg is None:
             send_telegram(msg, label="atlas", parse_mode="", print_fallback=True)
         return {"file": name, "status": "processed", "chunks": len(chunks), "moved_to": str(moved), "broker_ingest": broker_result}
     except Exception as exc:
@@ -270,7 +269,7 @@ def ingest_file(path: Path, inbox: Path, vector_db: Path, dry_run: bool = False)
         _log(msg)
         if dry_run:
             _log("dry-run: telegram suppressed")
-        else:
+        elif not name.startswith("perme_brief_"):
             send_telegram(msg, label="atlas", parse_mode="", print_fallback=True)
         return {"file": name, "status": "failed", "error": err, "moved_to": str(moved)}
 

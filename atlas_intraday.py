@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import requests
-from atlas_notify import send_telegram
+from atlas_notify import send_telegram, _admin_chat_id as _owner_chat_id
 try:
     import atlas_stream
 except Exception:
@@ -42,6 +42,8 @@ if os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB"):
     atlas_db.DB_PATH = os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB")
 from atlas_symbol_meta import ticker_label
 from atlas_schemas import AtlasSignal, AtlasTrade
+from atlas_report_blocks import holding_block, pullback_block, watch_list_block
+_ALERT_COOLDOWN: dict = {}  # ticker -> {"ts": float, "dist": float} — cooldown state for proactive DM
 
 _ENV_PATH = os.path.expanduser("~/.hermes/profiles/atlas/.env")
 if os.path.exists(_ENV_PATH):
@@ -55,12 +57,30 @@ if os.path.exists(_ENV_PATH):
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_ALLOWED_USERS") or os.environ.get("TELEGRAM_HOME_CHANNEL")
+
+def _env_int(name):
+    try:
+        value = os.environ.get(name)
+        return int(value) if value not in (None, "") else None
+    except Exception:
+        return None
+
+
+def _reports_group_chat_id():
+    return os.environ.get("ATLAS_REPORTS_GROUP_CHAT_ID")
+
+
+def _interday_thread_id():
+    return _env_int("ATLAS_TOPIC_INTERDAY_THREAD_ID")
+
 ET_TZ = ZoneInfo("America/New_York")
 MARKET_OPEN_ET = datetime.time(9, 30)
 MARKET_CLOSE_ET = datetime.time(16, 0)
 
 
 LOCK_PATH = "/tmp/atlas_intraday.lock"
+RVOL_DISPLAY_THRESHOLD = 1.5
+BUY_NOW_MAX_SIGNAL_AGE_MINUTES = 35
 STAGING_LOCK_PATH = "/tmp/atlas_intraday_staging.lock"
 MAX_INTRADAY_RUNTIME_SECONDS = int(os.environ.get("ATLAS_INTRADAY_MAX_RUNTIME_SECONDS", "540"))
 
@@ -376,6 +396,36 @@ def _fmt_pct(value, signed=False, decimals=0):
     return f"{sign}{abs(n):.{decimals}f}%" if signed else f"{n:.{decimals}f}%"
 
 
+def _rvol_value(item):
+    if item is None:
+        return None
+    candidates = []
+    if isinstance(item, dict):
+        candidates.extend([item.get("rvol"), item.get("gap_rvol"), item.get("breakout_rvol")])
+        payload = _extract_payload(item)
+        if isinstance(payload, dict):
+            candidates.extend([payload.get("rvol"), payload.get("gap_rvol"), payload.get("breakout_rvol")])
+    else:
+        for key in ("rvol", "gap_rvol", "breakout_rvol"):
+            if hasattr(item, key):
+                candidates.append(getattr(item, key))
+    for value in candidates:
+        if value not in (None, ""):
+            try:
+                return float(value)
+            except Exception:
+                continue
+    return None
+
+
+def _rvol_line(item, threshold=RVOL_DISPLAY_THRESHOLD):
+    rvol = _rvol_value(item)
+    if rvol is None:
+        return f"   📊 RVOL N/A / {threshold:g} ❌"
+    marker = "✅" if rvol >= threshold else "❌"
+    return f"   📊 RVOL {rvol:g} / {threshold:g} {marker}"
+
+
 def _register_buy_line(ticker, shares, entry):
     return f"👉 register {ticker} buy qty={shares} price=${entry:.2f} ref=<your-broker-ref>"
 
@@ -579,7 +629,7 @@ def _current_cycle_buy_signals(before_id=None, minutes=15):
             params = (f"-{int(minutes)} minutes",)
         rows = con.execute(
             f"""
-            SELECT ticker, score, signal, entry_price, stop_loss, warnings
+            SELECT ticker, score, signal, entry_price, stop_loss, rvol, warnings, timestamp
             FROM signals
             {where_clause}
             ORDER BY
@@ -863,10 +913,13 @@ def _enrich_signal_row(row, high_map=None, live_prices=None, indicator_map=None)
     if live is not None:
         row.update({"live_price": live, "current_price": live, "price": live, "last_price": live})
     payload = _extract_payload(row)
-    indicator = row.get("indicator_info") or payload.get("indicator_info") or indicator_map.get(ticker)
+    # Priority: indicator_map (live fetch) > payload > row — indicator_map always wins if non-empty
+    _ind_from_map = indicator_map.get(ticker) if indicator_map else None
+    _ind_from_payload = payload.get("indicator_info") if isinstance(payload, dict) else None
+    _ind_from_row = row.get("indicator_info")
+    indicator = _ind_from_map or _ind_from_payload or _ind_from_row or {}
     indicator = _normalize_indicator_payload(indicator)
-    if indicator:
-        row["indicator_info"] = indicator
+    row["indicator_info"] = indicator  # always write back, even if empty
     return row
 
 
@@ -896,7 +949,7 @@ def _signal_from_row(row, high_map=None):
         pct_float = None
     is_hot = ("TOO HOT" in reason.upper() or "TOO EXTENDED" in reason.upper() or (action == "SKIP" and pct_float is not None and pct_float > 10))
     try:
-        return AtlasSignal(
+        sig = AtlasSignal(
             ticker=ticker,
             trigger_price=float(trigger),
             current_price=float(current),
@@ -914,6 +967,8 @@ def _signal_from_row(row, high_map=None):
             is_too_hot=bool(is_hot),
             pct_over_ema=pct_float,
         )
+        object.__setattr__(sig, "rvol", _rvol_value(row) if _rvol_value(row) is not None else _rvol_value(scan))
+        return sig
     except Exception:
         return None
 
@@ -935,12 +990,44 @@ def _buy_now_candidate_signal(row, high_map, live_prices=None, indicator_map=Non
     return sig
 
 
+def _parse_signal_timestamp(value):
+    if value in (None, ""):
+        return None
+    try:
+        text = str(value).strip().replace("Z", "+00:00")
+        parsed = datetime.datetime.fromisoformat(text)
+        if parsed.tzinfo is not None:
+            return parsed.astimezone().replace(tzinfo=None)
+        return parsed
+    except Exception:
+        return None
+
+
+def _buy_now_signal_is_fresh(row, now=None, max_age_minutes=BUY_NOW_MAX_SIGNAL_AGE_MINUTES):
+    ts = _parse_signal_timestamp((row or {}).get("timestamp") or (row or {}).get("signal_timestamp"))
+    if ts is None:
+        return False
+    now = now or datetime.datetime.now()
+    age = (now - ts).total_seconds() / 60.0
+    return 0 <= age <= float(max_age_minutes)
+
+
+def _fresh_signal_by_ticker(rows, now=None):
+    fresh = {}
+    for row in rows or []:
+        ticker = _row_ticker(row)
+        if ticker and _buy_now_signal_is_fresh(row, now=now):
+            fresh.setdefault(ticker, row)
+    return fresh
+
+
 def _canonical_buy_now_signals(before_scan_signal_id=None, high=None, summary=None):
     summary = summary if isinstance(summary, dict) else {}
     high_map = _high_by_ticker(high)
     blocked = _open_tickers(summary)
     signals = []
     current_rows = list(_current_cycle_buy_signals(before_scan_signal_id))
+    fresh_current_by_ticker = _fresh_signal_by_ticker(current_rows)
     try:
         pending_rows = list(atlas_db.get_pending_pullbacks(status="WAITING") or [])
     except Exception:
@@ -949,7 +1036,7 @@ def _canonical_buy_now_signals(before_scan_signal_id=None, high=None, summary=No
     indicator_map = _indicator_info_map([_row_ticker(r) for r in (current_rows + pending_rows)], summary=summary)
     for row in current_rows:
         t = _row_ticker(row)
-        if t in blocked or _pillar_num((row or {}).get("score")) != 4:
+        if t in blocked or _pillar_num((row or {}).get("score")) != 4 or (before_scan_signal_id is None and not _buy_now_signal_is_fresh(row)):
             continue
         row = _enrich_signal_row(row, high_map=high_map, live_prices=pending_live, indicator_map=indicator_map)
         sig = _buy_now_candidate_signal(row, high_map, live_prices=pending_live, indicator_map=indicator_map)
@@ -958,8 +1045,11 @@ def _canonical_buy_now_signals(before_scan_signal_id=None, high=None, summary=No
     for row in pending_rows or []:
         row = dict(row or {})
         t = _row_ticker(row)
-        if t in blocked or _pillar_num(row.get("score")) != 4 or not _pending_pullback_visible_in_status(row):
+        fresh_signal = fresh_current_by_ticker.get(t)
+        if t in blocked or _pillar_num(row.get("score")) != 4 or not _pending_pullback_visible_in_status(row) or not fresh_signal:
             continue
+        row.setdefault("timestamp", fresh_signal.get("timestamp"))
+        row.setdefault("signal_timestamp", fresh_signal.get("timestamp"))
         row = _enrich_signal_row(row, high_map=high_map, live_prices=pending_live, indicator_map=indicator_map)
         sig = _buy_now_candidate_signal(row, high_map, live_prices=pending_live, indicator_map=indicator_map)
         if sig:
@@ -970,17 +1060,41 @@ def _canonical_buy_now_signals(before_scan_signal_id=None, high=None, summary=No
     return sorted(dedup.values(), key=lambda sig: (-_sentiment_score_value({"ticker": sig.ticker}), sig.ticker))[:5]
 
 
-def _canonical_top_pick_signals(before_scan_signal_id=None, high=None, summary=None):
+def _waiting_pullback_tickers():
+    try:
+        return {
+            _row_ticker(row)
+            for row in (atlas_db.get_pending_pullbacks(status="WAITING") or [])
+            if _row_ticker(row)
+        }
+    except Exception:
+        return set()
+
+
+def _top_pick_rsi_momentum_suppressed(row, sig):
+    if not sig or sig.rsi is None:
+        return False
+    warning_text = str((row or {}).get("warnings") or "")
+    payload = _extract_payload(row)
+    if isinstance(payload, dict):
+        warning_text += " " + str(payload.get("warnings") or "")
+    return "MOMENTUM WEAK" in warning_text.upper() and float(sig.rsi) > 70.0
+
+
+def _canonical_top_pick_signals(before_scan_signal_id=None, high=None, summary=None, buy_now_tickers=None):
     summary = summary if isinstance(summary, dict) else {}
     high_map = _high_by_ticker(high)
-    blocked = _open_tickers(summary)
+    if buy_now_tickers is None:
+        buy_now_tickers = _buy_now_tickers(before_scan_signal_id, high=high, summary=summary)
+    buy_now_tickers = {str(t or "").upper() for t in (buy_now_tickers or set()) if str(t or "").strip()}
+    blocked = _open_tickers(summary) | _waiting_pullback_tickers() | buy_now_tickers
     signals = []
     rows = [row for row in _current_cycle_buy_signals(before_scan_signal_id) if _row_ticker(row) not in blocked]
     indicator_map = _indicator_info_map([_row_ticker(row) for row in rows], summary=summary)
     for row in rows:
         row = _enrich_signal_row(row, high_map=high_map, indicator_map=indicator_map)
         sig = _signal_from_row(row, high_map)
-        if sig and not sig.is_too_hot:
+        if sig and not sig.is_too_hot and not _top_pick_rsi_momentum_suppressed(row, sig) and not (sig.trigger_price and sig.current_price and sig.current_price < sig.trigger_price * 0.97):
             signals.append(sig)
     return sorted({s.ticker: s for s in signals}.values(), key=lambda sig: (-_pillar_num(sig.pillar_score), sig.ticker))[:5]
 
@@ -1039,6 +1153,7 @@ def _buy_now_line(sig, summary=None):
         f"   💲 Entry {_price(sig.trigger_price)}",
         f"   🚦 Stop {_price(sig.stop_loss)}",
         f"   🎯 Target {_price(sig.target_price)}",
+        _rvol_line(sig),
         f"   {sig.pillar_score} · {sig.risk_pct:.1f}%",
     ]
     ann = _perme_annotation_line(_perme_flags(summary), ticker)
@@ -1084,8 +1199,8 @@ def _action_buy_line(sig, summary=None):
     )
 
 
-def _actions_lines(buys, sells, summary=None, before_scan_signal_id=None, high=None):
-    top_picks = _canonical_top_pick_signals(before_scan_signal_id, high=high, summary=summary)
+def _actions_lines(buys, sells, summary=None, before_scan_signal_id=None, high=None, buy_now_tickers=None):
+    top_picks = _canonical_top_pick_signals(before_scan_signal_id, high=high, summary=summary, buy_now_tickers=buy_now_tickers)
     lines = ["", f"━━━ 🔥 TOP PICKS ({len(top_picks)}) ━━━", ""]
     if top_picks:
         for i, sig in enumerate(top_picks, 1):
@@ -1094,6 +1209,7 @@ def _actions_lines(buys, sells, summary=None, before_scan_signal_id=None, high=N
                 f"{i}. {label}",
                 f"   💵 Entry {_price(sig.trigger_price)}",
                 f"   👀 Now {_price(sig.current_price)} ({_fmt_pct(((sig.current_price - sig.trigger_price) / sig.trigger_price * 100.0) if sig.trigger_price else 0.0, signed=True, decimals=0)})",
+                _rvol_line(sig),
                 f"   {sig.pillar_score}",
                 f"   📉 RSI {sig.rsi:.0f}" if sig.rsi is not None else "   📉 RSI N/A",
                 f"   📈 MACD+ · {_num(sig.macd_hist):.1f}" if sig.macd_hist is not None else "   📈 MACD+ · N/A",
@@ -1103,6 +1219,52 @@ def _actions_lines(buys, sells, summary=None, before_scan_signal_id=None, high=N
     else:
         lines.append("none")
         lines.append("")
+    return lines
+
+
+def _position_risk_alert_lines(summary):
+    """Render the ━━━ ⚠️ POSITION RISK ALERTS ━━━ section for ALERT-action exit results.
+
+    Compact 4-line card:
+      ⚠️  TICKER (Company Name)
+         📍 $X.XX → stop $X.XX (−$X.XX)
+         🌐 RISK_OFF · NFP
+         🟡 TIGHTEN STOP
+    """
+    alerts = [r for r in (summary.get("exit_results") or []) if str(r.get("action") or "").upper() == "ALERT"]
+    if not alerts:
+        return []
+    lines = ["", "━━━ ⚠️ POSITION RISK ALERTS ━━━", ""]
+    for a in alerts:
+        ticker = _row_ticker(a) or "?"
+        label = _ticker_label(ticker, a)
+        last = _num(a.get("last") or a.get("current_price") or a.get("price"))
+        stop = _num(a.get("stop") or a.get("stop_loss"))
+        gap = last - stop  # positive = above stop, negative = below stop
+        gap_str = f"{'+' if gap >= 0 else '−'}${abs(gap):,.2f}"
+        # Build short macro label from clean reason (already stripped by portfolio patch)
+        raw_reason = str(a.get("reason") or "")
+        # reason is now e.g. "MACRO STRESS: RISK_OFF; NFP; RSI 44 weak"
+        # Extract the factors after "MACRO STRESS: " as a compact label
+        macro_label = re.sub(r"^MACRO STRESS:\s*", "", raw_reason, flags=re.I).strip()
+        # Replace semicolons with · for compact display, cap at 60 chars
+        macro_label = re.sub(r"\s*;\s*", " · ", macro_label)
+        if len(macro_label) > 60:
+            macro_label = macro_label[:60].rstrip(" ·")
+        if not macro_label:
+            macro_label = "macro stress"
+        recommendation = a.get("recommendation") or "HOLD"
+        # Strip icon prefix if recommendation already contains one (e.g. "🔴 SELL NOW — ...")
+        rec_clean = re.sub(r"^[^\w]+", "", recommendation).strip()
+        rec_clean = re.split(r"\s*[—–-]\s*", rec_clean)[0].strip()
+        rec_icon = {"SELL NOW": "🔴", "TIGHTEN STOP": "🟡", "HOLD": "🟢"}.get(rec_clean, "⚠️")
+        lines += [
+            f"⚠️  {label}",
+            f"   📍 {_price(last)} → stop {_price(stop)} ({gap_str})",
+            f"   🌐 {macro_label}",
+            f"   {rec_icon} {rec_clean}",
+            "",
+        ]
     return lines
 
 
@@ -1177,42 +1339,8 @@ def _pending_entry_lines():
 
 def _holding_lines(summary):
     trades = _open_trades(summary)
-    lines = ["", f"━━━ 💼 HOLDING ({len(trades)}) ━━━"]
-    if not trades:
-        lines.append("📭 none")
-        return lines
-    lines.append("")
-    for i, trade in enumerate(trades, 1):
-        icon = "🟢" if trade.unrealized_pl_usd >= 0 else "🔴"
-        label = _ticker_label(trade.ticker, {"ticker": trade.ticker})
-        lines += [
-            f"{i}. {icon} {label}",
-            f"   💵 Entry {_price(trade.entry_price)}",
-            f"   👀 Now {_price(trade.current_price)}",
-            f"   🚦 Stop {_price(trade.stop_loss)}",
-            f"   🎯 Target {_price(trade.target_price)}",
-        ]
-        ann = _perme_annotation_line(_perme_flags(summary), trade.ticker)
-        if ann:
-            lines.append(ann)
-        lines += [
-            f"   ({_fmt_pct(trade.unrealized_pl_pct, signed=True, decimals=0)} · {_signed_money(trade.unrealized_pl_usd)} · ~{_money(trade.current_value)})",
-            "",
-        ]
-    total_invested = sum(trade.invested_capital for trade in trades)
-    current_value = sum(trade.current_value for trade in trades)
     _cache_open_trade_prices(trades)
-    blended_roi_dollar = current_value - total_invested
-    blended_roi_pct = (blended_roi_dollar / total_invested * 100.0) if total_invested else 0.0
-    lines += [
-        "─────────────────────",
-        f"💼 Total Invested: {_money(total_invested)}",
-        f"📊 Current Value:  {_money(current_value)}",
-        f"📈 Blended ROI:    {_fmt_pct(blended_roi_pct, signed=True, decimals=1)} ({_signed_money(blended_roi_dollar)})",
-        "",
-    ]
-    return lines
-
+    return holding_block(trades, summary or {})
 
 def _gap_breakout_lines(summary):
     items = []
@@ -1335,8 +1463,36 @@ def _waiting_lines(high, suppress_tickers=None, summary=None):
         pending_rows = []
     pending_live = _pending_live_price_map(pending_rows, summary=summary)
     indicator_map = _indicator_info_map([_row_ticker(row) for row in pending_rows], summary=summary)
+    # Build a lookup map: ticker -> persisted pending_pullbacks row (for signal_json merge)
+    pending_by_ticker = {}
+    for _pr in pending_rows:
+        _t = _row_ticker(_pr)
+        if _t:
+            pending_by_ticker[_t] = dict(_pr)
     high_map = _high_by_ticker(high)
-    high = [_enrich_signal_row(h, high_map=high_map, live_prices=pending_live, indicator_map=indicator_map) for h in high]
+    # Merge persisted signal_json indicator_info into each high row before enrichment
+    merged_high = []
+    for h in high:
+        h = dict(h)
+        _t = _row_ticker(h)
+        if _t and _t in pending_by_ticker:
+            _persisted = pending_by_ticker[_t]
+            _raw_json = _persisted.get("signal_json")
+            if _raw_json:
+                try:
+                    _payload = json.loads(_raw_json) if isinstance(_raw_json, str) else _raw_json
+                    if isinstance(_payload, dict) and _payload.get("indicator_info"):
+                        # Use explicit assignment (not setdefault) — DB row may have indicator_info=None which setdefault will not overwrite
+                        if not h.get("indicator_info"):
+                            h["indicator_info"] = _payload["indicator_info"]
+                    # Inject top-level rvol from signal_json into the row (rvol lives outside indicator_info)
+                    if isinstance(_payload, dict) and _payload.get("rvol") is not None:
+                        if not h.get("rvol"):
+                            h["rvol"] = _payload["rvol"]
+                except Exception:
+                    pass
+        merged_high.append(h)
+    high = [_enrich_signal_row(h, high_map=high_map, live_prices=pending_live, indicator_map=indicator_map) for h in merged_high]
     hot_tickers = _too_hot_tickers(high)
     suppress_tickers = {str(t or "").upper() for t in (suppress_tickers or set())} | _open_tickers(summary)
     waits = _unique([
@@ -1346,38 +1502,48 @@ def _waiting_lines(high, suppress_tickers=None, summary=None):
         and _row_ticker(h) not in hot_tickers
         and _row_ticker(h) not in suppress_tickers
     ])
-    lines = ["", f"━━━ 🎣 WAITING FOR DIP ({len(waits)}) ━━━", ""]
-    if not waits:
-        lines.append("✅ none")
-        return lines
-    for i, h in enumerate(waits, 1):
-        sig = _signal_from_row(h, _high_by_ticker(high))
-        ticker = _row_ticker(h) or "?"
-        label = _ticker_label(ticker, h)
+    rows = []
+    for h in waits:
+        row = dict(h)
+        sig = _signal_from_row(row, _high_by_ticker(high))
         if sig:
-            delta = ((sig.current_price - sig.trigger_price) / sig.trigger_price * 100.0) if sig.trigger_price else 0.0
-            lines += [
-                f"{i}. {label}",
-                f"   💵 Entry {_price(sig.trigger_price)}",
-                f"   👀 Now {_price(sig.current_price)} ({_fmt_pct(delta, signed=True, decimals=0)})",
-                f"   {sig.pillar_score}",
-                f"   📉 RSI {sig.rsi:.0f}" if sig.rsi is not None else "   📉 RSI N/A",
-                f"   📈 MACD+ · {_num(sig.macd_hist):.1f}" if sig.macd_hist is not None else "   📈 MACD+ · N/A",
-                "   ✅ Fundamentals" if sig.fundamentals_ok else "   ⚠️ Momentum Weak · No Earnings" if (sig.momentum_weak or sig.no_earnings) else "   —",
-            ]
-            ann = _perme_annotation_line(_perme_flags(summary), ticker)
-            if ann:
-                lines.append(ann)
-            lines.append("")
+            # If sig.rsi is None (ticker not in high_candidates, only in pending_pullbacks),
+            # fall back to indicator_map which was built from pending_rows tickers
+            _ticker = _row_ticker(row)
+            _ind_fallback = indicator_map.get(_ticker) if (sig.rsi is None and _ticker) else {}
+            _rsi = sig.rsi if sig.rsi is not None else (_ind_fallback.get("rsi") if isinstance(_ind_fallback, dict) else None)
+            _macd = sig.macd_hist if sig.macd_hist is not None else (_ind_fallback.get("macd_histogram") or _ind_fallback.get("macd_hist") if isinstance(_ind_fallback, dict) else None)
+            row.update({
+                "trigger_price": sig.trigger_price,
+                "entry_price": sig.trigger_price,
+                "current_price": sig.current_price,
+                "price": sig.current_price,
+                "score": sig.pillar_score,
+                "rsi": _rsi,
+                "macd_hist": _macd,
+                "fundamentals_ok": sig.fundamentals_ok,
+                "momentum_weak": sig.momentum_weak,
+                "no_earnings": sig.no_earnings,
+                "rvol": _rvol_value(row),
+            })
         else:
-            now = h.get("price") or h.get("current_price") or h.get("reference_price")
-            lines += [f"{i}. {label}", f"   💵 Entry {_price(h.get('entry'))}", f"   👀 Now {_price(now)}", f"   {_pillar_num(h.get('score'))}/4"]
-            ann = _perme_annotation_line(_perme_flags(summary), ticker)
-            if ann:
-                lines.append(ann)
-            lines.append("")
-    return lines
+            row.setdefault("current_price", row.get("price") or row.get("reference_price"))
+        rows.append(row)
 
+    # Sort waits hottest-to-coldest: RVOL descending, then RSI descending
+    def _sort_key(row):
+        try:
+            rvol = float(row.get("rvol") or 0)
+        except Exception:
+            rvol = 0.0
+        try:
+            rsi = float(row.get("rsi") or 0)
+        except Exception:
+            rsi = 0.0
+        return (rvol, rsi)
+
+    rows.sort(key=_sort_key, reverse=True)
+    return pullback_block(rows)
 
 def _gates_lines(high):
     hot = _unique([h for h in high if str(h.get("action", "")).upper() == "SKIP" and str(h.get("reason", "")).startswith("TOO EXTENDED")])
@@ -1411,32 +1577,17 @@ def _watch_sort_value(item):
 
 def _watch_lines(summary):
     watch_2 = [str(t).upper() for t in (summary.get("watch_2", []) or [])]
-    blocked = {"SPY", "QQQ", "DIA", ""} | _open_tickers(summary)
     detail_by_ticker = {}
     for item in summary.get("high_candidates", []) or []:
         if not isinstance(item, dict):
             continue
-        t = _row_ticker(item)
-        if t and str(item.get("action", "")).upper() == "WATCH":
-            detail_by_ticker[t] = item
-    rows = []
-    seen = set()
-    for t in watch_2 + sorted(detail_by_ticker):
-        if t in blocked or t in seen:
-            continue
-        seen.add(t)
-        item = detail_by_ticker.get(t, {"ticker": t})
-        rows.append((_watch_sort_value(item), _ticker_label(t, item)))
-    rows.sort(key=lambda x: x[0], reverse=True)
-    lines = ["", f"━━━ 👀 WATCHING ({len(rows)}) ━━━"]
-    if not rows:
-        lines.append("none")
-        return lines
-    lines.append("")
-    for i, (_, label) in enumerate(rows, 1):
-        lines.append(f"{i}. {label}")
-    return lines
-
+        ticker = _row_ticker(item)
+        if ticker and str(item.get("action", "")).upper() == "WATCH":
+            detail_by_ticker[ticker] = item
+    watch_rows = []
+    for ticker in watch_2 + sorted(detail_by_ticker):
+        watch_rows.append(detail_by_ticker.get(ticker, {"ticker": ticker, "action": "WATCH"}))
+    return watch_list_block({"watch_2": watch_2, "high_candidates": watch_rows}, open_tickers=_open_tickers(summary))
 
 def _news_lines(summary):
     candidate_tickers = {str(x.get("ticker", "")).upper() for x in summary.get("high_candidates", []) or []}
@@ -1469,10 +1620,11 @@ def _build_report(summary):
     before_scan_signal_id = summary.get("_before_scan_signal_id")
     buy_now_tickers = _buy_now_tickers(before_scan_signal_id, high=high, summary=summary)
     lines = _header_lines(summary, hold_count)
-    lines += _holding_lines(summary)
     lines += _sell_now_lines(summary)
+    lines += _position_risk_alert_lines(summary)
+    lines += _holding_lines(summary)
     lines += _buy_now_lines(summary, before_scan_signal_id, high=high)
-    lines += _actions_lines(buys, sells, summary, before_scan_signal_id, high=high)
+    lines += _actions_lines(buys, sells, summary, before_scan_signal_id, high=high, buy_now_tickers=buy_now_tickers)
     lines += _waiting_lines(high, suppress_tickers=buy_now_tickers, summary=summary)
     lines += _gap_breakout_lines(summary)
     lines += _intraday_breakout_lines(summary)
@@ -1875,8 +2027,53 @@ def _run_intraday_locked(now, force=False, dry_run=False):
 
     try:
         if not dry_run:
-            ok = send_telegram(report_msg)
+            ok = send_telegram(
+                report_msg,
+                chat_id=_reports_group_chat_id(),
+                message_thread_id=_interday_thread_id(),
+            )
             print(f"[intraday] telegram report success={ok}")
+            # Proactive DM for urgent position alerts
+            alerts = [r for r in (summary.get("exit_results") or []) if str(r.get("action") or "").upper() in ("ALERT", "SELL")]
+            if alerts:
+                import time as _time
+                _now = _time.time()
+                dm_parts = []
+                for a in alerts:
+                    ticker = a.get("ticker", "?")
+                    action_str = str(a.get("action", "?")).upper()
+                    # SELL always fires immediately — no cooldown
+                    if action_str == "SELL":
+                        dm_parts.append(a)
+                        continue
+                    # ALERT: 60-minute cooldown, reset if price moves >0.5% closer to stop
+                    last = float(a.get("last") or 0)
+                    stop = float(a.get("stop") or 0)
+                    current_dist = (last - stop) / stop if stop else 1.0
+                    cd = _ALERT_COOLDOWN.get(ticker)
+                    if cd:
+                        mins_since = (_now - cd["ts"]) / 60
+                        dist_worsened = cd["dist"] - current_dist
+                        if mins_since < 60 and dist_worsened < 0.005:
+                            print(f"[intraday] ALERT cooldown active for {ticker} ({mins_since:.0f}m since last DM)")
+                            continue
+                    _ALERT_COOLDOWN[ticker] = {"ts": _now, "dist": current_dist}
+                    dm_parts.append(a)
+                if dm_parts:
+                    dm_lines = ["🚨 POSITION ALERT — immediate review required\n"]
+                    for a in dm_parts:
+                        ticker = a.get("ticker", "?")
+                        action_str = a.get("action", "?")
+                        reason = a.get("reason") or ""
+                        dm_lines.append(f"{action_str}  {ticker}: {reason[:200]}")
+                    dm_msg = "\n".join(dm_lines)
+                    try:
+                        owner_chat_id = _owner_chat_id()
+                        if owner_chat_id:
+                            ok_dm = send_telegram(dm_msg, chat_id=owner_chat_id)
+                            print(f"[intraday] proactive DM sent success={ok_dm}")
+                    except Exception as _e:
+                        print(f"[intraday] proactive DM error: {_e}")
         else:
             print("[intraday] dry-run: final telegram send suppressed")
             print("[intraday] telegram report success=True")

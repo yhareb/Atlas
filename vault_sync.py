@@ -218,41 +218,40 @@ def build_signals(conn, cursor_ms, since_days):
 
 
 def build_positions(conn, cursor_ms):
-    """positions table -> Vault position objects.
+    """OPEN trades -> Vault position objects.
 
-    NOTE: Atlas `positions` has no live `current_price` column, so the Vault's
-    P&L%/market-value will be based on the entry price (i.e. flat) until Atlas
-    starts recording a current price. `openedAt` is mapped from `timestamp`.
+    `trades` is the authoritative Atlas position ledger. The legacy `positions`
+    table is intentionally ignored because it is stale/non-authoritative.
     """
-    if not table_exists(conn, "positions"):
-        print("[warn] no 'positions' table; skipping.", file=sys.stderr)
+    if not table_exists(conn, "trades"):
+        print("[warn] no 'trades' table; skipping positions payload.", file=sys.stderr)
         return []
 
     cur = conn.execute(
         """
-        SELECT id, timestamp, ticker, action, price, quantity, status
-        FROM positions
-        ORDER BY timestamp DESC
+        SELECT id, ticker, quantity, entry_price, entry_at, status, current_price
+        FROM trades
+        WHERE status = 'OPEN'
+        ORDER BY entry_at DESC, id DESC
         """
     )
     out = []
     for r in cur.fetchall():
-        opened_ms = to_epoch_ms(r["timestamp"])
+        opened_ms = to_epoch_ms(r["entry_at"])
         if cursor_ms is not None and (opened_ms is None or opened_ms <= cursor_ms):
             continue
-        price = _f(r["price"])
-        if r["id"] is None or not r["ticker"] or not r["action"] or price is None or opened_ms is None:
+        price = _f(r["entry_price"])
+        if r["id"] is None or not r["ticker"] or price is None or opened_ms is None:
             continue
         out.append(
             {
                 "sourceId": int(r["id"]),
                 "ticker": str(r["ticker"]).upper(),
-                "action": str(r["action"]).upper(),
+                "action": "BUY",
                 "price": price,
                 "quantity": int(r["quantity"] or 0),
                 "status": (_s(r["status"]) or "OPEN").upper(),
-                # Atlas has no current price; omit so the Vault shows entry-based values.
-                "currentPrice": None,
+                "currentPrice": _f(r["current_price"]),
                 "openedAt": opened_ms,
             }
         )

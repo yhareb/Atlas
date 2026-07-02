@@ -112,20 +112,8 @@ def init_db():
         )
     ''')
 
-    # Positions table (legacy log of buy/sell actions) -- unchanged.
-    # Kept for backward compatibility; `trades` is now the source of truth
-    # for P&L and history.
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS positions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            ticker TEXT,
-            action TEXT, -- e.g., 'BUY', 'SELL'
-            price REAL,
-            quantity INTEGER,
-            status TEXT DEFAULT 'OPEN' -- 'OPEN', 'CLOSED'
-        )
-    ''')
+    # Legacy `positions` table intentionally not created anymore.
+    # `trades` is the authoritative open-position / P&L ledger.
 
     # Handoff table (latest state snapshot) -- unchanged.
     cursor.execute('''
@@ -233,63 +221,16 @@ def init_db():
 
     conn.commit()
 
-    # Backfill: migrate legacy `positions` rows into `trades` exactly once.
-    _backfill_positions_into_trades(conn)
-
     conn.close()
 
 
 def _table_has_rows(cursor, table):
-    cursor.execute(f"SELECT COUNT(*) FROM {table}")
+    cursor.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,))
+    if cursor.fetchone() is None:
+        return False
+    safe_table = '"' + str(table).replace('"', '""') + '"'
+    cursor.execute(f"SELECT COUNT(*) FROM {safe_table}")
     return cursor.fetchone()[0] > 0
-
-
-def _backfill_positions_into_trades(conn):
-    """One-time, idempotent migration of legacy positions -> trades.
-
-    We only backfill if `trades` is empty AND `positions` has data, so running
-    init_db() repeatedly never duplicates anything. Each legacy BUY row becomes
-    an OPEN trade lot; legacy SELL rows are recorded as CLOSED lots with no
-    matched entry (we cannot reconstruct the original buy price), so realized
-    P&L is left NULL and a note explains it is a legacy import.
-    """
-    cursor = conn.cursor()
-
-    # Guard: skip if trades already has data (already migrated).
-    cursor.execute("SELECT COUNT(*) FROM trades")
-    if cursor.fetchone()[0] > 0:
-        return
-    # Guard: nothing to migrate.
-    if not _table_has_rows(cursor, "positions"):
-        return
-
-    cursor.execute(
-        "SELECT id, timestamp, ticker, action, price, quantity, status FROM positions ORDER BY id ASC"
-    )
-    legacy = cursor.fetchall()
-    for _id, ts, ticker, action, price, qty, status in legacy:
-        ticker = (ticker or "").upper()
-        action = (action or "BUY").upper()
-        qty = int(qty or 0)
-        price = float(price or 0)
-        if not ticker or qty <= 0 or price <= 0:
-            continue
-        if action == "SELL":
-            # Legacy sell with no matched buy: store as closed, P&L unknown.
-            cursor.execute('''
-                INSERT INTO trades (ticker, status, quantity, entry_price, entry_at,
-                                    exit_price, exit_at, realized_pnl, realized_pnl_pct, notes)
-                VALUES (?, 'CLOSED', ?, ?, ?, ?, ?, NULL, NULL, ?)
-            ''', (ticker, qty, price, ts, price, ts,
-                  "Legacy SELL imported from positions; original entry unknown."))
-        else:
-            # Legacy buy -> open lot.
-            cursor.execute('''
-                INSERT INTO trades (ticker, status, quantity, entry_price, entry_at, notes)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (ticker, status or "OPEN", qty, price, ts,
-                  "Imported from legacy positions table."))
-    conn.commit()
 
 
 # --------------------------------------------------------------------------- #
@@ -326,31 +267,18 @@ def log_signal(ticker, signal, score, rvol, entry_price, stop_loss, max_loss_per
 
 
 # --------------------------------------------------------------------------- #
-# Legacy positions (kept so existing /positions command keeps working)
+# Legacy position logger compatibility shim
 # --------------------------------------------------------------------------- #
 def log_position(ticker, action, price, quantity=0, status='OPEN'):
-    """Legacy logger. Still writes to `positions` for backward compatibility,
-    AND routes into the new trades ledger so history/P&L stays correct.
+    """Compatibility shim: route legacy position writes to trades only.
 
-    - action BUY  -> opens a trade lot
-    - action SELL -> closes shares FIFO and realizes P&L
+    The legacy `positions` table is intentionally non-authoritative and should
+    not be recreated or written. Open positions live in `trades`.
     """
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO positions (ticker, action, price, quantity, status)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (ticker, action, price, quantity, status))
-    position_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    _audit_db_event("positions", "INSERT", position_id, ticker, "log_position")
-
-    # Mirror into the trades ledger.
     if str(action).upper() == "SELL":
         close_trade(ticker, price, quantity=quantity)
     else:
-        open_trade(ticker, price, quantity=quantity)
+        open_trade(ticker, price, quantity=quantity, status=status)
 
 
 # --------------------------------------------------------------------------- #

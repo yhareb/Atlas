@@ -131,7 +131,7 @@ def get_massive_aggs(ticker, days=420):
     url = f"{MASSIVE_BASE}/v2/aggs/ticker/{ticker}/range/1/day/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
     params = {"apiKey": MASSIVE_API_KEY, "adjusted": "true", "sort": "asc"}
     try:
-        r = _audit_get(url, params=params, timeout=10)
+        r = _audit_get(url, params=params, timeout=30)
         if r.status_code == 200:
             data = r.json()
             if "results" in data and data["results"]:
@@ -566,6 +566,25 @@ def get_opening_range_low(ticker, minutes=30):
 
 def get_macro_sentiment():
     """Rule-based real-time macro overlay. Secondary only; never creates signals."""
+    try:
+        from pathlib import Path as _Path
+        import json as _json
+        from datetime import datetime as _dt
+        _ctx_path = _Path("/Users/yasser/atlas_inbox/latest_context.json")
+        if _ctx_path.exists():
+            _ctx = _json.loads(_ctx_path.read_text())
+            _generated_raw = str(_ctx.get("generated_at") or "").strip()
+            _ttl_minutes = int(_ctx.get("ttl_minutes") or 240)
+            _generated_at = _dt.strptime(_generated_raw, "%Y-%m-%dT%H:%M:%SZ")
+            _age_minutes = (_dt.utcnow() - _generated_at).total_seconds() / 60
+            if _age_minutes <= _ttl_minutes:
+                _sentiment = str(_ctx.get("sentiment") or "NEUTRAL").upper()
+                if _sentiment in {"RISK_OFF", "CAUTION", "NEUTRAL"}:
+                    return {"sentiment": _sentiment, "reason": str(_ctx.get("reason") or "Perme context")}
+            else:
+                print("[atlas_rag] Perme context stale or missing — using live macro")
+    except Exception:
+        print("[atlas_rag] Perme context stale or missing — using live macro")
     spy_pct = _snapshot_intraday_change_pct("SPY")
     soxx_pct = _snapshot_intraday_change_pct("SOXX")
     spy_low_pct = None

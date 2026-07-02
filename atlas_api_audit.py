@@ -14,6 +14,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import requests
+
 SCRIPTS_DIR = Path(os.environ.get("ATLAS_SCRIPTS_DIR", "/Users/yasser/scripts"))
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
@@ -39,6 +41,60 @@ OK_WORDS = re.compile(r"\b(http\s+2\d\d|status[= ]+2\d\d|ok=True|success|sent)\b
 HTTP_STATUS = re.compile(r"(?:HTTP\s*|status[= ]+|http_status[= ]+)([1-5]\d\d)", re.I)
 LATENCY = re.compile(r"(?:latency_ms|elapsed_ms|response_ms)[=:\s]+([0-9]+(?:\.[0-9]+)?)", re.I)
 API_HINT = re.compile(r"(massive\.com|polygon\.io|benzinga\.com|eodhd\.com|perme|api[_ -]?call|_audit_get|requests\.)", re.I)
+ATLASOPS_ENV = Path("/Users/yasser/.hermes/profiles/atlasops/.env")
+
+
+def _env_file_values(path):
+    values = {}
+    if not path.exists():
+        return values
+    for raw in path.read_text(errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def _chunks(message, limit=3800):
+    text = str(message or "")
+    chunks = []
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        if cut < 1000:
+            cut = limit
+        chunks.append(text[:cut].rstrip())
+        text = text[cut:].lstrip()
+    chunks.append(text)
+    return chunks
+
+
+def send_atlasops_audit_telegram(message, label="atlas_api_audit", parse_mode=""):
+    """Send audit reports through the AtlasOps bot only; never atlas_notify/Atlas bot."""
+    values = _env_file_values(ATLASOPS_ENV)
+    bot_token = values.get("TELEGRAM_BOT_TOKEN")
+    chat_id = values.get("TELEGRAM_CHAT_ID")
+    if not bot_token or not chat_id:
+        print(f"[{label}] telegram skipped: atlasops TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID unset")
+        return False
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    sent = 0
+    for chunk in _chunks(message):
+        payload = {"chat_id": chat_id, "text": chunk}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        try:
+            resp = requests.post(url, json=payload, timeout=(5, 25))
+            if resp.status_code != 200:
+                print(f"[{label}] telegram failed HTTP {resp.status_code}")
+                return False
+            sent += 1
+        except Exception as exc:
+            print(f"[{label}] telegram failed: {type(exc).__name__}")
+            return False
+    print(f"[{label}] telegram sent via atlasops bot: chunks={sent}")
+    return True
 
 
 def _now_et():
@@ -181,7 +237,7 @@ def _read_recent_tail(path, max_bytes=250_000):
 
 
 def _line_timestamp_in_window(line, cutoff):
-    # If no parseable timestamp exists, include the recent tail line as best effort.
+    # If no parseable timestamp exists, exclude the line — do not include stale lines as "best effort".
     patterns = (
         r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]",
         r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})",
@@ -195,12 +251,12 @@ def _line_timestamp_in_window(line, cutoff):
         try:
             dt = _dt.datetime.fromisoformat(raw)
             if dt.tzinfo is None:
-                # Atlas logs are host-local; use recency tail as operational best effort.
-                return True
+                # Naive timestamp — compare directly against naive cutoff.
+                return dt >= cutoff.replace(tzinfo=None)
             return dt.astimezone(ET) >= cutoff
         except Exception:
             pass
-    return True
+    return False
 
 
 def _parse_logs(window_minutes):
@@ -296,8 +352,7 @@ def main():
     if args.dry_run or args.no_send:
         print("\n[atlas_api_audit] dry-run/no-send: Telegram suppressed")
         return 0
-    from atlas_notify import send_telegram
-    ok = send_telegram(report, label="atlas_api_audit", parse_mode="", print_fallback=True)
+    ok = send_atlasops_audit_telegram(report, label="atlas_api_audit", parse_mode="")
     print(f"[atlas_api_audit] telegram_sent={ok}")
     return 0 if ok else 1
 

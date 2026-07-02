@@ -39,7 +39,7 @@ import json
 import argparse
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 
 SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
@@ -153,6 +153,62 @@ def _pillar_count(score):
         return 0
 
 
+def _score_text(pillars):
+    try:
+        return f"{int(pillars)}/4 Pillars"
+    except Exception:
+        return "0/4 Pillars"
+
+
+def _recent_pillar_history(ticker, limit=3):
+    """Read recent raw pillar scores for ticker from sqlite signals; newest first."""
+    ticker = str(ticker or "").upper()
+    if not ticker:
+        return []
+    try:
+        rows = atlas_db.get_connection().execute(
+            "SELECT score FROM signals WHERE ticker=? ORDER BY id DESC LIMIT ?",
+            (ticker, int(limit)),
+        ).fetchall()
+        return [_pillar_count(row[0]) for row in rows]
+    except Exception:
+        return []
+
+
+def _effective_pillars_with_hysteresis(ticker, raw_pillars, history=None):
+    """Smooth one-pillar score flicker for report/action state.
+
+    Operational rule implemented for the staged sprint dry-run:
+    - raw >= 3 promotes/keeps TOP state.
+    - first raw <= 2 immediately after TOP state holds TOP for one cycle.
+    - second consecutive raw <= 2 demotes to WAITING.
+    """
+    raw = int(raw_pillars or 0)
+    hist = list(history if history is not None else _recent_pillar_history(ticker, limit=3))
+    previous = hist[0] if hist else None
+    if raw >= 3:
+        state = "TOP_PICKS"
+        effective = raw
+        reason = "promote_or_hold_top"
+    elif previous is not None and previous >= 3:
+        state = "TOP_PICKS"
+        effective = max(3, raw)
+        reason = "hold_top_one_weak_cycle"
+    else:
+        state = "WAITING_FOR_DIP"
+        effective = raw
+        reason = "demote_or_hold_waiting"
+    return {
+        "ticker": str(ticker or "").upper(),
+        "raw_pillars": raw,
+        "effective_pillars": effective,
+        "state": state,
+        "reason": reason,
+        "previous_pillars": previous,
+        "history": hist,
+    }
+
+
 def _scan_source(ticker, pending_scan, ema_retry_scan):
     t = (ticker or "").upper()
     if t in set(ema_retry_scan or []):
@@ -160,6 +216,120 @@ def _scan_source(ticker, pending_scan, ema_retry_scan):
     if t in set(pending_scan or []):
         return "pending_pullback"
     return "normal_scan"
+
+
+def _float_or_none(value):
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _expire_stale_pending_pullbacks(pending_rows, live=False, threshold=0.07, price_lookup=None):
+    """Expire WAITING pullbacks when live price is >threshold above trigger."""
+    expired = []
+    lookup = price_lookup or getattr(port, "_price_lookup", None)
+    if not callable(lookup):
+        return expired
+    for row in pending_rows or []:
+        ticker = str((row or {}).get("ticker") or "").upper()
+        trigger = _float_or_none((row or {}).get("trigger_price"))
+        if not ticker or not trigger or trigger <= 0:
+            continue
+        try:
+            current = _float_or_none(lookup(ticker))
+        except Exception as e:
+            print(f"  stale-pullback expiry price unavailable {ticker}: {e}")
+            continue
+        if current is None or current <= 0:
+            continue
+        pct_above = (current - trigger) / trigger
+        if pct_above > threshold:
+            item = {
+                "ticker": ticker,
+                "action": "EXPIRE",
+                "reason": f"STALE PULLBACK: current ${current:.2f} is {pct_above * 100:.1f}% above trigger ${trigger:.2f} (> {threshold * 100:.0f}%)",
+                "trigger_price": trigger,
+                "current_price": current,
+                "pct_above_trigger": pct_above * 100,
+            }
+            if live:
+                try:
+                    atlas_db.expire_pending_pullback(ticker)
+                    print(f"  ⌛ {item['reason']}")
+                except Exception as e:
+                    item["expire_error"] = str(e)
+                    print(f"  stale-pullback expiry failed {ticker}: {e}")
+            else:
+                print(f"  DRY-RUN stale-pullback expiry: {item['reason']}")
+            expired.append(item)
+    return expired
+
+
+def _load_perme_threshold_overlay(path=None, now_utc=None):
+    """Load Perme ticker threshold overlay from latest_context.json.
+
+    Missing, stale, invalid, or NEUTRAL context returns an inactive overlay so
+    the existing Atlas thresholds remain unchanged.
+    """
+    overlay = {
+        "active": False,
+        "sentiment": "NEUTRAL",
+        "global_min_pillars": 3,
+        "global_min_rvol": 1.5,
+        "perme_flagged_tickers": set(),
+    }
+    context_path = path or os.environ.get("ATLAS_PERME_CONTEXT_PATH") or "/Users/yasser/atlas_inbox/latest_context.json"
+    try:
+        if not os.path.exists(context_path):
+            return overlay
+        with open(context_path) as f:
+            payload = json.load(f)
+        if not isinstance(payload, dict):
+            return overlay
+        generated_at = str(payload.get("generated_at") or "").strip()
+        ttl_minutes = int(payload.get("ttl_minutes") or 240)
+        if not generated_at or ttl_minutes <= 0:
+            return overlay
+        stamp = generated_at[:-1] + "+00:00" if generated_at.endswith("Z") else generated_at
+        generated_dt = datetime.fromisoformat(stamp)
+        if generated_dt.tzinfo is None:
+            generated_dt = generated_dt.replace(tzinfo=timezone.utc)
+        generated_dt = generated_dt.astimezone(timezone.utc)
+        current_utc = now_utc or datetime.now(timezone.utc)
+        if current_utc.tzinfo is None:
+            current_utc = current_utc.replace(tzinfo=timezone.utc)
+        if (current_utc.astimezone(timezone.utc) - generated_dt).total_seconds() > ttl_minutes * 60:
+            return overlay
+        sentiment = str(payload.get("sentiment") or "NEUTRAL").upper()
+        if sentiment not in {"RISK_OFF", "CAUTION"}:
+            return overlay
+        flagged = {
+            str(t or "").strip().upper()
+            for t in (payload.get("ticker_notes") or [])
+            if str(t or "").strip()
+        }
+        overlay.update({
+            "active": True,
+            "sentiment": sentiment,
+            "global_min_pillars": 4 if sentiment == "RISK_OFF" else 3,
+            "global_min_rvol": 2.0 if sentiment == "RISK_OFF" else 1.5,
+            "perme_flagged_tickers": flagged,
+        })
+        return overlay
+    except Exception:
+        return overlay
+
+
+def _float_value(value, default=0.0):
+    try:
+        if value in (None, ""):
+            return default
+        return float(value)
+    except Exception:
+        return default
 
 
 def _attach_live_signal_price(decision, ticker):
@@ -254,6 +424,14 @@ def run(args):
     if live and not macro_active:
         macro_sentiment["shadow_only"] = True
     LAST_RUN_SUMMARY["macro_sentiment"] = macro_sentiment
+    perme_overlay = _load_perme_threshold_overlay()
+    LAST_RUN_SUMMARY["perme_threshold_overlay"] = {
+        "active": bool(perme_overlay.get("active")),
+        "sentiment": perme_overlay.get("sentiment"),
+        "global_min_pillars": perme_overlay.get("global_min_pillars"),
+        "global_min_rvol": perme_overlay.get("global_min_rvol"),
+        "perme_flagged_tickers": sorted(perme_overlay.get("perme_flagged_tickers") or []),
+    }
     print(LINE)
     print(f"  ATLAS v2 DAILY MANAGER   {datetime.now():%Y-%m-%d %H:%M}")
     print(f"  Mode: {mode}")
@@ -329,6 +507,10 @@ def run(args):
     # 4 + 5. SCORE & CONSIDER ----------------------------------------------
     candidates = load_candidates(args)
     pending_rows = atlas_db.get_pending_pullbacks(status="WAITING")
+    stale_expired_pullbacks = _expire_stale_pending_pullbacks(pending_rows, live=live)
+    if stale_expired_pullbacks:
+        stale_tickers = {str(r.get("ticker") or "").upper() for r in stale_expired_pullbacks}
+        pending_rows = [r for r in pending_rows if str(r.get("ticker") or "").upper() not in stale_tickers]
     pending_scan = [r.get("ticker", "").upper() for r in pending_rows if r.get("ticker")]
     ema_retry_rows = atlas_db.get_ema_retry_candidates(status="WAITING")
     ema_retry_scan = [r.get("ticker", "").upper() for r in ema_retry_rows if r.get("ticker")]
@@ -344,7 +526,7 @@ def run(args):
     _hdr(f"SCAN & ENTRIES  ({len(candidates)} candidates)")
     buys = []
     watch = []
-    expired_pullbacks = []
+    expired_pullbacks = list(stale_expired_pullbacks)
     pending = []          # tickers approved this run (cap awareness)
     reserved_cash = 0.0   # cash earmarked by approved buys this run
     scanned_count = 0
@@ -471,8 +653,18 @@ def run(args):
             print(f"  ----  {tkr:<6} {res['error']}")
             continue
         scanned_count += 1
-        score = res.get("score", "0/4 Pillars")
+        raw_score = res.get("score", "0/4 Pillars")
+        raw_pillars = _pillar_count(raw_score)
+        hysteresis = _effective_pillars_with_hysteresis(tkr, raw_pillars)
+        score = _score_text(hysteresis.get("effective_pillars"))
         pillars = _pillar_count(score)
+        if pillars != raw_pillars:
+            res = dict(res)
+            res["raw_score"] = raw_score
+            res["raw_pillars"] = raw_pillars
+            res["score"] = score
+            res["hysteresis_state"] = hysteresis
+            print(f"  hysteresis {tkr:<6} raw {raw_pillars}/4 -> effective {pillars}/4 ({hysteresis.get('reason')})")
         analyst_start = time.perf_counter()
         _timing_log("analyst_ratings_check", "start", ticker=tkr)
         _timing_log("analyst_ratings_check", "end", analyst_start, tkr, extra=f"rating={res.get('analyst_rating') or 'none'}")
@@ -637,6 +829,41 @@ def run(args):
             print(f"  skip  {tkr:<6} {res.get('signal','')}  ({score})")
             continue
 
+        if perme_overlay.get("active"):
+            flagged_tickers = set(perme_overlay.get("perme_flagged_tickers") or set())
+            ticker_flagged = tkr.upper() in flagged_tickers
+            min_pillars = 4 if ticker_flagged else int(perme_overlay.get("global_min_pillars") or 3)
+            min_rvol = 2.0 if ticker_flagged else float(perme_overlay.get("global_min_rvol") or 1.5)
+            ticker_rvol = _float_value(res.get("rvol"), default=0.0)
+            if pillars < min_pillars or ticker_rvol < min_rvol:
+                rag_reason = (
+                    f"WAITING FOR DIP — Perme threshold needs {min_pillars}/4 + RVOL {min_rvol:.1f} "
+                    f"(sentiment={perme_overlay.get('sentiment')}, pillars={pillars}, rvol={ticker_rvol:.2f})"
+                )
+                print(
+                    f"[atlas_rag] Perme threshold: {tkr.upper()} needs {min_pillars}/4 + RVOL {min_rvol:.1f} "
+                    f"(sentiment={perme_overlay.get('sentiment')}, pillars={pillars}, rvol={ticker_rvol:.2f})"
+                )
+                watch.append(tkr.upper())
+                high_candidates.append({
+                    "ticker": tkr.upper(),
+                    "score": score,
+                    "pillars": pillars,
+                    "signal": res.get("signal", ""),
+                    "action": "WAIT",
+                    "reason": rag_reason,
+                    "rvol": res.get("rvol"),
+                    "pct_over_ema": res.get("pct_over_ema"),
+                    "macro_context": macro_ctx,
+                    "perme_threshold_overlay": LAST_RUN_SUMMARY.get("perme_threshold_overlay"),
+                })
+                _audit_signal_decision(
+                    tkr,
+                    {"action": "WAIT", "reason": rag_reason, "signal": res.get("signal"), "rvol": res.get("rvol")},
+                    score, pillars, live, _scan_source(tkr, pending_scan, ema_retry_scan), market_date, run_id,
+                )
+                continue
+
         decision = port.consider_buy(
             res, dry_run=not live, regime=entry_regime,
             pending=pending, reserved_cash=reserved_cash,
@@ -690,6 +917,9 @@ def run(args):
             "fda_calendar": decision.get("fda_calendar"),
             "fda_note": decision.get("fda_note"),
             "fda_blackout": decision.get("fda_blackout"),
+            "hysteresis_state": res.get("hysteresis_state"),
+            "raw_score": res.get("raw_score"),
+            "raw_pillars": res.get("raw_pillars"),
         })
         if act == "BUY":
             buys.append(decision)
@@ -726,25 +956,28 @@ def run(args):
     })
 
     # --- PERSIST SCAN RESULT TO HANDOFF (so Vault + pre-market brief stay live) ---
-    try:
-        import datetime as _dt
-        _today = current_et_market_date_str()
-        _buy_syms = [b.get("ticker", b.get("symbol", "")) for b in buys]
-        _buy_syms = [s.upper() for s in _buy_syms if s]
-        _watch_syms = [t.upper() for t in (pending + watch)]  # approved-but-not-bought + scanned
-        _existing = atlas_db.get_handoff(_today) or {}
-        _handoff = {
-            "date": _today,
-            "BUY": sorted(set(_buy_syms)),
-            "WATCH": sorted(set((_existing.get("WATCH") or []) + _watch_syms)),
-            "last_scan": _dt.datetime.now().isoformat(),
-        }
-        atlas_db.update_handoff(_today, _handoff)
-        LAST_RUN_SUMMARY["handoff"] = _handoff
-        print(f"  [handoff] saved {len(_handoff['BUY'])} BUY / {len(_handoff['WATCH'])} WATCH for {_today}")
-    except Exception as _e:
-        LAST_RUN_SUMMARY["handoff_error"] = str(_e)
-        print(f"  [handoff] persist skipped: {_e}")
+    if live:
+        try:
+            import datetime as _dt
+            _today = current_et_market_date_str()
+            _buy_syms = [b.get("ticker", b.get("symbol", "")) for b in buys]
+            _buy_syms = [s.upper() for s in _buy_syms if s]
+            _watch_syms = [t.upper() for t in (pending + watch)]  # approved-but-not-bought + scanned
+            _existing = atlas_db.get_handoff(_today) or {}
+            _handoff = {
+                "date": _today,
+                "BUY": sorted(set(_buy_syms)),
+                "WATCH": sorted(set((_existing.get("WATCH") or []) + _watch_syms)),
+                "last_scan": _dt.datetime.now().isoformat(),
+            }
+            atlas_db.update_handoff(_today, _handoff)
+            LAST_RUN_SUMMARY["handoff"] = _handoff
+            print(f"  [handoff] saved {len(_handoff['BUY'])} BUY / {len(_handoff['WATCH'])} WATCH for {_today}")
+        except Exception as _e:
+            LAST_RUN_SUMMARY["handoff_error"] = str(_e)
+            print(f"  [handoff] persist skipped: {_e}")
+    else:
+        print("  [handoff] DRY-RUN: skipping handoff persistence and vault sync")
     # ------------------------------------------------------------------------------
 
     _finish(live, sells, buys)

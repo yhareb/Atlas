@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import requests
 
@@ -81,10 +82,11 @@ def _chunks(message, limit=3800):
     return chunks
 
 
-def send_telegram(message, label="atlas", parse_mode="Markdown", print_fallback=True):
+def send_telegram(message, label="atlas", parse_mode="Markdown", print_fallback=True, chat_id=None, message_thread_id=None):
     """Robust non-fatal Telegram sender: 3 attempts, 5s connect / 25s read, 2s/5s backoff."""
     token = _bot_token()
-    chat = _chat_id()
+    chat = str(chat_id).strip() if chat_id not in (None, "") else _chat_id()
+    print(f"[atlas_notify] routing: chat_id_arg_set={chat_id not in (None, '')} resolved_chat_set={bool(chat)} thread_set={message_thread_id is not None}", file=sys.stderr)
     if not token or not chat:
         print(f"[{label}] telegram skipped: TELEGRAM_BOT_TOKEN or chat id unset")
         if print_fallback:
@@ -98,6 +100,8 @@ def send_telegram(message, label="atlas", parse_mode="Markdown", print_fallback=
     msg_chunks = _chunks(message)
     for idx, chunk in enumerate(msg_chunks, 1):
         payload = {"chat_id": chat, "text": chunk}
+        if message_thread_id is not None:
+            payload["message_thread_id"] = int(message_thread_id)
         if parse_mode:
             payload["parse_mode"] = parse_mode
         last_error = None
@@ -108,6 +112,8 @@ def send_telegram(message, label="atlas", parse_mode="Markdown", print_fallback=
                     err_text = r.text[:300]
                     if r.status_code == 400 and parse_mode and "can't parse entities" in err_text:
                         plain_payload = {"chat_id": chat, "text": chunk}
+                        if message_thread_id is not None:
+                            plain_payload["message_thread_id"] = int(message_thread_id)
                         r = requests.post(url, json=plain_payload, timeout=(5, timeout))
                         if r.status_code == 200:
                             data = r.json()
@@ -139,6 +145,6 @@ def send_telegram(message, label="atlas", parse_mode="Markdown", print_fallback=
     return True
 
 
-def send_message(message, label="atlas", parse_mode="Markdown", print_fallback=True):
+def send_message(message, label="atlas", parse_mode="Markdown", print_fallback=True, chat_id=None, message_thread_id=None):
     """Compatibility alias for callers that expect send_message()."""
-    return send_telegram(message, label=label, parse_mode=parse_mode, print_fallback=print_fallback)
+    return send_telegram(message, label=label, parse_mode=parse_mode, print_fallback=print_fallback, chat_id=chat_id, message_thread_id=message_thread_id)

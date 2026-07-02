@@ -25,6 +25,7 @@ for _path in (SCRIPTS_DIR, "/Users/yasser/scripts"):
 
 import atlas_db  # noqa: E402
 from atlas_symbol_meta import ticker_label  # noqa: E402
+from atlas_report_blocks import holding_block  # noqa: E402
 from atlas_notify import send_telegram  # noqa: E402
 
 if os.environ.get("ATLAS_DB"):
@@ -176,7 +177,7 @@ def build_report() -> str:
         total_unrealized += pnl
         total_entry_cost += entry * qty
         total_value += value
-        rows.append({"ticker": ticker, "entry": entry, "close": close, "stop": stop, "target": target, "qty": qty, "pnl": pnl, "pct": pct, "value": value, "row": row})
+        rows.append({"ticker": ticker, "entry_price": entry, "current_price": close, "stop_loss": stop, "target_price": target, "quantity": qty, "unrealized_pl_usd": pnl, "unrealized_pl_pct": pct, "current_value": value, "invested_capital": entry * qty, "row": row})
     roi = (total_unrealized / total_entry_cost * 100.0) if total_entry_cost else 0.0
     equity = cash + total_value
     lines = [
@@ -185,23 +186,12 @@ def build_report() -> str:
         f"💰 Equity {_money(equity)} · Cash {_money(cash)} · {len(rows)} positions · ROI {_fmt_pct(roi)}",
         "",
     ]
-    for idx, item in enumerate(rows, 1):
-        icon = "🟢" if item["pnl"] >= 0 else "🔴"
-        label = ticker_label(item["ticker"], item["row"])
-        lines += [
-            f"{idx}. {icon} {label}",
-            f"   💵 Entry {_price(item['entry'])}",
-            f"   👀 Close {_price(item['close'])}",
-            f"   🚦 Stop {_price(item['stop'])}",
-            f"   🎯 Target {_price(item['target'])}",
-            f"   ({_fmt_pct(item['pct'], decimals=0)} · {_signed_money(item['pnl'])} · ~{_money(item['value'])})",
-            "",
-        ]
+    lines.extend(holding_block(rows, {}))
     if rows:
-        best = max(rows, key=lambda r: r["pct"])
-        worst = min(rows, key=lambda r: r["pct"])
-        best_line = f"Best: {best['ticker']} {_fmt_pct(best['pct'], decimals=0)}"
-        worst_line = f"Worst: {worst['ticker']} {_fmt_pct(worst['pct'], decimals=0)}"
+        best = max(rows, key=lambda r: r["unrealized_pl_pct"])
+        worst = min(rows, key=lambda r: r["unrealized_pl_pct"])
+        best_line = f"Best: {best['ticker']} {_fmt_pct(best['unrealized_pl_pct'], decimals=0)}"
+        worst_line = f"Worst: {worst['ticker']} {_fmt_pct(worst['unrealized_pl_pct'], decimals=0)}"
     else:
         best_line = "Best: none"
         worst_line = "Worst: none"
@@ -212,7 +202,6 @@ def build_report() -> str:
         f"Cash: {_money(cash)}",
     ]
     return "\n".join(lines)
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Atlas EOD open-position report")

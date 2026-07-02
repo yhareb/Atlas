@@ -17,6 +17,7 @@ sys.path.insert(0, "/Users/yasser/scripts")
 import atlas_db
 import atlas_portfolio as port
 from atlas_symbol_meta import ticker_label
+from atlas_report_blocks import holding_block, pullback_block, watch_list_block
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -87,29 +88,21 @@ def _latest_handoff(market_day):
 
 def _holding_lines():
     rows = atlas_db.get_open_positions()
-    lines = ["", f"━━━ 💼 HOLDING ({len(rows)}) ━━━"]
-    if not rows:
-        lines.append("📭 none")
-        return lines
-
+    positions = []
     for row in rows:
         ticker = str(row.get("ticker") or "?").upper()
         entry = _num(row.get("price"), 0.0)
         qty = _num(row.get("quantity"), 0.0)
         last = _latest_price(ticker, fallback=entry)
-        value = qty * last if last is not None else None
-        pnl = (last - entry) * qty if last is not None and entry else 0.0
-        pnl_pct = ((last - entry) / entry * 100.0) if last is not None and entry else 0.0
-        icon = "🟢" if pnl >= 0 else "🔴"
-        label = ticker_label(ticker, row)
-        lines += [
-            "",
-            f"{icon} {label} x{_shares(qty)} · value {_money0(value)}",
-            f"   Entry {_money(entry)} · Now {_money(last)} · P/L {_signed_pct(pnl_pct)} ({_signed_money(pnl)})",
-            f"   Stop {_money(row.get('stop_loss'))} · Target {_money(row.get('target_price'))}",
-        ]
-    return lines
-
+        positions.append({
+            "ticker": ticker,
+            "entry_price": entry,
+            "current_price": last,
+            "stop_loss": row.get("stop_loss"),
+            "target_price": row.get("target_price"),
+            "quantity": qty,
+        })
+    return holding_block(positions, {})
 
 def _pending_stop_target(row):
     trigger = _num(row.get("trigger_price"))
@@ -136,42 +129,26 @@ def _armed_lines(market_day):
     rows = [r for r in all_rows if str((r or {}).get("expires_at") or "9999-12-31") >= today]
     stale = len(all_rows) - len(rows)
     rows = sorted(rows, key=lambda r: (str(r.get("expires_at") or ""), str(r.get("ticker") or "")))
-    lines = ["", f"━━━ 🎣 ARMED PULLBACKS ({len(rows)}) ━━━"]
-    if not rows:
-        lines.append("✅ none")
-        if stale:
-            lines.append(f"⚠️ {stale} stale expired row(s) hidden; engine will expire them on evaluation.")
-        return lines
-
+    data = []
     for row in rows:
-        ticker = str(row.get("ticker") or "?").upper()
-        label = ticker_label(ticker, row)
-        trigger = _num(row.get("trigger_price"))
-        stop, target = _pending_stop_target(row)
-        score = str(row.get("score") or "?/4").replace(" Pillars", "")
-        pct = _num(row.get("pct_over_ema"), 0.0)
-        expires = row.get("expires_at") or "N/A"
-        lines += [
-            "",
-            f"🔸 {label} · {score} · trigger {_money(trigger)}",
-            f"   Entry {_money(trigger)} · Stop {_money(stop)} · Target {_money(target)}",
-            f"   EMA {_money(row.get('ema10'))} · ref {_money(row.get('reference_price'))} · {pct:.1f}% over EMA · expires {expires}",
-        ]
+        item = dict(row)
+        item.setdefault("action", "WAIT")
+        item.setdefault("reason", "PULLBACK — armed for morning plan")
+        item.setdefault("entry", item.get("trigger_price"))
+        item.setdefault("entry_price", item.get("trigger_price"))
+        item.setdefault("current_price", item.get("reference_price"))
+        item.setdefault("price", item.get("reference_price"))
+        data.append(item)
+    lines = pullback_block(data)
+    if stale:
+        lines.append(f"⚠️ {stale} stale expired row(s) hidden; engine will expire them on evaluation.")
     return lines
-
 
 def _watch_lines(data):
     raw = data.get("WATCH", []) if isinstance(data, dict) else []
-    seen = []
-    for item in raw or []:
-        ticker = str(item or "").upper().strip()
-        if ticker and ticker not in seen:
-            seen.append(ticker)
-    labels = [ticker_label(t) for t in seen]
-    lines = ["", f"━━━ 👀 WATCH LIST ({len(labels)}) ━━━"]
-    lines.append(" · ".join(labels) if labels else "none")
-    return lines
-
+    watch_rows = [{"ticker": str(t or "").upper(), "action": "WATCH"} for t in (raw or [])]
+    open_tickers = {str(r.get("ticker") or "").upper() for r in atlas_db.get_open_positions()}
+    return watch_list_block(watch_rows, open_tickers=open_tickers)
 
 def render_morning_briefing():
     market_day = current_et_market_date()

@@ -14,6 +14,7 @@ import atlas_portfolio as port
 from atlas_time import current_et_market_date_str
 from atlas_notify import send_telegram
 from atlas_symbol_meta import ticker_label
+from atlas_report_blocks import holding_block, watch_list_block
 
 INDEX_ETF_BLOCKLIST = {"SPY", "QQQ", "DIA"}
 
@@ -105,24 +106,21 @@ def _bought_today_lines(buy_tickers):
 
 def _holding_lines():
     rows = atlas_db.get_open_positions()
-    lines = ["", f"━━━ 💼 HOLDING INTO TOMORROW ({len(rows)}) ━━━"]
-    if not rows:
-        lines.append("📭 none")
-        return lines, rows
+    positions = []
     for row in rows:
         ticker = str(row.get("ticker") or "?").upper()
-        qty = int(_num(row.get("quantity")))
+        qty = _num(row.get("quantity"))
         entry = _num(row.get("price"))
         close = _latest_price(ticker, fallback=entry)
-        pnl = ((close or 0) - entry) * qty if entry and close is not None else 0
-        roi = (((close or 0) / entry - 1.0) * 100) if entry and close is not None else 0
-        icon = "🟢" if pnl >= 0 else "🔴"
-        lines.append(
-            f"{icon} {_label(ticker, row)} · {qty} sh · entry {_money(entry)} · close {_money(close)} · "
-            f"P/L {_signed_money(pnl)} ({_pct(roi)}) · stop {_money(row.get('stop_loss'))} · target {_money(row.get('target_price'))}"
-        )
-    return lines, rows
-
+        positions.append({
+            "ticker": ticker,
+            "entry_price": entry,
+            "current_price": close,
+            "stop_loss": row.get("stop_loss"),
+            "target_price": row.get("target_price"),
+            "quantity": qty,
+        })
+    return holding_block(positions, {}), rows
 
 def _armed_lines():
     rows = atlas_db.get_pending_pullbacks(status="WAITING")
@@ -140,9 +138,8 @@ def _armed_lines():
 
 
 def _watching_lines(watch_tickers):
-    labels = [_label(ticker) for ticker in watch_tickers]
-    return ["", f"━━━ 👀 WATCHING ({len(labels)}) ━━━", ", ".join(labels) if labels else "none"]
-
+    watch_rows = [{"ticker": str(ticker or "").upper(), "action": "WATCH"} for ticker in (watch_tickers or [])]
+    return watch_list_block(watch_rows, open_tickers=set())
 
 def _day_summary_lines(handoff_data, holdings_count, armed_count, saved=True):
     decisions = handoff_data.get("DECISIONS") or []

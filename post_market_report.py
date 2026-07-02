@@ -21,6 +21,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 import atlas_db
 import atlas_portfolio as port
 from atlas_symbol_meta import normalize_snapshot_fields, ticker_label
+from atlas_report_blocks import holding_block
 from atlas_time import current_et_market_date, previous_et_trading_date_str
 from atlas_engine import _llm_judge_catalyst
 
@@ -657,24 +658,19 @@ def generate_post_market_report(send=True, market_date=None, now_et=None):
         lines.append(f"      • {ticker_label(d['ticker'])} — {d.get('reason') or 'N/A'}")
     lines.append("")
 
-    if positions:
-        lines.append(f"2️⃣ OPEN POSITIONS ({len(positions)})")
-        for p in positions:
-            qty = p.get('qty', 'N/A')
-            if isinstance(qty, float) and qty.is_integer():
-                qty = int(qty)
-            base = f"   • {ticker_label(p['ticker'])} — {qty} sh · entry {_pm_money(p.get('entry'))} · stop {_pm_money(p.get('stop'))} · close {_pm_money(p.get('close'))}"
-            if p.get("pnl") is not None:
-                pnl_pct = None
-                entry_val = p.get('entry')
-                close_val = p.get('close')
-                if entry_val not in (None, 0) and close_val is not None:
-                    pnl_pct = ((close_val - entry_val) / entry_val) * 100
-                base += f" · P/L {_pm_money(p.get('pnl'))} ({_pm_pct(pnl_pct)})"
-            lines.append(base)
-    else:
-        lines.append("2️⃣ OPEN POSITIONS — none")
-    lines.append("")
+    lines.append("2️⃣ OPEN POSITIONS")
+    holding_rows = []
+    for p in positions:
+        holding_rows.append({
+            "ticker": p.get("ticker"),
+            "entry_price": p.get("entry"),
+            "current_price": p.get("close"),
+            "stop_loss": p.get("stop"),
+            "target_price": p.get("target"),
+            "quantity": p.get("qty"),
+            "unrealized_pl_usd": p.get("pnl"),
+        })
+    lines.extend(holding_block(holding_rows, {}))
 
     lines.append(f"3️⃣ WATCHLIST CLOSE ({len(close_rows)})")
     lines.extend([_format_watch_close(r) for r in close_rows] or ["   ⚪ N/A    N/A        —"])

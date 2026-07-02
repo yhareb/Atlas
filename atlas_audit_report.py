@@ -15,35 +15,68 @@ import sqlite3
 import sys
 from zoneinfo import ZoneInfo
 
+import requests
+
 sys.path.insert(0, "/Users/yasser/scripts")
 
 
-def _load_atlasops_telegram_env():
-    """Force audit reports to use AtlasOps Telegram routing, not Atlas routing."""
-    env_path = Path("/Users/yasser/.hermes/profiles/atlasops/.env")
-    if not env_path.exists():
-        return
+ATLASOPS_ENV = Path("/Users/yasser/.hermes/profiles/atlasops/.env")
+
+
+def _env_file_values(path):
     values = {}
-    for raw in env_path.read_text(errors="ignore").splitlines():
+    if not path.exists():
+        return values
+    for raw in path.read_text(errors="ignore").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        key = key.strip()
-        if key in {"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_ALLOWED_USERS", "TELEGRAM_HOME_CHANNEL"}:
-            values[key] = value.strip().strip('"').strip("'")
-    for key in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USERS", "TELEGRAM_HOME_CHANNEL"):
-        if values.get(key):
-            os.environ[key] = values[key]
-    chat = values.get("TELEGRAM_CHAT_ID") or values.get("TELEGRAM_ALLOWED_USERS") or values.get("TELEGRAM_HOME_CHANNEL")
-    if chat:
-        os.environ["TELEGRAM_CHAT_ID"] = chat
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
 
 
-_load_atlasops_telegram_env()
+def _chunks(message, limit=3800):
+    text = str(message or "")
+    chunks = []
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        if cut < 1000:
+            cut = limit
+        chunks.append(text[:cut].rstrip())
+        text = text[cut:].lstrip()
+    chunks.append(text)
+    return chunks
+
+
+def send_atlasops_audit_telegram(message, label="atlas_audit", parse_mode=""):
+    """Send audit reports through the AtlasOps bot only; never atlas_notify/Atlas bot."""
+    values = _env_file_values(ATLASOPS_ENV)
+    bot_token = values.get("TELEGRAM_BOT_TOKEN")
+    chat_id = values.get("TELEGRAM_CHAT_ID")
+    if not bot_token or not chat_id:
+        print(f"[{label}] telegram skipped: atlasops TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID unset")
+        return False
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    sent = 0
+    for chunk in _chunks(message):
+        payload = {"chat_id": chat_id, "text": chunk}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        try:
+            resp = requests.post(url, json=payload, timeout=(5, 25))
+            if resp.status_code != 200:
+                print(f"[{label}] telegram failed HTTP {resp.status_code}")
+                return False
+            sent += 1
+        except Exception as exc:
+            print(f"[{label}] telegram failed: {type(exc).__name__}")
+            return False
+    print(f"[{label}] telegram sent via atlasops bot: chunks={sent}")
+    return True
+
 
 from atlas_time import is_trading_day
-from atlas_notify import send_message
 
 try:
     import atlas_audit
@@ -287,7 +320,7 @@ def main():
     message, counts = build_report(now_et=now_et)
     print(message)
     if not args.no_send:
-        send_message(message, label="atlas_audit", parse_mode="", print_fallback=True)
+        send_atlasops_audit_telegram(message, label="atlas_audit", parse_mode="")
     return 0
 
 

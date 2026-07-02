@@ -5,6 +5,11 @@ from datetime import datetime, timedelta, date, time, timezone
 from zoneinfo import ZoneInfo
 SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
+from atlas_provider_guard import (
+    BENZINGA_UNCOVERED as PROVIDER_BENZINGA_UNCOVERED,
+    benzinga_get_json as _guard_benzinga_get_json,
+    massive_get_json as _guard_massive_get_json,
+)
 import atlas_db
 try:
     import atlas_rag
@@ -13,6 +18,7 @@ except Exception:
 if os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB"):
     atlas_db.DB_PATH = os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB")
 from atlas_symbol_meta import normalize_price, normalize_snapshot_fields, ticker_label
+from atlas_report_blocks import holding_block, pullback_block, watch_list_block
 from atlas_time import current_et_market_date, current_et_market_date_str, previous_et_trading_date_str
 from atlas_engine import _llm_judge_catalyst
 
@@ -109,17 +115,34 @@ NYSE_HOLIDAYS_2026 = {
     date(2026,11,26),date(2026,11,27),date(2026,12,25),
 }
 
+def _env_int(name):
+    try:
+        value = os.environ.get(name)
+        return int(value) if value not in (None, "") else None
+    except Exception:
+        return None
+
+
+def _reports_group_chat_id():
+    return os.environ.get("ATLAS_REPORTS_GROUP_CHAT_ID")
+
+
 def send_telegram(message):
-    return _send_telegram(message, label="pre_market")
+    return _send_telegram(
+        message,
+        label="pre_market",
+        chat_id=_reports_group_chat_id(),
+        message_thread_id=_env_int("ATLAS_TOPIC_PREMARKET_THREAD_ID"),
+    )
 
 def massive_get(path, params=None):
     p = params or {}
     p["apiKey"] = MASSIVE_API_KEY
-    try:
-        r = _audit_get(f"{MASSIVE_BASE}{path}", params=p, timeout=PRE_MARKET_HTTP_TIMEOUT)
-        if r.status_code == 200: return r.json()
-    except Exception as e: print(f"[Massive error] {path}: {e}")
-    return None
+    return _guard_massive_get_json(
+        f"{MASSIVE_BASE}{path}",
+        params=p,
+        request_tag=f"pre_market_massive:{path}",
+    )
 
 def arrow(pct):
     if pct is None: return "—"
@@ -251,15 +274,13 @@ def get_benzinga_headlines(limit=5, hours=12):
         "sort": "created",
         "sortDir": "desc",
     }
-    try:
-        r = _audit_get(url, params=params, headers={"Accept": "application/json"}, timeout=PRE_MARKET_HTTP_TIMEOUT)
-        if r.status_code != 200:
-            print(f"[Benzinga headlines] HTTP {r.status_code}: {r.text[:120]}")
-            return []
-        rows = r.json() or []
-    except Exception as e:
-        print(f"[Benzinga headlines] failed: {e}")
-        return []
+    rows = _guard_benzinga_get_json(
+        None,
+        url,
+        params=params,
+        headers={"Accept": "application/json"},
+        request_tag="pre_market_benzinga_headlines",
+    ) or []
     candidates, seen = [], set()
     for item in rows if isinstance(rows, list) else []:
         title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip()
@@ -706,20 +727,12 @@ def _snapshot_quote(sym):
         # Polygon/Massive VIX is an index ticker. If entitlement blocks it (403),
         # fall through to secondary sources instead of rendering N/A.
         rows = []
-        try:
-            r = _audit_get(
-                f"{MASSIVE_BASE}/v2/aggs/ticker/I:VIX/prev",
-                params={"apiKey": MASSIVE_API_KEY, "adjusted": "true"},
-                timeout=PRE_MARKET_HTTP_TIMEOUT,
-            )
-            if r.status_code == 200:
-                rows = (r.json() or {}).get("results") or []
-            elif r.status_code == 403:
-                print("[pre_market] Massive VIX 403; using secondary VIX fallback")
-            else:
-                print(f"[pre_market] Massive VIX HTTP {r.status_code}; using secondary VIX fallback")
-        except Exception as e:
-            print(f"[pre_market] Massive VIX error; using secondary VIX fallback: {e}")
+        data = _guard_massive_get_json(
+            f"{MASSIVE_BASE}/v2/aggs/ticker/I:VIX/prev",
+            params={"apiKey": MASSIVE_API_KEY, "adjusted": "true"},
+            request_tag="pre_market_massive:vix_prev",
+        ) or {}
+        rows = data.get("results") or []
         row = rows[0] if rows else {}
         price = _to_float(row.get("c"))
         open_price = _to_float(row.get("o"))
@@ -778,45 +791,21 @@ def _macro_relevant_note(ticker, macro_lines):
 
 def _open_position_lines(macro_lines):
     rows = atlas_db.get_open_positions()
-    lines = []
-    total_invested = 0.0
-    current_value = 0.0
-    n = 0
+    positions = []
     for row in rows:
         ticker = str(row.get("ticker") or "?").upper()
-        shares = int(_to_float(row.get("quantity"), 0) or 0)
+        shares = _to_float(row.get("quantity"), 0) or 0
         entry = _to_float(row.get("price"))
         now = _snapshot_quote(ticker).get("price") or entry
-        stop = row.get("stop_loss")
-        target = row.get("target_price")
-        value = shares * (now or 0)
-        pnl = ((now or 0) - (entry or 0)) * shares
-        total_invested += shares * (entry or 0)
-        current_value += value
-        n += 1
-        pct = (((now or 0) / entry - 1.0) * 100.0) if entry else 0
-        icon = "🟢" if pnl >= 0 else "🔴"
-        sign_money = f"+${abs(pnl):,.0f}" if pnl >= 0 else f"−${abs(pnl):,.0f}"
-        lines.append(f"{icon} {ticker_label(ticker, row)}")
-        lines.append(f"   💵 Entry {_fmt_price(entry)}")
-        lines.append(f"   👀 Now {_fmt_price(now)}")
-        lines.append(f"   🚦 Stop {_fmt_price(stop)}")
-        lines.append(f"   🎯 Target {_fmt_price(target)}")
-        lines.append(f"   ({_fmt_pct(pct)} · {sign_money} · ~${value:,.0f})")
-        note = _macro_relevant_note(ticker, macro_lines)
-        if note:
-            lines.append(f"   ⚠️ Watch: {note}")
-    if n:
-        dollar_pnl = current_value - total_invested
-        roi = (dollar_pnl / total_invested * 100.0) if total_invested else 0.0
-        sign = "+" if roi >= 0 else "−"
-        sign_dollar = "+" if dollar_pnl >= 0 else "−"
-        lines.append("──────────────────")
-        lines.append(f"💼 Total Invested: ${total_invested:,.0f}")
-        lines.append(f"📊 Current Value:  ${current_value:,.0f}")
-        lines.append(f"📈 Blended ROI:    {sign}{abs(roi):.1f}% ({sign_dollar}${abs(dollar_pnl):,.0f})")
-    return lines
-
+        positions.append({
+            "ticker": ticker,
+            "entry_price": entry,
+            "current_price": now,
+            "stop_loss": row.get("stop_loss"),
+            "target_price": row.get("target_price"),
+            "quantity": shares,
+        })
+    return holding_block(positions, {})
 
 def _overnight_headlines(limit=5):
     return [re.sub(r"^\s*•\s*", "", str(x)).strip() for x in get_benzinga_headlines()[:limit] if str(x).strip()]
@@ -824,7 +813,7 @@ def _overnight_headlines(limit=5):
 
 def _benzinga_catalyst_for_ticker(ticker, hours=24):
     ticker = (ticker or "").upper()
-    if not ticker or ticker in BENZINGA_UNCOVERED or ticker in BENZINGA_SKIP_SET or not BENZINGA_API_KEY:
+    if not ticker or ticker in BENZINGA_UNCOVERED or ticker in PROVIDER_BENZINGA_UNCOVERED or ticker in BENZINGA_SKIP_SET or not BENZINGA_API_KEY:
         return None
     now_utc = datetime.now(timezone.utc)
     since_utc = now_utc - timedelta(hours=hours)
@@ -836,17 +825,12 @@ def _benzinga_catalyst_for_ticker(ticker, hours=24):
         "dateTo": now_utc.astimezone(ZoneInfo("America/New_York")).date().isoformat(),
         "pageSize": 5,
     }
-    try:
-        r = _audit_get(endpoint, params=params, timeout=PRE_MARKET_HTTP_TIMEOUT)
-    except requests.exceptions.RequestException:
-        return None
-    if r.status_code != 200:
-        return None
-    try:
-        data = r.json() or []
-    except (json.JSONDecodeError, ValueError):
-        BENZINGA_SKIP_SET.add(ticker)
-        return None
+    data = _guard_benzinga_get_json(
+        ticker,
+        endpoint,
+        params=params,
+        request_tag=f"pre_market_benzinga_catalyst:{ticker}",
+    ) or []
     articles = data if isinstance(data, list) else (data.get("data") or data.get("articles") or [])
     for item in articles:
         title = (item.get("title") or item.get("headline") or "").strip()
@@ -858,17 +842,12 @@ def _benzinga_catalyst_for_ticker(ticker, hours=24):
     fallback_params = dict(params)
     fallback_params.pop("tickers", None)
     fallback_params["pageSize"] = 15
-    try:
-        fallback = _audit_get(endpoint, params=fallback_params, timeout=PRE_MARKET_HTTP_TIMEOUT)
-    except requests.exceptions.RequestException:
-        return None
-    if fallback.status_code != 200:
-        return None
-    try:
-        fallback_data = fallback.json() or []
-    except (json.JSONDecodeError, ValueError):
-        BENZINGA_SKIP_SET.add(ticker)
-        return None
+    fallback_data = _guard_benzinga_get_json(
+        ticker,
+        endpoint,
+        params=fallback_params,
+        request_tag=f"pre_market_benzinga_catalyst_fallback:{ticker}",
+    ) or []
     fallback_articles = fallback_data if isinstance(fallback_data, list) else (fallback_data.get("data") or fallback_data.get("articles") or [])
     for item in fallback_articles:
         stocks = item.get("stocks") or []
@@ -1069,30 +1048,37 @@ def _pullback_detail_flags(sig):
 
 
 def _pullback_and_hot_lines():
-    pullbacks, hot = [], []
-    item_no = 1
+    pullback_rows, hot = [], []
     for row in atlas_db.get_pending_pullbacks(status="WAITING"):
         ticker = str(row.get("ticker") or "?").upper()
         trigger = _to_float(row.get("trigger_price"))
         now = _snapshot_quote(ticker).get("price") or _to_float(row.get("reference_price"))
         pct = (((now / trigger) - 1.0) * 100.0) if now and trigger else None
-        score = row.get("score") or "?/4"
-        sig = row.get("signal_result") or {}
         if pct is not None and pct > 10:
             hot.append(f"{ticker_label(ticker, row)} +{pct:.0f}%")
             continue
-        stop, target = _pending_stop_target(row)
-        pullbacks.append("\n".join([
-            f"{item_no}. {ticker_label(ticker, row)}",
-            f"   💵 Trigger {_fmt_price(trigger)}",
-            f"   👀 Now {_fmt_price(now)} ({_fmt_pct(pct)})",
-            f"   🚦 Stop {_fmt_price(stop)}",
-            f"   🎯 Target {_fmt_price(target)}",
-            f"   {score} · {_pullback_detail_flags(sig)}",
-        ]))
-        item_no += 1
-    return pullbacks, hot
-
+        item = dict(row)
+        import json as _json
+        try:
+            sj = _json.loads(row.get("signal_json") or "{}")
+            item["rvol"] = sj.get("rvol")
+            item["rsi"] = sj.get("indicator_info", {}).get("rsi")
+            item["macd_hist"] = sj.get("indicator_info", {}).get("macd_histogram")
+        except Exception:
+            pass  # leave as None — formatter handles gracefully
+        item.update({
+            "action": "WAIT",
+            "reason": "PULLBACK — pre-market candidate",
+            "entry": trigger,
+            "entry_price": trigger,
+            "current_price": now,
+            "price": now,
+        })
+        pullback_rows.append(item)
+    rendered = pullback_block(pullback_rows)
+    # Keep this function's historical contract: return card lines for caller's PULLBACK CANDIDATES section.
+    cards = [line for line in rendered if line not in ("", f"━━━ 🎣 WAITING FOR DIP ({len(pullback_rows)}) ━━━", "✅ none")]
+    return cards, hot
 
 def _sector_pulse_lines():
     labels = {"XLF":"financials", "XLK":"technology", "XLE":"energy", "XLV":"healthcare", "XLI":"industrials"}
