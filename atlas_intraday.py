@@ -1502,6 +1502,28 @@ def _waiting_lines(high, suppress_tickers=None, summary=None):
         and _row_ticker(h) not in hot_tickers
         and _row_ticker(h) not in suppress_tickers
     ])
+    # Also include pending_rows tickers that did NOT appear in the scan (not in waits)
+    waits_tickers = {_row_ticker(h) for h in waits}
+    for _pr in pending_rows:
+        _pt = _row_ticker(_pr)
+        if _pt and _pt not in waits_tickers and _pt not in suppress_tickers and _pt not in hot_tickers:
+            _pr_row = dict(_pr)
+            # Inject live price if available
+            if _pt in pending_live:
+                _pr_row.update({"current_price": pending_live[_pt], "price": pending_live[_pt]})
+            # Inject indicator_map data directly
+            _ind = indicator_map.get(_pt)
+            if isinstance(_ind, dict):
+                _pr_row["indicator_info"] = _ind
+                if _ind.get("rsi") is not None:
+                    _pr_row["rsi"] = _ind["rsi"]
+                if _ind.get("macd_histogram") is not None:
+                    _pr_row["macd_hist"] = _ind["macd_histogram"]
+                elif _ind.get("macd_hist") is not None:
+                    _pr_row["macd_hist"] = _ind["macd_hist"]
+            waits.append(_pr_row)
+            waits_tickers.add(_pt)
+
     rows = []
     for h in waits:
         row = dict(h)
@@ -1813,6 +1835,13 @@ def run_intraday():
         print(f"[intraday] dry-run lock path: {LOCK_PATH}")
     elif cli_force and cli_live:
         print("[intraday] --force --live: live forced run enabled; DB writes and Telegram sends allowed")
+
+    # Market hours gate — skip on weekends and NYSE holidays unless --force is passed
+    if not cli_force:
+        _mh_ok, _mh_reason = is_market_hours()
+        if not _mh_ok:
+            print(f"[intraday] {_mh_reason} — skipping run")
+            return {"skipped": True, "reason": _mh_reason}
 
     lock_fd = _acquire_run_lock()
     if lock_fd is None:

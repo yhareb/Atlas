@@ -19,7 +19,7 @@ if os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB"):
     atlas_db.DB_PATH = os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB")
 from atlas_symbol_meta import normalize_price, normalize_snapshot_fields, ticker_label
 from atlas_report_blocks import holding_block, pullback_block, watch_list_block
-from atlas_time import current_et_market_date, current_et_market_date_str, previous_et_trading_date_str
+from atlas_time import current_et_market_date, is_trading_day, current_et_market_date_str, previous_et_trading_date_str
 from atlas_engine import _llm_judge_catalyst
 
 _env_path = os.path.expanduser("~/.hermes/profiles/atlas/.env")
@@ -1409,6 +1409,17 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true", help="Build and print report without sending Telegram")
     parser.add_argument("--force", action="store_true", help="Bypass launchd market-open gate")
     args = parser.parse_args(argv)
+
+    from zoneinfo import ZoneInfo
+    import datetime as _dt
+    _et_today = _dt.date.today()
+    try:
+        _et_today = _dt.datetime.now(ZoneInfo("America/New_York")).date()
+    except Exception:
+        pass
+    if not args.force and not args.dry_run and not is_trading_day(_et_today):
+        print(f"[pre_market] calendar gate closed; non-market ET day {_et_today.isoformat()}; no report sent")
+        return 0
 
     gated = os.environ.get("ATLAS_PREMARKET_LAUNCHD_GATED") == "1"
     if gated and not args.force and not args.dry_run and not _launchd_market_open_window():

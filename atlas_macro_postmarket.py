@@ -36,6 +36,18 @@ EODHD_BASE = "https://eodhd.com/api"
 HTTP_TIMEOUT = float(os.environ.get("ATLAS_MACRO_POSTMARKET_TIMEOUT", "8"))
 
 
+def _reports_group_chat_id() -> str | None:
+    return os.environ.get("ATLAS_REPORTS_GROUP_CHAT_ID") or None
+
+
+def _postmarket_thread_id() -> int | None:
+    v = os.environ.get("ATLAS_TOPIC_POSTMARKET_THREAD_ID")
+    try:
+        return int(v) if v else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _strip_handoff_block(text: str) -> str:
     """Post-market macro wrap must never include the EOD handoff block."""
     marker = "🧭 ATLAS MACRO POST-MARKET"
@@ -497,6 +509,17 @@ def send_report(message: str) -> bool:
         print("[macro_postmarket] Telegram module unavailable; printing only")
         print(message)
         return False
+    group_chat = _reports_group_chat_id()
+    thread_id = _postmarket_thread_id()
+    if group_chat:
+        return bool(_send_telegram(
+            message,
+            label="macro_postmarket",
+            parse_mode="",
+            chat_id=group_chat,
+            message_thread_id=thread_id,
+        ))
+    # Fallback to default (owner DM) if group chat not configured
     return bool(_send_telegram(message, label="macro_postmarket", parse_mode=""))
 
 

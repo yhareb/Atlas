@@ -19,6 +19,7 @@ import requests
 SCRIPTS_DIR = Path(os.environ.get("ATLAS_SCRIPTS_DIR", "/Users/yasser/scripts"))
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+from atlas_time import is_trading_day
 
 ET = ZoneInfo("America/New_York")
 PROVIDERS = ("Massive", "Benzinga", "EODHD", "Perme")
@@ -340,6 +341,12 @@ def _build_report(summary, window_minutes):
 
 def main():
     args = _parse_args()
+    import datetime as _dt
+    from zoneinfo import ZoneInfo
+    _et_today = _dt.datetime.now(ZoneInfo("America/New_York")).date()
+    if not getattr(args, 'force', False) and not is_trading_day(_et_today):
+        print(f"[atlas_api_audit] calendar gate closed; non-market ET day {_et_today.isoformat()}; no report sent")
+        return 0
     if not args.allow_outside_market_window and not _inside_report_window():
         msg = f"[atlas_api_audit] outside ET report window; no send ({_now_et():%Y-%m-%d %H:%M ET})"
         print(msg)
