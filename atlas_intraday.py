@@ -517,17 +517,89 @@ def _extract_perme_flags_from_rag_hits(rag_hits):
     return normalize_flags(flags)
 
 
-def _load_perme_flags_from_rag():
-    if not atlas_rag:
-        return []
+_PERME_REPORT_CONTEXT = {}
+
+
+def _parse_perme_generated_at(value):
+    if not value:
+        return None
     try:
-        hits = atlas_rag.query_knowledge_base("Atlas intraday macro risk regime catalyst flags", n_results=5)
-        flags = _extract_perme_flags_from_rag_hits(hits)
-        print(f"[intraday] Perme RAG flags={flags}")
-        return flags
+        text = str(value).strip().replace("Z", "+00:00")
+        parsed = datetime.datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+        return parsed.astimezone(datetime.timezone.utc)
+    except Exception:
+        return None
+
+
+def _latest_perme_context_status(now=None):
+    path = os.environ.get("ATLAS_PERME_CONTEXT_PATH") or "/Users/yasser/atlas_inbox/latest_context.json"
+    status = {"path": path, "exists": False, "stale": False, "age_minutes": None, "ttl_minutes": None, "reason": "missing"}
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        status["exists"] = True
+        ttl = float(data.get("ttl_minutes") or 0)
+        generated = _parse_perme_generated_at(data.get("generated_at"))
+        status["ttl_minutes"] = ttl
+        if generated is None or ttl <= 0:
+            status.update({"stale": True, "reason": "invalid generated_at/ttl"})
+            return status
+        now = now or datetime.datetime.now(datetime.timezone.utc)
+        age = (now - generated).total_seconds() / 60.0
+        status["age_minutes"] = round(age, 1)
+        if age > ttl:
+            status.update({"stale": True, "reason": f"age {age:.0f}m > ttl {ttl:.0f}m"})
+        else:
+            status.update({"stale": False, "reason": f"fresh age {age:.0f}m <= ttl {ttl:.0f}m"})
     except Exception as e:
-        print(f"[intraday] Perme RAG flag query failed: {type(e).__name__}: {e}")
-        return []
+        status.update({"stale": True, "reason": f"{type(e).__name__}: {e}"})
+    return status
+
+
+def _latest_processed_perme_brief_flags():
+    import glob
+    candidates = glob.glob("/Users/yasser/atlas_inbox/processed/perme_brief_*.md")
+    if not candidates:
+        return [], None
+    path = max(candidates, key=lambda item: os.path.getmtime(item))
+    try:
+        with open(path, "r", errors="replace") as f:
+            text = f.read()
+        flags = _extract_perme_flags_from_text(text)
+        return flags, path
+    except Exception:
+        return [], path
+
+
+def _load_perme_flags_from_rag():
+    global _PERME_REPORT_CONTEXT
+    _PERME_REPORT_CONTEXT = {"stale": False, "fallback_used": False, "fallback_flags": [], "fallback_path": None, "reason": ""}
+    flags = []
+    if atlas_rag:
+        try:
+            hits = atlas_rag.query_knowledge_base("Atlas intraday macro risk regime catalyst flags", n_results=5)
+            flags = _extract_perme_flags_from_rag_hits(hits)
+        except Exception as e:
+            print(f"[intraday] Perme RAG flag query failed: {type(e).__name__}: {e}")
+            flags = []
+    context_status = _latest_perme_context_status()
+    if context_status.get("stale"):
+        fallback_flags, fallback_path = _latest_processed_perme_brief_flags()
+        flags = normalize_flags(list(flags or []) + list(fallback_flags or []))
+        _PERME_REPORT_CONTEXT = {
+            "stale": True,
+            "fallback_used": bool(fallback_flags),
+            "fallback_flags": fallback_flags or [],
+            "fallback_path": fallback_path,
+            "reason": context_status.get("reason") or "stale",
+        }
+        print(f"[intraday] Perme context stale; report-only fallback flags={fallback_flags or []}")
+    else:
+        _PERME_REPORT_CONTEXT = {"stale": False, "fallback_used": False, "fallback_flags": [], "fallback_path": None, "reason": context_status.get("reason") or "fresh"}
+    print(f"[intraday] Perme RAG flags={flags}")
+    return flags
 
 
 def _perme_flags(summary=None):
@@ -561,6 +633,30 @@ def _perme_header_line(flags):
         else:
             labels.append(flag)
     return "⚠️ Perme context: " + " · ".join(dict.fromkeys(labels))
+
+
+def _perme_report_context_lines(summary):
+    context = (summary or {}).get("perme_report_context") or {}
+    if not context.get("stale"):
+        return []
+    flags = normalize_flags(context.get("fallback_flags") or _perme_flags(summary))
+    sectors = []
+    tickers = []
+    for flag in flags:
+        text = str(flag or "").strip().upper()
+        if text.startswith(("SECTOR_NOTE:", "SECTOR_OVERBOUGHT:")):
+            sectors.append(text.split(":", 1)[1].strip())
+        elif text.startswith(("TICKER_NOTE:", "EARNINGS_RISK:")):
+            tickers.append(text.split(":", 1)[1].strip())
+    lines = ["⚠️ Perme context stale — using live macro fallback"]
+    details = []
+    if sectors:
+        details.append("sectors " + ", ".join(list(dict.fromkeys(sectors))[:4]))
+    if tickers:
+        details.append("tickers " + ", ".join(list(dict.fromkeys(tickers))[:6]))
+    if details:
+        lines.append("⚠️ Perme report-only annotations: " + " · ".join(details))
+    return lines
 
 
 def _header_lines(summary, hold_count):
@@ -598,6 +694,7 @@ def _header_lines(summary, hold_count):
     perme_line = _perme_header_line(_perme_flags(summary))
     if perme_line:
         lines.append(perme_line)
+    lines += _perme_report_context_lines(summary)
     return lines
 
 
@@ -1218,6 +1315,7 @@ def _actions_lines(buys, sells, summary=None, before_scan_signal_id=None, high=N
             ]
     else:
         lines.append("none")
+        lines.append("   No 4/4 candidates; BUY Small blocked by WAITING/open-position/weak RVOL.")
         lines.append("")
     return lines
 
@@ -1385,6 +1483,32 @@ def _intraday_breakout_lines(summary):
         lines.append(
             f"🔷 {label} | break {_price(item.get('breakout_level'))} | RVOL {rvol:.1f}x | entry {_price(item.get('entry'))} | stop {_price(item.get('stop'))} | target {_price(item.get('target'))}{suffix}"
         )
+    return lines
+
+
+def _waiting_visibility_reason(row):
+    score = _signal_pillar_text(row)
+    parts = [f"score {score}"]
+    rvol = _rvol_value(row)
+    if rvol is None:
+        parts.append("RVOL N/A")
+    elif rvol < RVOL_DISPLAY_THRESHOLD:
+        parts.append(f"RVOL {rvol:g} < {RVOL_DISPLAY_THRESHOLD:g}")
+    else:
+        parts.append(f"RVOL {rvol:g}")
+    if row.get("rsi") is None or row.get("macd_hist") is None:
+        parts.append("RSI/MACD pending")
+    return "   🟡 not BUY NOW — waiting for trigger; reason: " + "; ".join(parts)
+
+
+def _insert_waiting_visibility_notes(block_lines, rows):
+    lines = list(block_lines or [])
+    for idx, row in reversed(list(enumerate(rows or [], 1))):
+        prefix = f"{idx}. "
+        for pos in range(len(lines) - 1, -1, -1):
+            if str(lines[pos]).startswith(prefix):
+                lines.insert(pos + 1, _waiting_visibility_reason(row))
+                break
     return lines
 
 
@@ -1565,7 +1689,15 @@ def _waiting_lines(high, suppress_tickers=None, summary=None):
         return (rvol, rsi)
 
     rows.sort(key=_sort_key, reverse=True)
-    return pullback_block(rows)
+    # Keep existing WAITING pullbacks visible even when indicators are missing/3-of-4;
+    # this is report-only visibility, not BUY NOW eligibility or strategy logic.
+    rows = [
+        r for r in rows
+        if not (r.get("rsi") is None and r.get("macd_hist") is None)
+        or (_row_ticker(r) in pending_by_ticker and _pillar_num(r.get("score")) >= 3)
+    ]
+    rows = rows[:10]
+    return _insert_waiting_visibility_notes(pullback_block(rows), rows)
 
 def _gates_lines(high):
     hot = _unique([h for h in high if str(h.get("action", "")).upper() == "SKIP" and str(h.get("reason", "")).startswith("TOO EXTENDED")])
@@ -1595,6 +1727,42 @@ def _watch_sort_value(item):
         text = str(item or "")
     m = re.search(r"\+([0-9.]+)%", text)
     return _num(m.group(1), 0.0) if m else 0.0
+
+
+def _intraday_diagnostic_lines(summary, before_scan_signal_id=None, high=None, buy_now_tickers=None):
+    lines = []
+    summary = summary if isinstance(summary, dict) else {}
+    buy_rows = list(_current_cycle_buy_signals(before_scan_signal_id) or [])
+    open_tickers = _open_tickers(summary)
+    waiting_tickers = _waiting_pullback_tickers()
+    blocked = []
+    for row in buy_rows:
+        ticker = _row_ticker(row)
+        if not ticker or ticker in (buy_now_tickers or set()):
+            continue
+        reason = None
+        if ticker in open_tickers:
+            reason = "open-position"
+        elif ticker in waiting_tickers:
+            reason = "WAITING"
+        if reason:
+            blocked.append(f"{ticker} {row.get('score') or ''} ({reason})")
+    watch_2 = [str(t).upper() for t in (summary.get("watch_2", []) or []) if str(t or "").strip()]
+    detail_watch = []
+    for item in summary.get("high_candidates", []) or []:
+        if isinstance(item, dict) and str(item.get("action", "")).upper() == "WATCH":
+            ticker = _row_ticker(item)
+            if ticker:
+                detail_watch.append(ticker)
+    rendered_pool = [t for t in dict.fromkeys(watch_2 + sorted(set(detail_watch))) if t not in open_tickers]
+    omitted = rendered_pool[15:]
+    if blocked:
+        lines += ["", "━━━ 🧪 REPORT DIAGNOSTICS ━━━", f"BUY Small blocked: {', '.join(blocked[:6])}" + (f" +{len(blocked)-6} more" if len(blocked) > 6 else "")]
+    if omitted:
+        if not lines:
+            lines += ["", "━━━ 🧪 REPORT DIAGNOSTICS ━━━"]
+        lines.append(f"WATCH omitted by top-15 cap: {', '.join(omitted[:8])}" + (f" +{len(omitted)-8} more" if len(omitted) > 8 else ""))
+    return lines
 
 
 def _watch_lines(summary):
@@ -1652,6 +1820,7 @@ def _build_report(summary):
     lines += _intraday_breakout_lines(summary)
     lines += _gates_lines(high)
     lines += _watch_lines(summary)
+    lines += _intraday_diagnostic_lines(summary, before_scan_signal_id=before_scan_signal_id, high=high, buy_now_tickers=buy_now_tickers)
     return "\n".join(lines)
 
 
@@ -2039,6 +2208,7 @@ def _run_intraday_locked(now, force=False, dry_run=False):
         summary = getattr(atlas_manage, "LAST_RUN_SUMMARY", {}) or {}
     summary["_before_scan_signal_id"] = _before_scan_signal_id
     summary["perme_flags"] = perme_flags
+    summary["perme_report_context"] = dict(_PERME_REPORT_CONTEXT)
     if stream_status is not None:
         summary["stream_status"] = stream_status
 

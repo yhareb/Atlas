@@ -302,14 +302,15 @@ def benzinga_catalyst(ticker, now_et):
     except (json.JSONDecodeError, ValueError, requests.exceptions.RequestException):
         BENZINGA_SKIP_SET.add(ticker)
         return None
-    if not isinstance(data, list):
+    articles = data if isinstance(data, list) else (data.get("data") or data.get("articles") or [])
+    if not isinstance(articles, list):
         return None
-    for item in data:
+    for item in articles:
         stocks = item.get("stocks") or []
         stock_names = {str(s.get("name") or "").upper() for s in stocks if isinstance(s, dict)}
         if stock_names and ticker not in stock_names:
             continue
-        title = _clean_title(item.get("title"))
+        title = _clean_title(item.get("title") or item.get("headline") or "")
         if title:
             return title
     if data:

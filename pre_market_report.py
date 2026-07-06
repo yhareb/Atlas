@@ -48,6 +48,9 @@ except Exception:
 import time as _audit_time
 _REQUESTS_GET = requests.get
 PRE_MARKET_HTTP_TIMEOUT = float(os.environ.get("PRE_MARKET_HTTP_TIMEOUT", "5"))
+PRE_MARKET_MASSIVE_TIMEOUT = float(os.environ.get("PRE_MARKET_MASSIVE_TIMEOUT", str(PRE_MARKET_HTTP_TIMEOUT)))
+PRE_MARKET_EARLY_MOVER_UNIVERSE_LIMIT = int(os.environ.get("PRE_MARKET_EARLY_MOVER_UNIVERSE_LIMIT", "40"))
+PRE_MARKET_EARLY_MOVER_ENRICH_LIMIT = int(os.environ.get("PRE_MARKET_EARLY_MOVER_ENRICH_LIMIT", "6"))
 PRE_MARKET_CATALYST_LIMIT = int(os.environ.get("PRE_MARKET_CATALYST_LIMIT", "15"))
 PRE_MARKET_CATALYST_MAX_HITS = int(os.environ.get("PRE_MARKET_CATALYST_MAX_HITS", "6"))
 BENZINGA_UNCOVERED = {"FCEL", "ZURA", "PCLA", "CNVS", "WSHP", "SDOT"}
@@ -141,6 +144,7 @@ def massive_get(path, params=None):
     return _guard_massive_get_json(
         f"{MASSIVE_BASE}{path}",
         params=p,
+        timeout=PRE_MARKET_MASSIVE_TIMEOUT,
         request_tag=f"pre_market_massive:{path}",
     )
 
@@ -730,6 +734,7 @@ def _snapshot_quote(sym):
         data = _guard_massive_get_json(
             f"{MASSIVE_BASE}/v2/aggs/ticker/I:VIX/prev",
             params={"apiKey": MASSIVE_API_KEY, "adjusted": "true"},
+            timeout=PRE_MARKET_MASSIVE_TIMEOUT,
             request_tag="pre_market_massive:vix_prev",
         ) or {}
         rows = data.get("results") or []
@@ -861,41 +866,32 @@ def _benzinga_catalyst_for_ticker(ticker, hours=24):
 
 
 def _early_movers_candidates(limit=12):
-    """Visibility-only early momentum screen: +10% day gain and RVOL >1.5x."""
-    tickers = [t for t in get_discovery_universe(limit=120) if _is_tradeable_symbol(t)]
+    """Visibility-only early momentum screen from bulk Massive gainers only.
 
-    def _scan(ticker):
-        q = _snapshot_quote(ticker)
-        pct = _to_float(q.get("pct"))
-        price = _to_float(q.get("price"))
-        vol = _to_float(q.get("volume"))
-        prev_vol = _to_float(q.get("prev_volume"))
+    P0b: this must never call market_scout.discover_tickers() or per-ticker
+    snapshot fanout from the pre-market critical path.
+    """
+    data = massive_get("/v2/snapshot/locale/us/markets/stocks/gainers") or {}
+    gainers = data.get("tickers") or []
+    rows = []
+    for item in gainers:
+        ticker = str(item.get("ticker") or "").upper()
+        if not _is_tradeable_symbol(ticker):
+            continue
+        pct = _to_float(item.get("todaysChangePerc"))
+        day = item.get("day") or {}
+        prev = item.get("prevDay") or {}
+        last_trade = item.get("lastTrade") or {}
+        price = _to_float(day.get("c")) or _to_float(last_trade.get("p")) or _to_float(prev.get("c"))
+        vol = _to_float(day.get("v"))
+        prev_vol = _to_float(prev.get("v"))
         rvol = (vol / prev_vol) if vol and prev_vol else None
         if pct is None or price is None or rvol is None:
-            return None
+            continue
         if pct >= 10.0 and rvol > 1.5:
-            return {"ticker": ticker, "pct": pct, "price": price, "rvol": rvol}
-        return None
-
-    rows = []
-    if tickers:
-        with ThreadPoolExecutor(max_workers=min(10, len(tickers))) as pool:
-            for item in pool.map(_scan, tickers):
-                if item:
-                    rows.append(item)
+            rows.append({"ticker": ticker, "pct": pct, "price": price, "rvol": rvol, "catalyst": "No catalyst found"})
     rows.sort(key=lambda x: x.get("pct") or 0, reverse=True)
-    rows = rows[:limit]
-
-    def _enrich(row):
-        catalyst = _benzinga_catalyst_for_ticker(row["ticker"])
-        row["catalyst"] = _clean_catalyst_reason(catalyst) if catalyst else "No catalyst found"
-        return row
-
-    if rows:
-        with ThreadPoolExecutor(max_workers=min(6, len(rows))) as pool:
-            rows = list(pool.map(_enrich, rows))
-        rows.sort(key=lambda x: x.get("pct") or 0, reverse=True)
-    return rows
+    return rows[:min(limit, PRE_MARKET_EARLY_MOVER_ENRICH_LIMIT)]
 
 
 def _has_display_catalyst(row):
@@ -1140,7 +1136,6 @@ def generate_wavef_pre_market_brief(send=False, market_day=None):
         "macro": get_wavef_macro,
         "overnight_headlines": _overnight_headlines,
         "top_movers": get_top_movers,
-        "early_movers": _early_movers_candidates,
         "gapper_candidates": _gapper_candidates,
         "earnings": get_wavef_earnings,
         "analyst_actions": lambda: get_wavef_analyst_actions(limit=4),
@@ -1154,7 +1149,11 @@ def generate_wavef_pre_market_brief(send=False, market_day=None):
         future_map = {pool.submit(_timed, label, fn): label for label, fn in tasks.items()}
         for fut in as_completed(future_map):
             label = future_map[fut]
-            results[label] = fut.result()
+            try:
+                results[label] = fut.result()
+            except Exception as exc:
+                print(f"[pre-market] task {label} failed: {type(exc).__name__}: {exc}")
+                results[label] = None
 
     spy = results.get("spy_snapshot") or {}
     qqq = results.get("qqq_snapshot") or {}
@@ -1162,7 +1161,8 @@ def generate_wavef_pre_market_brief(send=False, market_day=None):
     macro = results.get("macro") or []
     headlines = results.get("overnight_headlines") or []
     gainers, losers = results.get("top_movers") or ([], [])
-    early_movers = results.get("early_movers") or []
+    early_movers = []
+    print("[pre-market timing] early_movers_skipped=timeout_budget")
     gappers = results.get("gapper_candidates") or []
     earnings = results.get("earnings") or []
     analysts = results.get("analyst_actions") or []
@@ -1277,7 +1277,7 @@ def _llm_brief(futures, gainers, losers, buy_lines, watch_lines, headlines):
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
             json={
-                "model": "gpt-4o-mini",
+                "model": os.environ.get("ATLAS_MACRO_LLM_MODEL", "gpt-4o-mini"),
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.4,
                 "max_tokens": 220,
@@ -1316,17 +1316,10 @@ def generate_pre_market_report(send=True):
     message = generate_wavef_pre_market_brief(send=False, market_day=today)
     if not message:
         return None
-    early_mover_lines = _early_movers_lines(_early_movers_candidates())
-    if early_mover_lines and "🔥 EARLY MOVERS" not in message:
-        message = "\n\n".join([
-            message,
-            "\n".join([
-                _section(f"🔥 EARLY MOVERS ({len(early_mover_lines)})"),
-                "Visibility only — on your radar, not a buy recommendation.",
-                *early_mover_lines,
-            ]),
-        ])
-    _write_premarket_run_marker(today, sent=bool(send))
+    # `generate_wavef_pre_market_brief()` already computes and renders early movers.
+    # Do not run that scan a second time here; it was the dominant timeout source.
+    if send:
+        _write_premarket_run_marker(today, sent=True)
     if send:
         send_telegram(message)
     return message

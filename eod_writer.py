@@ -5,18 +5,56 @@ Reads today's signals from atlas.db, classifies BUY/WATCH tickers, writes the
 handoff snapshot to the handoff table, and sends a clean Atlas-style handoff.
 """
 
+import argparse
+import os
 import sys
+import time as _time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
-sys.path.insert(0, "/Users/yasser/scripts")
+SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
+if SCRIPTS_DIR in sys.path:
+    sys.path.remove(SCRIPTS_DIR)
+sys.path.insert(0, SCRIPTS_DIR)
+
 import atlas_db
 import atlas_portfolio as port
-from atlas_time import current_et_market_date_str
+from atlas_time import current_et_market_date_str, is_trading_day
 from atlas_notify import send_telegram
 from atlas_symbol_meta import ticker_label
 from atlas_report_blocks import holding_block, watch_list_block
 
 INDEX_ETF_BLOCKLIST = {"SPY", "QQQ", "DIA"}
+ET = ZoneInfo("America/New_York")
+
+
+def _env_int(name):
+    try:
+        value = os.environ.get(name)
+        return int(value) if value not in (None, "") else None
+    except Exception:
+        return None
+
+
+def _reports_group_chat_id():
+    return os.environ.get("ATLAS_REPORTS_GROUP_CHAT_ID") or None
+
+
+def _postmarket_thread_id():
+    return _env_int("ATLAS_TOPIC_POSTMARKET_THREAD_ID")
+
+
+def _send_report_telegram(message):
+    group_chat = _reports_group_chat_id()
+    if group_chat:
+        return send_telegram(
+            message,
+            label="eod_writer",
+            parse_mode="",
+            chat_id=group_chat,
+            message_thread_id=_postmarket_thread_id(),
+        )
+    return send_telegram(message, label="eod_writer", parse_mode="")
 
 
 def _score_label(score):
@@ -58,9 +96,14 @@ def _label(ticker, item=None):
     return ticker_label((ticker or "?").upper(), item=item)
 
 
-def _classify_signal(ticker, signal, score, rvol, entry, stop_loss, atr):
-    if "BUY" not in str(signal):
-        return "WATCH" if "WATCH" in str(signal) else "SKIP", str(signal)
+def _classify_signal(ticker, signal, score, rvol, entry, stop_loss, atr, recompute=False):
+    text = str(signal or "")
+    if not recompute:
+        if "BUY" in text.upper():
+            return "WATCH", "stored BUY signal; EOD report skipped live portfolio recomputation"
+        return "WATCH" if "WATCH" in text.upper() else "SKIP", text
+    if "BUY" not in text:
+        return "WATCH" if "WATCH" in text else "SKIP", text
     res = {
         "ticker": ticker,
         "signal": signal,
@@ -159,11 +202,30 @@ def _day_summary_lines(handoff_data, holdings_count, armed_count, saved=True):
 
 
 def _build_handoff_message(handoff_data, saved=True):
+    # EOD cron must be bounded. Prefer DB-cached prices; do not block the report on live quote APIs.
+    os.environ["ATLAS_HANDOFF_LIVE_PRICES"] = "0"
+    if "/Users/yasser/scripts" in sys.path and os.path.realpath(SCRIPTS_DIR) != "/Users/yasser/scripts":
+        sys.path.remove("/Users/yasser/scripts")
+    if SCRIPTS_DIR in sys.path:
+        sys.path.remove(SCRIPTS_DIR)
+    sys.path.insert(0, SCRIPTS_DIR)
+    loaded = sys.modules.get("atlas_report_handoff")
+    if loaded is not None and not os.path.realpath(getattr(loaded, "__file__", "")).startswith(os.path.realpath(SCRIPTS_DIR)):
+        sys.modules.pop("atlas_report_handoff", None)
+    import_started = _time.perf_counter()
     from atlas_report_handoff import build_atlas_handoff_report
-    return build_atlas_handoff_report(context="eod_handoff")
+    code_obj = getattr(build_atlas_handoff_report, "__code__", None)
+    print(f"[eod_writer timing] handoff_module={code_obj.co_filename if code_obj is not None else 'unknown'}")
+    print(f"[eod_writer timing] render_import_handoff={_time.perf_counter() - import_started:.2f}s live_prices={os.environ.get('ATLAS_HANDOFF_LIVE_PRICES')}")
+    build_started = _time.perf_counter()
+    msg = build_atlas_handoff_report(context="eod_handoff")
+    print(f"[eod_writer timing] render_build_handoff={_time.perf_counter() - build_started:.2f}s")
+    return msg
 
 
-def generate_eod_handoff(send=True, write_db=True):
+def generate_eod_handoff(send=True, write_db=True, recompute=False):
+    started = _time.perf_counter()
+    stage_started = _time.perf_counter()
     conn = atlas_db.get_connection()
     cursor = conn.cursor()
 
@@ -178,7 +240,9 @@ def generate_eod_handoff(send=True, write_db=True):
 
     rows = cursor.fetchall()
     conn.close()
+    print(f"[eod_writer timing] db_query={_time.perf_counter() - stage_started:.2f}s rows={len(rows)}")
 
+    stage_started = _time.perf_counter()
     handoff_data = {
         "date": today,
         "BUY": [],
@@ -193,7 +257,7 @@ def generate_eod_handoff(send=True, write_db=True):
         if not ticker or ticker in seen or ticker in INDEX_ETF_BLOCKLIST:
             continue
         seen.add(ticker)
-        bucket, reason = _classify_signal(ticker, signal, score, rvol, entry, stop_loss, atr)
+        bucket, reason = _classify_signal(ticker, signal, score, rvol, entry, stop_loss, atr, recompute=recompute)
         handoff_data["DECISIONS"].append({"ticker": ticker, "decision": bucket, "reason": reason})
         if bucket == "BUY":
             handoff_data["BUY"].append(ticker)
@@ -202,15 +266,48 @@ def generate_eod_handoff(send=True, write_db=True):
 
     handoff_data["BUY"] = sorted(set(handoff_data["BUY"]))
     handoff_data["WATCH"] = sorted(set(handoff_data["WATCH"]))
+    print(f"[eod_writer timing] classify={_time.perf_counter() - stage_started:.2f}s decisions={len(handoff_data['DECISIONS'])} recompute={recompute}")
+
+    stage_started = _time.perf_counter()
     if write_db:
         atlas_db.update_handoff(today, handoff_data)
+    print(f"[eod_writer timing] write_db={_time.perf_counter() - stage_started:.2f}s enabled={write_db}")
 
+    stage_started = _time.perf_counter()
     msg = _build_handoff_message(handoff_data, saved=write_db)
+    print(f"[eod_writer timing] render={_time.perf_counter() - stage_started:.2f}s")
     print(msg)
+    print(f"[eod_writer] build_seconds={_time.perf_counter() - started:.2f} write_db={write_db} recompute={recompute}")
     if send:
-        send_telegram(msg, label="eod_writer")
+        stage_started = _time.perf_counter()
+        _send_report_telegram(msg)
+        print(f"[eod_writer timing] telegram_send={_time.perf_counter() - stage_started:.2f}s enabled=True")
+    else:
+        print("[eod_writer timing] telegram_send=0.00s enabled=False")
     return msg
 
 
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Atlas EOD handoff writer")
+    parser.add_argument("--dry-run", action="store_true", help="print handoff only; suppress DB write and Telegram")
+    parser.add_argument("--no-send", action="store_true", help="suppress Telegram send")
+    parser.add_argument("--no-db", action="store_true", help="suppress handoff DB write")
+    parser.add_argument("--force", action="store_true", help="bypass trading-day gate")
+    parser.add_argument("--recompute", action="store_true", help="legacy slow path: rerun portfolio admission checks per signal")
+    args = parser.parse_args(argv)
+
+    today_et = datetime.now(ET).date()
+    if not args.force and not is_trading_day(today_et):
+        print(f"[eod_writer] calendar gate closed; non-market ET day {today_et.isoformat()}; no handoff sent")
+        return 0
+
+    send = not (args.dry_run or args.no_send)
+    write_db = not (args.dry_run or args.no_db)
+    msg = generate_eod_handoff(send=send, write_db=write_db, recompute=args.recompute)
+    if args.dry_run:
+        print(f"[eod_writer] dry-run generated {len(msg or '')} chars; Telegram not sent; DB not written")
+    return 0
+
+
 if __name__ == "__main__":
-    generate_eod_handoff()
+    raise SystemExit(main())

@@ -3,7 +3,9 @@
 Builds the short operator-facing handoff used by pre-market, intraday,
 post-market, and EOD handoff messages.
 """
+import os
 import sys
+import time as _time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -12,6 +14,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 import atlas_db
 import atlas_portfolio as port
+import atlas_symbol_meta as _symbol_meta
 from atlas_symbol_meta import ticker_label
 from atlas_report_blocks import holding_block, pullback_block, watch_list_block
 from atlas_time import current_et_market_date, add_trading_days, previous_et_trading_date_str
@@ -87,6 +90,8 @@ def _header(report_date=None):
 
 
 def _latest_price(ticker, fallback=None):
+    if str(os.environ.get("ATLAS_HANDOFF_LIVE_PRICES", "1")).lower() in ("0", "false", "no", "off"):
+        return fallback
     try:
         price = port._last_price(ticker)
         if price is not None:
@@ -108,7 +113,8 @@ def _open_position_lines():
         ticker = str(row.get("ticker") or "?").upper()
         entry = _num(row.get("price"))
         qty = _num(row.get("quantity"), 0.0)
-        now = _latest_price(ticker, fallback=entry)
+        cached_now = row.get("current_price") or row.get("last_price")
+        now = _latest_price(ticker, fallback=_num(cached_now, entry))
         positions.append({
             "ticker": ticker,
             "entry_price": entry,
@@ -224,13 +230,85 @@ def _break_lines():
     ]
 
 
+EOD_HANDOFF_LABEL_OVERRIDES = {
+    "AAL": "American Airlines Group",
+    "ABVX": "Abivax SA American Depositary Shares",
+    "ALAB": "Astera Labs",
+    "AMAT": "Applied Materials",
+    "AMD": "Advanced Micro Devices",
+    "ANET": "Arista Networks",
+    "AZZ": "Azz",
+    "BE": "Bloom Energy",
+    "BOKF": "BOK Financial",
+    "BAC": "Bank of America",
+    "CAT": "Caterpillar",
+    "CRDO": "Credo Technology Group Holding",
+    "CVBF": "CVB Financial",
+    "DAL": "Delta Air Lines",
+    "ESI": "Element Solutions",
+    "F": "Ford Motor",
+    "FCEL": "FuelCell Energy Inc NEW",
+    "GS": "Goldman Sachs Group",
+    "HZO": "MarineMax",
+    "INTC": "Intel",
+    "IRDM": "Iridium Communications",
+    "JNJ": "Johnson & Johnson",
+    "KO": "Coca-Cola",
+    "LEVI": "Levi Strauss &",
+    "LRCX": "Lam Research",
+    "MAS": "Masco",
+    "MS": "Morgan Stanley",
+    "MSM": "MSC Industrial Direct",
+    "MUSA": "Murphy Usa",
+    "PENG": "Penguin Solutions",
+    "PSMT": "Pricesmart",
+    "RL": "Ralph Lauren",
+    "RPRX": "Royalty Pharma",
+    "SLS": "SELLAS Life Sciences Group",
+    "SOLS": "Solstice Advanced Materials",
+    "SYNA": "Synaptics",
+    "TENB": "Tenable",
+    "TRV": "The Travelers Companies",
+    "V": "Visa",
+    "VSAT": "Viasat",
+    "WDC": "Western Digital",
+    "WDFC": "Wd-40",
+    "WULF": "TeraWulf",
+}
+
+
+def _disable_live_label_lookup_if_requested():
+    """Avoid provider-backed company-name lookups in bounded EOD render paths."""
+    if str(os.environ.get("ATLAS_HANDOFF_LIVE_PRICES", "1")).lower() not in ("0", "false", "no", "off"):
+        return
+    try:
+        _symbol_meta._company_name_from_massive = lambda ticker: EOD_HANDOFF_LABEL_OVERRIDES.get(str(ticker or "").upper())
+        ticker_label.__globals__["_company_name_from_massive"] = lambda ticker: EOD_HANDOFF_LABEL_OVERRIDES.get(str(ticker or "").upper())
+    except Exception:
+        pass
+
+
 def build_atlas_handoff_report(context=None, report_date=None):
+    started = _time.perf_counter()
+    _disable_live_label_lookup_if_requested()
     day = report_date or current_et_market_date()
+    print(f"[handoff timing] current_market_date={_time.perf_counter() - started:.2f}s")
+    stage = _time.perf_counter()
     data = _latest_handoff(day)
+    print(f"[handoff timing] latest_handoff={_time.perf_counter() - stage:.2f}s")
+    stage = _time.perf_counter()
     lines = _header(day)
+    print(f"[handoff timing] header={_time.perf_counter() - stage:.2f}s")
+    stage = _time.perf_counter()
     open_lines, open_count = _open_position_lines()
+    print(f"[handoff timing] open_position_lines={_time.perf_counter() - stage:.2f}s count={open_count} live_prices={os.environ.get('ATLAS_HANDOFF_LIVE_PRICES')}")
+    stage = _time.perf_counter()
     armed_lines, armed_count = _pending_pullback_lines()
+    print(f"[handoff timing] pending_pullback_lines={_time.perf_counter() - stage:.2f}s count={armed_count}")
+    stage = _time.perf_counter()
     watch_lines = _watch_list_lines(data)
+    print(f"[handoff timing] watch_list_lines={_time.perf_counter() - stage:.2f}s")
+    stage = _time.perf_counter()
     lines += open_lines
     lines += [SEP, ""]
     lines += armed_lines
@@ -243,6 +321,7 @@ def build_atlas_handoff_report(context=None, report_date=None):
     lines += [SEP]
     lines += [f"   ✅ All fixes verified · {day.strftime('%B %-d, %Y')}"]
     lines += [SEP]
+    print(f"[handoff timing] assemble={_time.perf_counter() - stage:.2f}s total={_time.perf_counter() - started:.2f}s")
     return "\n".join(lines)
 
 

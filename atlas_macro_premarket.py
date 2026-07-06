@@ -165,6 +165,277 @@ def _fmt_num(value: object, suffix: str = "") -> str:
         return "N/A"
 
 
+# ---------------------------------------------------------------------------
+# Deterministic renderer helpers
+# ---------------------------------------------------------------------------
+
+def _arrow(pct: float | None) -> str:
+    """Return 🟢 for positive, 🔴 for negative, ⚪ for flat/None."""
+    if pct is None:
+        return "⚪"
+    return "🟢" if pct >= 0.05 else ("🔴" if pct <= -0.05 else "⚪")
+
+
+def _fmt_quote_pct(pct: object) -> str:
+    """Format a percent value with sign for quote display, e.g. +1.25% or −0.36%."""
+    try:
+        v = float(pct)
+    except Exception:
+        return "N/A"
+    sign = "+" if v >= 0 else "−"
+    return f"{sign}{abs(v):.2f}%"
+
+
+def _fmt_level(price: object, decimals: int = 2) -> str:
+    try:
+        return f"{float(price):,.{decimals}f}"
+    except Exception:
+        return "N/A"
+
+
+def _section(title: str) -> str:
+    return f"━━━ {title} ━━━"
+
+
+def _tone_line(sp_pct: float | None, concentration: str) -> str:
+    """Derive a single deterministic tone sentence from futures direction and breadth."""
+    if sp_pct is None:
+        return "Tone unclear — futures data unavailable. Wait for cash open."
+    broad = (concentration or "").lower() == "broad"
+    if sp_pct >= 0.5 and broad:
+        return f"Risk-on — S&P futures +{sp_pct:.2f}%, breadth broad. Participation supports the move."
+    if sp_pct >= 0.5 and not broad:
+        return f"Cautious — S&P futures +{sp_pct:.2f}% but breadth narrow. Leadership concentrated; wait for confirmation."
+    if sp_pct <= -0.5 and broad:
+        return f"Broad pullback — S&P futures {sp_pct:.2f}%, selling across the tape. Watch for reversal at the cash open."
+    if sp_pct <= -0.5 and not broad:
+        return f"Risk-off — S&P futures {sp_pct:.2f}%, breadth narrow. Wait for cash open confirmation."
+    return f"Neutral open — S&P futures {sp_pct:+.2f}%, directional bias unclear. Let the cash session set direction."
+
+
+def deterministic_narrative(ctx: dict) -> str:
+    """Build the full 8-section macro pre-market report from deterministic ctx data only.
+
+    Replaces both llm_narrative() and fallback_narrative(). No LLM call is made.
+    Output follows the canonical Atlas card/section design:
+      ━━━ EMOJI SECTION NAME ━━━
+    """
+    now_str = datetime.now(ET).strftime("%b %-d, %Y · %-I:%M %p ET")
+    lines: list[str] = [
+        f"🧭 ATLAS MACRO PRE-MARKET — {now_str}",
+        "",
+    ]
+
+    # ── Section 1: Futures Overview ─────────────────────────────────────────
+    lines.append(_section("📡 1. FUTURES OVERVIEW"))
+    fut = ctx.get("futures_overview") or {}
+    sp  = fut.get("S&P 500 futures") or {}
+    nq  = fut.get("Nasdaq 100 futures") or {}
+    dow = fut.get("Dow futures") or {}
+    for label, q in [("S&P 500 ", sp), ("Nasdaq 100", nq), ("Dow       ", dow)]:
+        icon = _arrow(q.get("pct"))
+        level = _fmt_level(q.get("price"), decimals=0)
+        pct   = _fmt_quote_pct(q.get("pct"))
+        lines.append(f"{icon} {label}  {level}  {pct}")
+    lines.append("")
+
+    # ── Section 2: NYSE / Nasdaq Breadth ────────────────────────────────────
+    lines.append(_section("📊 2. NYSE / NASDAQ BREADTH"))
+    breadth = ctx.get("breadth") or {}
+    concentration = breadth.get("concentration", "mixed")
+    if "nyse_advancers" in breadth:
+        nyse_a = breadth.get("nyse_advancers", 0)
+        nyse_d = breadth.get("nyse_decliners", 0)
+        nyse_u = breadth.get("nyse_unchanged", 0)
+        nas_a  = breadth.get("nasdaq_advancers", 0)
+        nas_d  = breadth.get("nasdaq_decliners", 0)
+        nas_u  = breadth.get("nasdaq_unchanged", 0)
+        session = breadth.get("session_date", "")
+        session_label = f"  ({session})" if session else ""
+        lines.append(f"NYSE{session_label}")
+        lines.append(f"   🟢 Adv {nyse_a:,}  🔴 Dec {nyse_d:,}  ⚪ Unch {nyse_u:,}")
+        lines.append("Nasdaq")
+        lines.append(f"   🟢 Adv {nas_a:,}  🔴 Dec {nas_d:,}  ⚪ Unch {nas_u:,}")
+    else:
+        adv = breadth.get("advancers", 0)
+        dec = breadth.get("decliners", 0)
+        lines.append(f"Pre-market proxy  🟢 Adv {adv}  🔴 Dec {dec}")
+    lines.append(f"Concentration: {concentration.upper()}")
+    lines.append("")
+
+    # ── Section 3: Technology & Semiconductors ──────────────────────────────
+    lines.append(_section("🔬 3. TECHNOLOGY & SEMICONDUCTORS"))
+    ts   = ctx.get("technology_and_semiconductors") or {}
+    soxx = ts.get("sox_proxy") or {}
+    soxx_icon  = _arrow(soxx.get("pct"))
+    soxx_level = _fmt_level(soxx.get("price"))
+    soxx_pct   = _fmt_quote_pct(soxx.get("pct"))
+    lines.append(f"{soxx_icon} SOXX proxy  {soxx_level}  {soxx_pct}")
+    semi_news = (ts.get("analyst_and_equipment_news") or [])[:2]
+    if semi_news:
+        for item in semi_news:
+            lines.append(f"📰 {item[:180]}")
+    else:
+        lines.append("📭 Quiet — no major semiconductor or equipment headlines overnight.")
+    lines.append("")
+
+    # ── Section 4: Artificial Intelligence ─────────────────────────────────
+    lines.append(_section("🤖 4. ARTIFICIAL INTELLIGENCE"))
+    ai_news = ((ctx.get("artificial_intelligence") or {}).get("ai_news") or [])[:3]
+    if ai_news:
+        for item in ai_news:
+            lines.append(f"📰 {item[:180]}")
+    else:
+        lines.append("📭 Quiet overnight — no major AI model, capex, regulatory, or deal headlines.")
+    lines.append("")
+
+    # ── Section 5: Catalysts & Breaking News ────────────────────────────────
+    lines.append(_section("🔥 5. CATALYSTS & BREAKING NEWS"))
+    catalyst_news = ((ctx.get("catalysts_and_breaking_news") or {}).get("catalyst_news") or [])[:3]
+    if catalyst_news:
+        for item in catalyst_news:
+            lines.append(f"📰 {item[:180]}")
+    else:
+        lines.append("📭 No major catalyst headlines — export controls, earnings, or macro shock.")
+    lines.append("")
+
+    # ── Section 6: Global Markets ───────────────────────────────────────────
+    lines.append(_section("🌐 6. GLOBAL MARKETS"))
+    gm = ctx.get("global_markets") or {}
+    global_order = [
+        ("Nikkei 225",    gm.get("Nikkei 225")    or {}, 0),
+        ("Euro Stoxx 50", gm.get("Euro Stoxx 50")  or {}, 0),
+        ("Dollar Index",  gm.get("Dollar Index")   or {}, 2),
+        ("WTI Crude Oil", gm.get("WTI crude oil")  or {}, 2),
+        ("US 10Y Yield",  gm.get("US 10Y yield")   or {}, None),  # special: divide by 10
+    ]
+    for label, q, dec in global_order:
+        icon = _arrow(q.get("pct"))
+        pct  = _fmt_quote_pct(q.get("pct"))
+        if label == "US 10Y Yield":
+            # Yahoo ^TNX quotes yield × 10 (e.g. 43.7 = 4.37%)
+            raw = q.get("price")
+            try:
+                level = f"{float(raw) / 10:.2f}%"
+            except Exception:
+                level = "N/A"
+        else:
+            level = _fmt_level(q.get("price"), decimals=dec if dec is not None else 2)
+        lines.append(f"{icon} {label:<16} {level:>10}  {pct}")
+    lines.append("")
+
+    # ── Section 7: The Tone ─────────────────────────────────────────────────
+    lines.append(_section("🎯 7. THE TONE"))
+    sp_pct = sp.get("pct")
+    try:
+        sp_pct = float(sp_pct)
+    except Exception:
+        sp_pct = None
+    lines.append(_tone_line(sp_pct, concentration))
+    lines.append("")
+
+    # ── Section 8: Key Events Today ─────────────────────────────────────────
+    lines.append(_section("📅 8. KEY EVENTS TODAY"))
+    events_ctx  = ctx.get("key_events_today") or {}
+    econ        = (events_ctx.get("economic_events")    or [])[:6]
+    earnings    = (events_ctx.get("earnings_before_open") or [])[:3]
+    fed         = (events_ctx.get("fed_speakers")        or [])[:3]
+    has_content = bool(econ or earnings or fed)
+    if econ:
+        for item in econ:
+            lines.append(f"🗓 {item[:180]}")
+    if earnings:
+        lines.append("Earnings before open:")
+        for item in earnings:
+            lines.append(f"   📰 {item[:160]}")
+    if fed:
+        lines.append("Fed speakers:")
+        for item in fed:
+            lines.append(f"   🎙 {item[:160]}")
+    if not has_content:
+        lines.append("📭 Light calendar — no major scheduled events today.")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# LLM narrative (kept as optional path; disabled by default via env var)
+# ---------------------------------------------------------------------------
+
+def llm_narrative(ctx: dict) -> str | None:
+    if not OPENAI_API_KEY:
+        return None
+    prompt = (
+        "Write the Atlas macro pre-market brief in Bloomberg Markets Wrap style: direct, specific, professional. "
+        "Use plain text only: no markdown bold, no bullets, no tables. Output exactly 8 numbered section headings using this exact heading format: '1. Futures Overview', '2. NYSE/Nasdaq Breadth', through '8. Key Events Today'. "
+        "Use actual market numbers where available, but do not force internal counts into prose. "
+        "Each section must contain 2-3 tight sentences maximum. Do not combine multiple section headings in one paragraph. "
+        "State cause and effect explicitly, linking index moves, rates, oil, breadth, semiconductors, AI, and catalysts when the data supports it. "
+        "Never mention row counts, returned rows, data sources, API fields, JSON keys, internal variable names, proxies, or the phrase '08:45 ET setup'. "
+        "If a section has 0 results or weak/no headline data, write a brief neutral market sentence instead of reporting absence; e.g. 'The AI sector was quiet overnight with no major deal announcements.' "
+        "Banned phrases: '0 fresh AI M&A rows were returned', 'economic events are scheduled', 'for the 08:45 ET setup', 'returned rows', 'data source', 'proxy counts', 'contributing to overall market uncertainty', 'remains a focal point', 'heightened level of activity', 'mixed signals', 'investors are closely monitoring', 'challenges and opportunities', 'potential volatility'. "
+        "Required order and content: "
+        "1. Futures Overview: S&P 500, Nasdaq 100, Dow futures with direction, percent, and level. "
+        "2. NYSE/Nasdaq Breadth: compare advancers versus decliners, state whether participation is broad or narrow, and say whether Nasdaq strength/weakness appears concentrated in a few large names or spread across the index. "
+        "3. Technology & Semiconductors: SOX performance plus analyst/equipment-maker theme as prose, not a count. "
+        "4. Artificial Intelligence: model releases, capex, regulation, and M&A themes; if quiet, say the sector was quiet overnight. "
+        "5. Catalysts & Breaking News: export controls, earnings before open, options expiry, and macro events in narrative form. "
+        "6. Global Markets: Asia, Europe, DXY/FX, oil, and 10Y yield with actual numbers. "
+        "7. The Tone: exactly one sentence with directional bias. "
+        "8. Key Events Today: scheduled data, Fed speakers, and earnings in calendar prose, not event-count language. "
+        "Do NOT mention individual stock tickers or individual company names. Do NOT recommend buying or selling. Raw data follows as JSON:\n"
+        + json.dumps(ctx, default=str)[:12000]
+    )
+    try:
+        r = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": os.environ.get("ATLAS_MACRO_LLM_MODEL", "gpt-4o"),
+                "messages": [
+                    {"role": "system", "content": (
+                        "You are a strict Bloomberg Markets Wrap editor. The brief must read like polished market prose, not a data extraction summary. Keep the 8 numbered headings exactly as requested. "
+                        "Use these few-shot examples as style only, not factual data. Futures style: 'S&P 500 futures slipped 0.36% to 5,728 as Nasdaq futures led the decline, falling 1.47% to 19,706 on continued pressure in semiconductor names. Dow futures were relatively resilient, off just 0.28%, reflecting the growth-vs-value divergence that has defined this week's tape.' "
+                        "Breadth style: 'NYSE and Nasdaq breadth was evenly split at 21 advancers and 21 decliners, so the tape was narrow rather than broadly risk-on. With Nasdaq futures down 1.47%, weakness looked concentrated in growth leadership instead of a full-market liquidation.' "
+                        "Semis style: 'Technology looked heavy before the bell as the SOX index lost 1.2%, with equipment makers under pressure after fresh analyst caution on capex timing. The weakness matters because chip leadership has carried much of the index advance this month.' "
+                        "AI style: 'The AI tape was quiet overnight, with no major model launch or deal announcement to reset expectations. That leaves the group trading off rates, capex discipline and semiconductor momentum rather than a fresh headline catalyst.' "
+                        "Catalysts style: 'Export-control headlines kept pressure on global chip supply chains, while pre-open earnings gave traders a second read on margin resilience. Options expiry can amplify index moves if futures weakness persists into the cash open.' "
+                        "Events style: 'The calendar centers on US data at [TIME] ET, followed by Fed commentary that will be judged against the 10-year yield near 4.37%. Pre-open earnings should matter most where guidance changes the read-through for margins and demand.' "
+                        "Section 8 must always finish with a complete sentence ending in a period; never stop mid-sentence. "
+                        "Never use internal language such as rows, returned, JSON, API, source, field, variable, proxy counts, setup, or economic events are scheduled. Never name individual companies or tickers."
+                    )},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.1,
+                "max_tokens": 1800,
+            },
+            timeout=20,
+        )
+        if r.status_code != 200:
+            print(f"[macro_premarket] LLM HTTP {r.status_code}: {r.text[:200]}")
+            return None
+        text = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+        cleaned = _scrub_internal_language(_strip_tickers(text)) if text else None
+        return _ensure_complete_report(cleaned, ctx) if cleaned else None
+    except Exception as exc:
+        print(f"[macro_premarket] LLM failed: {exc}")
+        return None
+
+
+def build_report(use_llm: bool = True) -> tuple[str, dict]:
+    ctx = collect_raw_context()
+    # Respect ATLAS_MACRO_USE_LLM env var: set to "0" or "false" to force deterministic path.
+    _env_use_llm = os.environ.get("ATLAS_MACRO_USE_LLM", "").strip().lower()
+    if _env_use_llm in ("0", "false", "no"):
+        use_llm = False
+    narrative = llm_narrative(ctx) if use_llm else None
+    if not narrative:
+        narrative = deterministic_narrative(ctx)
+    if not narrative.startswith("🧭"):
+        narrative = f"🧭 ATLAS MACRO PRE-MARKET — {datetime.now(ET).strftime('%b %-d, %Y · %I:%M %p ET')}\n\n{narrative}"
+    return narrative, ctx
+
+
 def _get(url: str, params: dict | None = None, timeout: float = HTTP_TIMEOUT):
     r = requests.get(url, params=params or {}, timeout=timeout, headers={"Accept": "application/json"})
     r.raise_for_status()
@@ -302,13 +573,117 @@ def futures_overview() -> dict:
     }
 
 
+def _previous_trading_date(d):
+    """Return the most recent completed trading session date before d."""
+    import datetime as _dt
+    cur = d - _dt.timedelta(days=1)
+    while cur.weekday() >= 5:
+        cur -= _dt.timedelta(days=1)
+    return cur
+
+
+def _breadth_from_grouped(session_date):
+    """Compute NYSE and Nasdaq advance/decline from Massive grouped daily aggregates."""
+    date_str = session_date.isoformat()
+    grouped = massive_get(f"/v2/aggs/grouped/locale/us/market/stocks/{date_str}") or {}
+    results = grouped.get("results") or []
+    if not results:
+        return None
+    # Build close price map for this session
+    close_map = {r["T"]: r["c"] for r in results if r.get("T") and r.get("c") is not None}
+    # Get previous session for comparison
+    import datetime as _dt
+    prev_date = _previous_trading_date(session_date)
+    prev_grouped = massive_get(f"/v2/aggs/grouped/locale/us/market/stocks/{prev_date.isoformat()}") or {}
+    prev_results = prev_grouped.get("results") or []
+    prev_close_map = {r["T"]: r["c"] for r in prev_results if r.get("T") and r.get("c") is not None}
+    # NYSE tickers (XNYS) — use open vs close within session as proxy if prev unavailable
+    def _count_adv_dec(tickers):
+        adv = dec = unch = 0
+        for t in tickers:
+            cur_c = close_map.get(t)
+            prev_c = prev_close_map.get(t)
+            if cur_c is None:
+                continue
+            if prev_c is not None:
+                if cur_c > prev_c:
+                    adv += 1
+                elif cur_c < prev_c:
+                    dec += 1
+                else:
+                    unch += 1
+        return adv, dec, unch
+    # Fetch NYSE and Nasdaq common stock universes (cached in module-level dict)
+    nyse_tickers = _get_exchange_universe("XNYS")
+    nasdaq_tickers = _get_exchange_universe("XNAS")
+    nyse_adv, nyse_dec, nyse_unch = _count_adv_dec(nyse_tickers)
+    nas_adv, nas_dec, nas_unch = _count_adv_dec(nasdaq_tickers)
+    return {
+        "session_date": date_str,
+        "nyse_advancers": nyse_adv,
+        "nyse_decliners": nyse_dec,
+        "nyse_unchanged": nyse_unch,
+        "nasdaq_advancers": nas_adv,
+        "nasdaq_decliners": nas_dec,
+        "nasdaq_unchanged": nas_unch,
+    }
+
+
+_EXCHANGE_UNIVERSE_CACHE: dict = {}
+
+
+def _get_exchange_universe(exchange: str) -> list:
+    """Fetch and cache the list of common stock tickers for a given exchange."""
+    if exchange in _EXCHANGE_UNIVERSE_CACHE:
+        return _EXCHANGE_UNIVERSE_CACHE[exchange]
+    tickers = []
+    cursor = None
+    for _ in range(10):  # max 10 pages
+        params = {"market": "stocks", "exchange": exchange, "active": "true", "type": "CS", "limit": 1000}
+        if cursor:
+            params["cursor"] = cursor
+        resp = massive_get("/v3/reference/tickers", params=params) or {}
+        page = resp.get("results") or []
+        tickers.extend(t["ticker"] for t in page if t.get("ticker"))
+        cursor = (resp.get("next_url") or "").split("cursor=")[-1] if resp.get("next_url") else None
+        if not cursor or not page:
+            break
+    _EXCHANGE_UNIVERSE_CACHE[exchange] = tickers
+    return tickers
+
+
 def breadth_snapshot() -> dict:
+    # Top movers for concentration and top-gainer/loser display
     gainers = (massive_get("/v2/snapshot/locale/us/markets/stocks/gainers") or {}).get("tickers") or []
     losers = (massive_get("/v2/snapshot/locale/us/markets/stocks/losers") or {}).get("tickers") or []
     top_gains = [abs(float(x.get("todaysChangePerc") or 0)) for x in gainers[:10]]
     top_loss = [abs(float(x.get("todaysChangePerc") or 0)) for x in losers[:10]]
-    concentration = "narrow" if top_gains and sum(top_gains[:3]) > max(sum(top_gains[3:10]), 1) else "mixed"
-    return {"advancer_proxy_count": len(gainers), "decliner_proxy_count": len(losers), "concentration": concentration, "top_gain_avg": (sum(top_gains[:5]) / min(len(top_gains), 5)) if top_gains else None, "top_loss_avg": (sum(top_loss[:5]) / min(len(top_loss), 5)) if top_loss else None}
+    concentration = "narrow" if top_gains and sum(top_gains[:3]) > max(sum(top_gains[3:10]), 1) else "broad"
+    # Real NYSE/Nasdaq advance/decline from latest completed session
+    import datetime as _dt
+    today_et = datetime.now(ET).date()
+    # Walk backward up to 7 days to find the latest session with grouped data
+    real_breadth = None
+    for _days_back in range(1, 8):
+        _candidate = today_et - _dt.timedelta(days=_days_back)
+        if _candidate.weekday() >= 5:
+            continue
+        real_breadth = _breadth_from_grouped(_candidate)
+        if real_breadth:
+            break
+    result = {
+        "concentration": concentration,
+        "top_gain_avg": (sum(top_gains[:5]) / min(len(top_gains), 5)) if top_gains else None,
+        "top_loss_avg": (sum(top_loss[:5]) / min(len(top_loss), 5)) if top_loss else None,
+        "top_gainers": [{"ticker": x.get("ticker"), "pct": round(float(x.get("todaysChangePerc") or 0), 1)} for x in gainers[:5]],
+        "top_losers": [{"ticker": x.get("ticker"), "pct": round(float(x.get("todaysChangePerc") or 0), 1)} for x in losers[:5]],
+    }
+    if real_breadth:
+        result.update(real_breadth)
+    else:
+        result["advancers"] = len(gainers)
+        result["decliners"] = len(losers)
+    return result
 
 
 def tech_semis_snapshot() -> dict:
@@ -338,13 +713,42 @@ def global_markets_snapshot() -> dict:
 
 
 def scheduled_events_snapshot() -> dict:
-    macro = eodhd_get("/economic-events", {"from": datetime.now(ET).date().isoformat(), "to": datetime.now(ET).date().isoformat(), "limit": 20})
+    import datetime as _dt_mod
+    import dateutil.parser as _dp
+    today_et = datetime.now(ET).date()
+    yesterday_et = today_et - timedelta(days=1)
+    tomorrow_et = today_et + timedelta(days=1)
+    macro = eodhd_get("/economic-events", {
+        "from": yesterday_et.isoformat(),
+        "to": tomorrow_et.isoformat(),
+        "country": "US",
+        "limit": 50,
+    })
     events = []
     if isinstance(macro, list):
-        for item in macro[:12]:
-            name = _clean_text(item.get("event") or item.get("name") or item.get("country") or item)
-            when = item.get("date") or item.get("datetime") or ""
-            events.append(f"{when} {name}".strip())
+        for item in macro:
+            raw_date = item.get("date") or item.get("datetime") or ""
+            try:
+                event_dt_utc = _dp.parse(str(raw_date)).replace(tzinfo=_dt_mod.timezone.utc) if raw_date else None
+                event_dt_et = event_dt_utc.astimezone(ET) if event_dt_utc else None
+                if event_dt_et and event_dt_et.date() != today_et:
+                    continue
+                time_str = event_dt_et.strftime("%-I:%M %p ET") if event_dt_et else ""
+            except Exception:
+                time_str = raw_date[:16] if raw_date else ""
+            name = _clean_text(item.get("type") or item.get("event") or item.get("name") or "")
+            estimate = item.get("estimate")
+            previous = item.get("previous")
+            detail = name
+            if estimate is not None:
+                detail += f" · est {estimate}"
+            if previous is not None:
+                detail += f" · prev {previous}"
+            if time_str:
+                detail = f"{time_str} — {detail}"
+            if detail.strip():
+                events.append(detail.strip())
+        events = events[:10]
     earnings = benzinga_news("earnings before open", limit=8, hours=18)
     fed = benzinga_news("Federal Reserve Fed speaker", limit=6, hours=18)
     return {"economic_events": events, "earnings_before_open": earnings, "fed_speakers": fed}
@@ -364,106 +768,6 @@ def collect_raw_context() -> dict:
     }
     ctx["collection_seconds"] = round(time_mod.perf_counter() - started, 2)
     return ctx
-
-
-def fallback_narrative(ctx: dict) -> str:
-    fut = ctx.get("futures_overview") or {}
-    sp = fut.get("S&P 500 futures", {})
-    nq = fut.get("Nasdaq 100 futures", {})
-    dow = fut.get("Dow futures", {})
-    breadth = ctx.get("breadth") or {}
-    semis = ((ctx.get("technology_and_semiconductors") or {}).get("sox_proxy") or {})
-    ai_news = ((ctx.get("artificial_intelligence") or {}).get("ai_news") or [])[:3]
-    catalyst_news = ((ctx.get("catalysts_and_breaking_news") or {}).get("catalyst_news") or [])[:3]
-    events = ((ctx.get("key_events_today") or {}).get("economic_events") or [])[:4]
-    lines = [
-        f"🧭 ATLAS MACRO PRE-MARKET — {datetime.now(ET).strftime('%b %-d, %Y · %I:%M %p ET')}",
-        "",
-        f"Futures point to a {_fmt_pct(sp.get('pct'))} S&P 500 tone, with Nasdaq 100 {_fmt_pct(nq.get('pct'))} and Dow {_fmt_pct(dow.get('pct'))}. The read-through is directional rather than trade-specific: risk appetite is being set by index-level moves, not by an Atlas entry signal.",
-        "",
-        f"Breadth is {breadth.get('concentration', 'mixed')} on the pre-market proxy, with {breadth.get('advancer_proxy_count', 0)} advancer snapshots and {breadth.get('decliner_proxy_count', 0)} decliner snapshots visible. That suggests the open needs confirmation from participation rather than just leadership concentration.",
-        "",
-        f"Technology and semiconductors are using the SOX proxy at {_fmt_pct(semis.get('pct'))}. Overnight semiconductor and equipment commentary is: {('; '.join((ctx.get('technology_and_semiconductors') or {}).get('analyst_and_equipment_news') or [])[:500]) or 'quiet in the current feed'}.",
-        "",
-        f"Artificial-intelligence tape risk is driven by {('; '.join(ai_news)) or 'a quiet overnight tape with no major model-launch, capex, regulatory, or deal announcement'}. The macro relevance is whether AI capex leadership can keep supporting growth multiples.",
-        "",
-        f"Catalysts and breaking news to watch include {('; '.join(catalyst_news)) or 'no major export-control, options-expiry, earnings, or macro shock headline returned yet'}.",
-        "",
-        f"Global markets are mixed across the available instruments, with FX, oil, and duration signals requiring confirmation from the cash session. Scheduled focus today: {('; '.join(events)) or 'a light macro calendar with no major economic shock listed'}.",
-        "",
-        "The tone: start neutral-to-cautious until breadth and rates confirm the index move after the cash open.",
-    ]
-    return "\n".join(lines)
-
-
-def llm_narrative(ctx: dict) -> str | None:
-    if not OPENAI_API_KEY:
-        return None
-    prompt = (
-        "Write the Atlas macro pre-market brief in Bloomberg Markets Wrap style: direct, specific, professional. "
-        "Use plain text only: no markdown bold, no bullets, no tables. Output exactly 8 numbered section headings using this exact heading format: '1. Futures Overview', '2. NYSE/Nasdaq Breadth', through '8. Key Events Today'. "
-        "Use actual market numbers where available, but do not force internal counts into prose. "
-        "Each section must contain 2-3 tight sentences maximum. Do not combine multiple section headings in one paragraph. "
-        "State cause and effect explicitly, linking index moves, rates, oil, breadth, semiconductors, AI, and catalysts when the data supports it. "
-        "Never mention row counts, returned rows, data sources, API fields, JSON keys, internal variable names, proxies, or the phrase '08:45 ET setup'. "
-        "If a section has 0 results or weak/no headline data, write a brief neutral market sentence instead of reporting absence; e.g. 'The AI sector was quiet overnight with no major deal announcements.' "
-        "Banned phrases: '0 fresh AI M&A rows were returned', 'economic events are scheduled', 'for the 08:45 ET setup', 'returned rows', 'data source', 'proxy counts', 'contributing to overall market uncertainty', 'remains a focal point', 'heightened level of activity', 'mixed signals', 'investors are closely monitoring', 'challenges and opportunities', 'potential volatility'. "
-        "Required order and content: "
-        "1. Futures Overview: S&P 500, Nasdaq 100, Dow futures with direction, percent, and level. "
-        "2. NYSE/Nasdaq Breadth: compare advancers versus decliners, state whether participation is broad or narrow, and say whether Nasdaq strength/weakness appears concentrated in a few large names or spread across the index. "
-        "3. Technology & Semiconductors: SOX performance plus analyst/equipment-maker theme as prose, not a count. "
-        "4. Artificial Intelligence: model releases, capex, regulation, and M&A themes; if quiet, say the sector was quiet overnight. "
-        "5. Catalysts & Breaking News: export controls, earnings before open, options expiry, and macro events in narrative form. "
-        "6. Global Markets: Asia, Europe, DXY/FX, oil, and 10Y yield with actual numbers. "
-        "7. The Tone: exactly one sentence with directional bias. "
-        "8. Key Events Today: scheduled data, Fed speakers, and earnings in calendar prose, not event-count language. "
-        "Do NOT mention individual stock tickers or individual company names. Do NOT recommend buying or selling. Raw data follows as JSON:\n"
-        + json.dumps(ctx, default=str)[:12000]
-    )
-    try:
-        r = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": os.environ.get("ATLAS_MACRO_LLM_MODEL", "gpt-4o"),
-                "messages": [
-                    {"role": "system", "content": (
-                        "You are a strict Bloomberg Markets Wrap editor. The brief must read like polished market prose, not a data extraction summary. Keep the 8 numbered headings exactly as requested. "
-                        "Use these few-shot examples as style only, not factual data. Futures style: 'S&P 500 futures slipped 0.36% to 5,728 as Nasdaq futures led the decline, falling 1.47% to 19,706 on continued pressure in semiconductor names. Dow futures were relatively resilient, off just 0.28%, reflecting the growth-vs-value divergence that has defined this week's tape.' "
-                        "Breadth style: 'NYSE and Nasdaq breadth was evenly split at 21 advancers and 21 decliners, so the tape was narrow rather than broadly risk-on. With Nasdaq futures down 1.47%, weakness looked concentrated in growth leadership instead of a full-market liquidation.' "
-                        "Semis style: 'Technology looked heavy before the bell as the SOX index lost 1.2%, with equipment makers under pressure after fresh analyst caution on capex timing. The weakness matters because chip leadership has carried much of the index advance this month.' "
-                        "AI style: 'The AI tape was quiet overnight, with no major model launch or deal announcement to reset expectations. That leaves the group trading off rates, capex discipline and semiconductor momentum rather than a fresh headline catalyst.' "
-                        "Catalysts style: 'Export-control headlines kept pressure on global chip supply chains, while pre-open earnings gave traders a second read on margin resilience. Options expiry can amplify index moves if futures weakness persists into the cash open.' "
-                        "Events style: 'The calendar centers on US data at [TIME] ET, followed by Fed commentary that will be judged against the 10-year yield near 4.37%. Pre-open earnings should matter most where guidance changes the read-through for margins and demand.' "
-                        "Section 8 must always finish with a complete sentence ending in a period; never stop mid-sentence. "
-                        "Never use internal language such as rows, returned, JSON, API, source, field, variable, proxy counts, setup, or economic events are scheduled. Never name individual companies or tickers."
-                    )},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.1,
-                "max_tokens": 1800,
-            },
-            timeout=20,
-        )
-        if r.status_code != 200:
-            print(f"[macro_premarket] LLM HTTP {r.status_code}: {r.text[:200]}")
-            return None
-        text = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
-        cleaned = _scrub_internal_language(_strip_tickers(text)) if text else None
-        return _ensure_complete_report(cleaned, ctx) if cleaned else None
-    except Exception as exc:
-        print(f"[macro_premarket] LLM failed: {exc}")
-        return None
-
-
-def build_report(use_llm: bool = True) -> tuple[str, dict]:
-    ctx = collect_raw_context()
-    narrative = llm_narrative(ctx) if use_llm else None
-    if not narrative:
-        narrative = fallback_narrative(ctx)
-    if not narrative.startswith("🧭"):
-        narrative = f"🧭 ATLAS MACRO PRE-MARKET — {datetime.now(ET).strftime('%b %-d, %Y · %I:%M %p ET')}\n\n{narrative}"
-    return narrative, ctx
 
 
 def _launchd_gate_open(now_et: datetime | None = None) -> bool:
@@ -486,7 +790,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Atlas macro pre-market brief")
     parser.add_argument("--dry-run", action="store_true", help="Print report without Telegram send")
     parser.add_argument("--force", action="store_true", help="Bypass 08:45 ET launchd gate")
-    parser.add_argument("--no-llm", action="store_true", help="Use deterministic fallback narrative")
+    parser.add_argument("--no-llm", action="store_true", help="Use deterministic narrative (default path)")
     args = parser.parse_args(argv)
 
     today_et = datetime.now(ET).date()
