@@ -1,6 +1,6 @@
 import os, sys, re, json, requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from atlas_notify import send_telegram as _send_telegram
+from atlas_notify import send_telegram as _send_telegram, _admin_chat_id as _owner_chat_id
 from datetime import datetime, timedelta, date, time, timezone
 from zoneinfo import ZoneInfo
 SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
@@ -127,6 +127,8 @@ def _env_int(name):
 
 
 def _reports_group_chat_id():
+    # Retained for reference only; P0I-2 consolidates pre-market sends to Atlas DM.
+    # Not used by send_telegram() below.
     return os.environ.get("ATLAS_REPORTS_GROUP_CHAT_ID")
 
 
@@ -134,8 +136,8 @@ def send_telegram(message):
     return _send_telegram(
         message,
         label="pre_market",
-        chat_id=_reports_group_chat_id(),
-        message_thread_id=_env_int("ATLAS_TOPIC_PREMARKET_THREAD_ID"),
+        chat_id=_owner_chat_id(),
+        message_thread_id=None,
     )
 
 def massive_get(path, params=None):

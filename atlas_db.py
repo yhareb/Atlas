@@ -74,7 +74,309 @@ def _fetch_trade_rows(ids):
 
 
 def get_connection():
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON;")
+    return conn
+
+
+# --------------------------------------------------------------------------- #
+# P0L-9 STAGING-ONLY additive dual-write bookkeeping layer.
+#
+# Legacy tables (trades, cash_ledger, account) remain the SOLE system of
+# record. Every function below fires strictly AFTER the corresponding legacy
+# write has already committed successfully. A failure anywhere in this layer
+# is caught, logged, and swallowed -- it can NEVER raise into the legacy
+# write path and can NEVER roll back a legacy commit. This is telemetry, not
+# an authority.
+#
+# All money uses Decimal(str(x)) exclusively (never Decimal(x) on a float,
+# never float arithmetic) before conversion to integer cents/micros/scaled
+# quantity, per the P0L-3 precision design.
+# --------------------------------------------------------------------------- #
+from decimal import Decimal, ROUND_HALF_UP as _ROUND_HALF_UP
+
+_BK_QUANTITY_SCALE = 100_000_000  # 10^8
+_BK_PRICE_SCALE = 1_000_000       # 10^6
+
+
+def _bk_to_cents(x):
+    d = Decimal(str(x))
+    return int((d * 100).to_integral_value(rounding=_ROUND_HALF_UP))
+
+
+def _bk_to_quantity_scaled(x):
+    d = Decimal(str(x))
+    return int((d * _BK_QUANTITY_SCALE).to_integral_value(rounding=_ROUND_HALF_UP)), str(d)
+
+
+def _bk_to_price_micros(x):
+    d = Decimal(str(x))
+    return int((d * _BK_PRICE_SCALE).to_integral_value(rounding=_ROUND_HALF_UP)), str(d)
+
+
+def _bk_emit_event(cursor, event_type, ticker=None, lot_id=None, occurred_at=None,
+                    effective_at=None, payload=None, source="dual_write",
+                    prof_approved=0, idempotency_key=None, legacy_trades_id=None,
+                    legacy_cash_ledger_id=None, supersedes_id=None,
+                    linked_reversal_id=None, evidence_id=None):
+    """Insert a portfolio_event_journal row. Idempotent: if idempotency_key
+    already exists, returns the existing event's id instead of raising."""
+    occurred_at = occurred_at or _now()
+    effective_at = effective_at or occurred_at
+    try:
+        cursor.execute(
+            """INSERT INTO portfolio_event_journal
+               (event_type, ticker, lot_id, occurred_at, effective_at,
+                payload_json, source, evidence_id, prof_approved,
+                idempotency_key, legacy_trades_id, legacy_cash_ledger_id,
+                supersedes_id, linked_reversal_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (event_type, ticker, lot_id, occurred_at, effective_at,
+             json.dumps(payload or {}), source, evidence_id, prof_approved,
+             idempotency_key, legacy_trades_id, legacy_cash_ledger_id,
+             supersedes_id, linked_reversal_id),
+        )
+        return cursor.lastrowid, False
+    except sqlite3.IntegrityError:
+        # idempotency_key UNIQUE collision -- duplicate retry, not an error.
+        row = cursor.execute(
+            "SELECT id FROM portfolio_event_journal WHERE idempotency_key=?",
+            (idempotency_key,),
+        ).fetchone()
+        if row:
+            cursor.execute(
+                """INSERT INTO portfolio_event_journal
+                   (event_type, occurred_at, effective_at, payload_json, source, idempotency_key)
+                   VALUES (?,?,?,?,?,NULL)""",
+                ("IDEMPOTENT_DUPLICATE_REJECTED", _now(), _now(),
+                 json.dumps({"original_event_id": row[0], "rejected_key": idempotency_key}),
+                 "dual_write_idempotency_guard"),
+            )
+            return row[0], True
+        raise
+
+
+def _bk_emit_posting(cursor, event_id, account, posting_kind, amount_cents,
+                      reason=None, legacy_cash_ledger_id=None):
+    cursor.execute(
+        """INSERT INTO ledger_postings
+           (event_id, account, posting_kind, amount_cents, reason, legacy_cash_ledger_id)
+           VALUES (?,?,?,?,?,?)""",
+        (event_id, account, posting_kind, amount_cents, reason, legacy_cash_ledger_id),
+    )
+
+
+def _bk_emit_invariant(cursor, name, mode, subject_type, subject_id, passed, detail):
+    cursor.execute(
+        """INSERT INTO invariant_checks
+           (invariant_name, mode, subject_type, subject_id, passed, detail)
+           VALUES (?,?,?,?,?,?)""",
+        (name, mode, subject_type, subject_id, 1 if passed else 0, detail),
+    )
+
+
+def _bk_safe(fn, *args, **kwargs):
+    """Run a dual-write function in its OWN connection/transaction. Any
+    failure is caught and logged; it never propagates and never touches the
+    already-committed legacy write."""
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        fn(cur, *args, **kwargs)
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:  # noqa: BLE001 -- bookkeeping must never break trading
+        try:
+            conn.rollback()
+            conn.close()
+        except Exception:
+            pass
+        print(f"[dual_write] non-fatal bookkeeping failure in {fn.__name__}: {e}")
+        return False
+
+
+def _dualwrite_buy_fill(cur, trade_id, ticker, quantity, entry_price,
+                         cash_amount_signed, cash_ledger_id, broker_ref=None,
+                         stop_loss=None, target_price=None):
+    """event_type=BROKER_BUY_FILLED, 2-leg posting: CASH / POSITION:<TICKER>."""
+    idem_key = f"live_trade_{trade_id}_buy"
+    buy_cents = abs(_bk_to_cents(cash_amount_signed))
+    ev_id, is_dup = _bk_emit_event(
+        cur, "BROKER_BUY_FILLED", ticker=ticker,
+        occurred_at=_now(), payload={"trade_id": trade_id, "quantity": str(quantity),
+                                       "entry_price": str(entry_price), "broker_ref": broker_ref},
+        source="dual_write_confirm_trade_fill", idempotency_key=idem_key,
+        legacy_trades_id=trade_id, legacy_cash_ledger_id=cash_ledger_id,
+    )
+    if is_dup:
+        return ev_id
+    _bk_emit_posting(cur, ev_id, "CASH", "PRINCIPAL", -buy_cents,
+                      f"Broker buy fill trade {trade_id}", legacy_cash_ledger_id=cash_ledger_id)
+    _bk_emit_posting(cur, ev_id, f"POSITION:{ticker}", "PRINCIPAL", buy_cents,
+                      f"Broker buy fill trade {trade_id}", legacy_cash_ledger_id=cash_ledger_id)
+    qty_scaled, qty_text = _bk_to_quantity_scaled(quantity)
+    price_micros, price_text = _bk_to_price_micros(entry_price)
+    stop_micros, stop_text = (_bk_to_price_micros(stop_loss) if stop_loss is not None else (None, None))
+    target_micros, target_text = (_bk_to_price_micros(target_price) if target_price is not None else (None, None))
+    cur.execute(
+        """INSERT INTO position_lots
+           (ticker, status, quantity_text, quantity_scaled, quantity_scale,
+            quantity_source, entry_price_micros, entry_price_decimal_text,
+            entry_event_id, stop_loss_micros, stop_loss_decimal_text,
+            target_price_micros, target_price_decimal_text,
+            cost_basis_cents, cost_basis_source, legacy_trades_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (ticker, "OPEN", qty_text, qty_scaled, _BK_QUANTITY_SCALE,
+         "broker_fill", price_micros, price_text,
+         ev_id, stop_micros, stop_text,
+         target_micros, target_text,
+         buy_cents, "broker_amount", trade_id),
+    )
+    return ev_id
+
+
+def _dualwrite_sell_fill(cur, trade_id, ticker, quantity, exit_price,
+                          cash_amount, cash_ledger_id, buy_cost_basis_cents,
+                          broker_ref=None):
+    """event_type=BROKER_SELL_FILLED, 3-leg posting: CASH / POSITION / REALIZED_PNL."""
+    idem_key = f"live_trade_{trade_id}_sell"
+    sell_cents = _bk_to_cents(cash_amount)
+    ev_id, is_dup = _bk_emit_event(
+        cur, "BROKER_SELL_FILLED", ticker=ticker,
+        occurred_at=_now(), payload={"trade_id": trade_id, "quantity": str(quantity),
+                                       "exit_price": str(exit_price), "broker_ref": broker_ref},
+        source="dual_write_close_trade_broker_confirmed", idempotency_key=idem_key,
+        legacy_trades_id=trade_id, legacy_cash_ledger_id=cash_ledger_id,
+    )
+    if is_dup:
+        return ev_id
+    realized_cents = sell_cents - buy_cost_basis_cents
+    _bk_emit_posting(cur, ev_id, "CASH", "PRINCIPAL", sell_cents,
+                      f"Broker sell fill trade {trade_id}", legacy_cash_ledger_id=cash_ledger_id)
+    _bk_emit_posting(cur, ev_id, f"POSITION:{ticker}", "PRINCIPAL", -buy_cost_basis_cents,
+                      f"Broker sell fill trade {trade_id}", legacy_cash_ledger_id=cash_ledger_id)
+    _bk_emit_posting(cur, ev_id, "REALIZED_PNL", "REALIZED_PNL", -realized_cents,
+                      f"Realized P/L offset trade {trade_id}", legacy_cash_ledger_id=cash_ledger_id)
+    exit_micros, exit_text = _bk_to_price_micros(exit_price)
+    cur.execute(
+        """UPDATE position_lots SET exit_price_micros=?, exit_price_decimal_text=?,
+               exit_event_id=?, status='CLOSED', realized_pnl_cents=?, last_rebuilt_at=?
+           WHERE legacy_trades_id=?""",
+        (exit_micros, exit_text, ev_id, realized_cents, _now(), trade_id),
+    )
+    balance = cur.execute(
+        "SELECT SUM(amount_cents) FROM ledger_postings WHERE event_id=?", (ev_id,)
+    ).fetchone()[0]
+    _bk_emit_invariant(cur, "ledger_postings_balance_zero", "WARN", "event", ev_id,
+                        balance == 0, f"event {ev_id} postings sum to {balance} cents")
+    return ev_id
+
+
+def record_manual_cash_correction(amount, reason, prof_approved=1):
+    """Legacy-first manual correction helper: writes cash_ledger via the
+    existing _append_cash_ledger() path, commits, THEN (non-fatally) emits
+    the MANUAL_CORRECTION dual-write event + balanced MANUAL_ADJUSTMENT
+    postings. Mirrors the ad hoc P0K-2/P0K-3 pattern as a reusable function."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    balance_after = _append_cash_ledger(cursor, amount, reason)
+    conn.commit()
+    cash_ledger_id = cursor.execute(
+        "SELECT id FROM cash_ledger ORDER BY id DESC LIMIT 1"
+    ).fetchone()[0]
+    conn.close()
+
+    def _emit(cur):
+        idem_key = f"live_cash_{cash_ledger_id}_manual_adjustment"
+        amt_cents = _bk_to_cents(amount)
+        ev_id, is_dup = _bk_emit_event(
+            cur, "MANUAL_CORRECTION", occurred_at=_now(),
+            payload={"reason": reason, "cash_ledger_id": cash_ledger_id},
+            source="dual_write_record_manual_cash_correction",
+            prof_approved=1 if prof_approved else 0,
+            idempotency_key=idem_key, legacy_cash_ledger_id=cash_ledger_id,
+        )
+        if is_dup:
+            return
+        _bk_emit_posting(cur, ev_id, "CASH", "MANUAL_ADJUSTMENT", amt_cents,
+                          reason, legacy_cash_ledger_id=cash_ledger_id)
+        _bk_emit_posting(cur, ev_id, "SUSPENSE:MANUAL_ADJUSTMENT", "MANUAL_ADJUSTMENT", -amt_cents,
+                          "Manual adjustment offset", legacy_cash_ledger_id=cash_ledger_id)
+
+    _bk_safe(_emit)
+    return balance_after
+
+
+def _dualwrite_valuation_mark(cur, ticker, price, price_source=None, is_fallback=None, legacy_trades_id=None):
+    """Insert a valuation_marks row with EXPLICIT, conservative provenance.
+
+    P0L-10 hardening: missing/unknown provenance must NEVER be silently
+    treated as a live price. If the caller does not supply price_source,
+    this function records 'stale_cache' (not 'live_provider') and forces
+    is_fallback=1. If the caller supplies a price_source but omits
+    is_fallback, is_fallback is derived from price_source itself
+    (live_provider -> 0, anything else -> 1) rather than defaulting to 0.
+    A caller-supplied price_source is always preserved verbatim.
+
+    P0L-18 hardening: defensive lot-attribution guard. A valuation mark may
+    ONLY attach to a position_lots row that (a) matches legacy_trades_id,
+    (b) matches the given ticker (case-insensitive), AND (c) has
+    status='OPEN'. This closes the P0L-17 bug where a caller-supplied
+    legacy_trades_id that did not actually correspond to the intended
+    ticker's currently-open lot (e.g. a stale/loop-index id that happened
+    to collide with an unrelated CLOSED lot from a different ticker) could
+    silently attach a live price mark to the wrong, already-closed position.
+    If no lot satisfies all three conditions, the insert is skipped and a
+    WARN invariant is logged instead -- never a best-effort/partial match.
+    """
+    if price_source is None:
+        price_source = "stale_cache"
+        is_fallback = 1
+        provenance_missing = True
+    else:
+        provenance_missing = False
+        if is_fallback is None:
+            is_fallback = 0 if price_source == "live_provider" else 1
+    is_fallback = 1 if is_fallback else 0
+
+    price_micros, price_text = _bk_to_price_micros(price)
+    ticker_norm = (ticker or "").upper().strip()
+    lot_row = cur.execute(
+        """SELECT id FROM position_lots
+           WHERE legacy_trades_id=? AND UPPER(ticker)=? AND status='OPEN'
+           ORDER BY id DESC LIMIT 1""",
+        (legacy_trades_id, ticker_norm),
+    ).fetchone()
+    if lot_row is None:
+        # P0L-18: no lot satisfies legacy_trades_id + ticker + status='OPEN'
+        # together -- do NOT fall back to a legacy_trades_id-only or
+        # ticker-only match, since either alone is exactly the class of
+        # mismatch that caused the P0L-17 bug. Skip and log WARN instead.
+        _bk_emit_invariant(
+            cur, "valuation_mark_lot_mismatch", "WARN", "event", legacy_trades_id or 0, False,
+            "No OPEN position_lots row found matching legacy_trades_id=%s AND ticker=%s "
+            "-- valuation mark for price=%s skipped rather than risk attaching to an "
+            "unrelated or closed lot (P0L-18 defensive guard)." % (legacy_trades_id, ticker_norm, price_text),
+        )
+        return None
+    lot_id = lot_row[0]
+    cur.execute(
+        """INSERT INTO valuation_marks
+           (lot_id, price_micros, price_decimal_text, price_source, is_fallback, marked_at)
+           VALUES (?,?,?,?,?,?)""",
+        (lot_id, price_micros, price_text, price_source, is_fallback, _now()),
+    )
+    mark_id = cur.lastrowid
+    if is_fallback:
+        detail = (
+            f"valuation_mark id={mark_id} lot_id={lot_id} ticker={ticker_norm} used non-live "
+            f"price_source='{price_source}'"
+            + (" (provenance was MISSING from caller -- defaulted conservatively, never live_provider)"
+               if provenance_missing else "")
+        )
+        _bk_emit_invariant(cur, "fallback_price_used", "WARN", "lot", lot_id, False, detail)
+    return mark_id
 
 
 # --------------------------------------------------------------------------- #
@@ -417,7 +719,14 @@ def confirm_trade_fill(trade_id, broker_qty, broker_price, broker_fees, broker_r
     debit = -(broker_qty * broker_price + broker_fees)
     _append_cash_ledger(cursor, debit, f"Broker fill {ticker} {broker_ref}: {broker_qty} sh @ {broker_price} plus fees {broker_fees}")
     conn.commit()
+    _bk_cash_ledger_id = cursor.execute("SELECT id FROM cash_ledger ORDER BY id DESC LIMIT 1").fetchone()[0]
     conn.close()
+
+    # P0L-9 STAGING dual-write: fires only after the legacy commit above.
+    # Never fatal -- failures here cannot undo or block the legacy write.
+    _bk_safe(_dualwrite_buy_fill, trade_id, ticker, broker_qty, broker_price,
+             debit, _bk_cash_ledger_id, broker_ref=broker_ref,
+             stop_loss=stop_loss, target_price=target_price)
     _audit_db_event("trades", "UPDATE", trade_id, ticker, "confirm_trade_fill")
     _safe_push("push_trades", _fetch_trade_rows([trade_id]))
     return _fetch_trade_rows([trade_id])[0]
@@ -612,9 +921,16 @@ def close_trade_broker_confirmed(ticker, trade_id, exit_price, quantity, fees, b
     credit = (exit_price * quantity) - fees
     _append_cash_ledger(cursor, credit, f"Broker sell {ticker} {broker_ref or ''}: {quantity} sh @ {exit_price} net credit {round(credit, 2)} fees {fees}".strip())
     conn.commit()
+    _bk_cash_ledger_id = cursor.execute("SELECT id FROM cash_ledger ORDER BY id DESC LIMIT 1").fetchone()[0]
     conn.close()
     _audit_db_event("trades", "UPDATE", trade_id, ticker, "close_trade_broker_confirmed")
     _safe_push("push_trades", _fetch_trade_rows([trade_id]))
+
+    # P0L-9 STAGING dual-write: fires only after the legacy commit above.
+    # Never fatal -- failures here cannot undo or block the legacy write.
+    _bk_buy_cost_basis_cents = _bk_to_cents(entry_price * quantity + entry_fees)
+    _bk_safe(_dualwrite_sell_fill, trade_id, ticker, quantity, exit_price,
+             credit, _bk_cash_ledger_id, _bk_buy_cost_basis_cents, broker_ref=broker_ref)
     return _fetch_trade_rows([trade_id])[0]
 
 

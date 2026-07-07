@@ -26,7 +26,7 @@ for _path in (SCRIPTS_DIR, "/Users/yasser/scripts"):
 import atlas_db  # noqa: E402
 from atlas_symbol_meta import ticker_label  # noqa: E402
 from atlas_report_blocks import holding_block  # noqa: E402
-from atlas_notify import send_telegram  # noqa: E402
+from atlas_notify import send_telegram, _admin_chat_id as _owner_chat_id  # noqa: E402
 
 if os.environ.get("ATLAS_DB"):
     atlas_db.DB_PATH = os.environ["ATLAS_DB"]
@@ -220,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
         print("[eod_positions] dry-run: telegram suppressed")
         print("[eod_positions] telegram report success=True")
         return 0
-    sent = send_telegram(report, label="atlas", parse_mode="", print_fallback=True)
+    sent = send_telegram(report, label="atlas", parse_mode="", print_fallback=True, chat_id=_owner_chat_id(), message_thread_id=None)
     print(f"[eod_positions] telegram report success={sent}")
     return 0 if sent else 1
 

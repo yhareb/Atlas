@@ -24,6 +24,12 @@ try:
 except Exception:
     atlas_rag = None
 try:
+    from atlas_perme_engine_packet import load_valid_packets as _load_engine_packets, render_report_annotations as _render_engine_packet_annotations
+except Exception:
+    _load_engine_packets = None
+    _render_engine_packet_annotations = None
+
+try:
     from atlas_rag_flags import annotation_for_ticker, normalize_flags
 except Exception:
     annotation_for_ticker = None
@@ -635,6 +641,16 @@ def _perme_header_line(flags):
     return "⚠️ Perme context: " + " · ".join(dict.fromkeys(labels))
 
 
+
+def _perme_engine_packet_lines(summary):
+    if _load_engine_packets is None or _render_engine_packet_annotations is None:
+        return []
+    path = os.environ.get("ATLAS_PERME_ENGINE_PACKET_PATH") or "/Users/yasser/atlas_inbox/perme_engine_packet_v1.jsonl"
+    packets, errors = _load_engine_packets(path)
+    if errors:
+        print(f"[intraday] Perme engine packet rejected={len(errors)} accepted={len(packets)}")
+    return _render_engine_packet_annotations(packets, summary or {})
+
 def _perme_report_context_lines(summary):
     context = (summary or {}).get("perme_report_context") or {}
     if not context.get("stale"):
@@ -826,8 +842,33 @@ def _open_trades(summary=None):
         rows = atlas_db.get_open_positions()
     except Exception:
         rows = atlas_db.get_trades(status="OPEN")
+
+    # P0L-18 STAGING fix: get_open_positions() does NOT return the real
+    # trades.id column (only ticker/quantity/entry_price/... for backward
+    # compatibility with the /positions command). Previously this function
+    # fell back to the enumerate() loop index as trade_id, which is NOT a
+    # persistent identifier and silently mismatched dual-write bookkeeping
+    # lookups (P0L-17 finding: valuation_marks attached to unrelated closed
+    # lots). Resolve the REAL trades.id per ticker via get_trades(status='OPEN')
+    # -- which does return a genuine id column -- and use that as the
+    # authoritative trade_id. Never fall back to loop index for trade_id;
+    # if a ticker's real id genuinely cannot be resolved (should not happen
+    # for a currently-OPEN position), use sentinel -1 so the downstream
+    # dual-write defensive guard (ticker+status match required) cleanly
+    # rejects it instead of ever matching an unrelated lot.
+    real_id_by_ticker = {}
+    try:
+        for t in (atlas_db.get_trades(status="OPEN") or []):
+            t = dict(t) if not isinstance(t, dict) else t
+            tk = _row_ticker(t)
+            tid = t.get("id")
+            if tk and tid is not None and tk not in real_id_by_ticker:
+                real_id_by_ticker[tk] = int(tid)
+    except Exception as e:
+        print(f"[intraday] real trade-id resolution for dual-write skipped (non-fatal): {e}")
+
     trades = []
-    for idx, row in enumerate(rows or [], 1):
+    for row in (rows or []):
         row = dict(row or {})
         t = _row_ticker(row)
         if not t:
@@ -838,9 +879,15 @@ def _open_trades(summary=None):
         stop = row.get("stop_loss") or hold.get("stop") or hold.get("stop_loss") or entry
         target = row.get("target_price") or hold.get("target") or hold.get("target_price") or entry
         shares = row.get("quantity") or row.get("shares") or hold.get("qty") or hold.get("shares") or 0
+        # P0L-18: real trades.id only -- row's own id/trade_id if present,
+        # else the resolved ticker->id map, else sentinel -1. NEVER the loop
+        # index. -1 is intentionally an invalid trades.id (all real ids are
+        # positive AUTOINCREMENT values) so the guard in
+        # _dualwrite_valuation_mark() cannot accidentally match a real lot.
+        resolved_trade_id = row.get("id") or row.get("trade_id") or real_id_by_ticker.get(t) or -1
         try:
             trades.append(AtlasTrade(
-                trade_id=int(row.get("id") or row.get("trade_id") or idx),
+                trade_id=int(resolved_trade_id),
                 ticker=t,
                 broker=str(row.get("broker") or "eToro"),
                 entry_price=float(entry),
@@ -1315,13 +1362,124 @@ def _actions_lines(buys, sells, summary=None, before_scan_signal_id=None, high=N
             ]
     else:
         lines.append("none")
-        lines.append("   No 4/4 candidates; BUY Small blocked by WAITING/open-position/weak RVOL.")
         lines.append("")
     return lines
 
 
+_ALERT_CATALYST_TERMS = (
+    "earnings", "guidance", "downgrade", "upgrade", "merger", "acquisition", "lawsuit", "recall",
+    "fda", "investigation", "resignation", "restatement", "profit warning", "outage", "breach",
+    "strike", "layoff", "spinoff", "activist", "antitrust", "halt", "delisting", "fraud", "sec probe",
+)
+
+
+def _alert_reason_text(row):
+    return str((row or {}).get("reason") or "")
+
+
+def _alert_is_stop_proximity(row):
+    """True when the alert reason explicitly reports proximity to the stop level."""
+    text = _alert_reason_text(row).lower()
+    return "within" in text and "of stop" in text
+
+
+def _alert_has_ticker_catalyst(row):
+    """True when the alert reason contains a ticker/sector-specific catalyst keyword.
+
+    Purely a text classification over the already-computed `reason` string; does not
+    call any provider, does not change scoring/strategy, and does not read protected files.
+    """
+    text = _alert_reason_text(row).lower()
+    return any(term in text for term in _ALERT_CATALYST_TERMS)
+
+
+def _alert_is_generic_macro(row):
+    """True when the alert is only generic macro-caution boilerplate (FOMC/CPI/NFP + weak RVOL/RSI)."""
+    text = _alert_reason_text(row).lower()
+    if not text.startswith("macro stress:"):
+        return False
+    if _alert_has_ticker_catalyst(row):
+        return False
+    return True
+
+
+def _alert_perme_high_match(row, summary):
+    """True when a Perme engine packet with severity HIGH names this ticker (annotation-only lookup)."""
+    ticker = _row_ticker(row)
+    if not ticker or _load_engine_packets is None:
+        return False
+    path = os.environ.get("ATLAS_PERME_ENGINE_PACKET_PATH") or "/Users/yasser/atlas_inbox/perme_engine_packet_v1.jsonl"
+    try:
+        packets, _errors = _load_engine_packets(path)
+    except Exception:
+        return False
+    for p in packets or []:
+        if str((p or {}).get("severity") or "").upper() != "HIGH":
+            continue
+        packet_tickers = {str(t).upper() for t in ((p or {}).get("tickers") or [])}
+        if ticker in packet_tickers:
+            return True
+    return False
+
+
+def classify_alert_severity(row, summary=None):
+    """Classify an exit_results row into a notification-severity bucket.
+
+    Presentation/notification routing only — does not alter `action`, `reason`,
+    `recommendation`, stops, targets, or any value produced by atlas_portfolio.run_exits().
+    Priority order: SELL > stop-proximity POSITION_RISK > Perme-HIGH REVIEW_NOW >
+    ticker-catalyst REVIEW_NOW > generic-macro MACRO_WATCH > POSITION_RISK (safe default).
+    """
+    action = str((row or {}).get("action") or "").upper()
+    if action == "SELL":
+        return "SELL_ALERT"
+    if action != "ALERT":
+        return None
+    if _alert_is_stop_proximity(row):
+        return "POSITION_RISK"
+    if _alert_perme_high_match(row, summary):
+        return "REVIEW_NOW"
+    if _alert_has_ticker_catalyst(row):
+        return "REVIEW_NOW"
+    if _alert_is_generic_macro(row):
+        return "MACRO_WATCH"
+    return "POSITION_RISK"
+
+
+def _alert_card_lines(a):
+    ticker = _row_ticker(a) or "?"
+    label = _ticker_label(ticker, a)
+    last = _num(a.get("last") or a.get("current_price") or a.get("price"))
+    stop = _num(a.get("stop") or a.get("stop_loss"))
+    gap = last - stop  # positive = above stop, negative = below stop
+    gap_str = f"{'+' if gap >= 0 else '−'}${abs(gap):,.2f}"
+    # Build short macro label from clean reason (already stripped by portfolio patch)
+    raw_reason = str(a.get("reason") or "")
+    # reason is now e.g. "MACRO STRESS: RISK_OFF; NFP; RSI 44 weak"
+    # Extract the factors after "MACRO STRESS: " as a compact label
+    macro_label = re.sub(r"^MACRO STRESS:\s*", "", raw_reason, flags=re.I).strip()
+    # Replace semicolons with · for compact display, cap at 60 chars
+    macro_label = re.sub(r"\s*;\s*", " · ", macro_label)
+    if len(macro_label) > 60:
+        macro_label = macro_label[:60].rstrip(" ·")
+    if not macro_label:
+        macro_label = "macro stress"
+    recommendation = a.get("recommendation") or "HOLD"
+    # Strip icon prefix if recommendation already contains one (e.g. "🔴 SELL NOW — ...")
+    rec_clean = re.sub(r"^[^\w]+", "", recommendation).strip()
+    rec_clean = re.split(r"\s*[—–-]\s*", rec_clean)[0].strip()
+    rec_icon = {"SELL NOW": "🔴", "TIGHTEN STOP": "🟡", "HOLD": "🟢"}.get(rec_clean, "⚠️")
+    return [
+        f"⚠️  {label}",
+        f"   📍 {_price(last)} → stop {_price(stop)} ({gap_str})",
+        f"   🌐 {macro_label}",
+        f"   {rec_icon} {rec_clean}",
+        "",
+    ]
+
+
 def _position_risk_alert_lines(summary):
-    """Render the ━━━ ⚠️ POSITION RISK ALERTS ━━━ section for ALERT-action exit results.
+    """Render the ━━━ ⚠️ POSITION RISK ALERTS ━━━ section for stop-proximity ALERT rows only.
 
     Compact 4-line card:
       ⚠️  TICKER (Company Name)
@@ -1329,40 +1487,44 @@ def _position_risk_alert_lines(summary):
          🌐 RISK_OFF · NFP
          🟡 TIGHTEN STOP
     """
-    alerts = [r for r in (summary.get("exit_results") or []) if str(r.get("action") or "").upper() == "ALERT"]
+    alerts = [r for r in (summary.get("exit_results") or []) if classify_alert_severity(r, summary) == "POSITION_RISK"]
     if not alerts:
         return []
     lines = ["", "━━━ ⚠️ POSITION RISK ALERTS ━━━", ""]
     for a in alerts:
+        lines += _alert_card_lines(a)
+    return lines
+
+
+def _review_now_lines(summary):
+    """Render the ━━━ 🔎 REVIEW NOW ━━━ section for Perme-HIGH or ticker-catalyst ALERT rows."""
+    alerts = [r for r in (summary.get("exit_results") or []) if classify_alert_severity(r, summary) == "REVIEW_NOW"]
+    if not alerts:
+        return []
+    lines = ["", "━━━ 🔎 REVIEW NOW ━━━", ""]
+    for a in alerts:
+        lines += _alert_card_lines(a)
+    return lines
+
+
+def _macro_watch_lines(summary):
+    """Render the ━━━ 🌐 MACRO WATCH ━━━ section for generic macro-caution ALERT rows.
+
+    Report-body only — never included in the proactive DM path.
+    """
+    alerts = [r for r in (summary.get("exit_results") or []) if classify_alert_severity(r, summary) == "MACRO_WATCH"]
+    if not alerts:
+        return []
+    lines = ["", "━━━ 🌐 MACRO WATCH ━━━", ""]
+    for a in alerts:
         ticker = _row_ticker(a) or "?"
         label = _ticker_label(ticker, a)
-        last = _num(a.get("last") or a.get("current_price") or a.get("price"))
-        stop = _num(a.get("stop") or a.get("stop_loss"))
-        gap = last - stop  # positive = above stop, negative = below stop
-        gap_str = f"{'+' if gap >= 0 else '−'}${abs(gap):,.2f}"
-        # Build short macro label from clean reason (already stripped by portfolio patch)
         raw_reason = str(a.get("reason") or "")
-        # reason is now e.g. "MACRO STRESS: RISK_OFF; NFP; RSI 44 weak"
-        # Extract the factors after "MACRO STRESS: " as a compact label
         macro_label = re.sub(r"^MACRO STRESS:\s*", "", raw_reason, flags=re.I).strip()
-        # Replace semicolons with · for compact display, cap at 60 chars
         macro_label = re.sub(r"\s*;\s*", " · ", macro_label)
-        if len(macro_label) > 60:
-            macro_label = macro_label[:60].rstrip(" ·")
-        if not macro_label:
-            macro_label = "macro stress"
-        recommendation = a.get("recommendation") or "HOLD"
-        # Strip icon prefix if recommendation already contains one (e.g. "🔴 SELL NOW — ...")
-        rec_clean = re.sub(r"^[^\w]+", "", recommendation).strip()
-        rec_clean = re.split(r"\s*[—–-]\s*", rec_clean)[0].strip()
-        rec_icon = {"SELL NOW": "🔴", "TIGHTEN STOP": "🟡", "HOLD": "🟢"}.get(rec_clean, "⚠️")
-        lines += [
-            f"⚠️  {label}",
-            f"   📍 {_price(last)} → stop {_price(stop)} ({gap_str})",
-            f"   🌐 {macro_label}",
-            f"   {rec_icon} {rec_clean}",
-            "",
-        ]
+        if len(macro_label) > 100:
+            macro_label = macro_label[:100].rstrip(" ·")
+        lines += [f"🌐 {label} — {macro_label or 'macro caution'}", ""]
     return lines
 
 
@@ -1436,8 +1598,10 @@ def _pending_entry_lines():
 
 
 def _holding_lines(summary):
+    summary = summary if isinstance(summary, dict) else {}
     trades = _open_trades(summary)
-    _cache_open_trade_prices(trades)
+    if summary.get("live"):
+        _cache_open_trade_prices(trades)
     return holding_block(trades, summary or {})
 
 def _gap_breakout_lines(summary):
@@ -1483,32 +1647,6 @@ def _intraday_breakout_lines(summary):
         lines.append(
             f"🔷 {label} | break {_price(item.get('breakout_level'))} | RVOL {rvol:.1f}x | entry {_price(item.get('entry'))} | stop {_price(item.get('stop'))} | target {_price(item.get('target'))}{suffix}"
         )
-    return lines
-
-
-def _waiting_visibility_reason(row):
-    score = _signal_pillar_text(row)
-    parts = [f"score {score}"]
-    rvol = _rvol_value(row)
-    if rvol is None:
-        parts.append("RVOL N/A")
-    elif rvol < RVOL_DISPLAY_THRESHOLD:
-        parts.append(f"RVOL {rvol:g} < {RVOL_DISPLAY_THRESHOLD:g}")
-    else:
-        parts.append(f"RVOL {rvol:g}")
-    if row.get("rsi") is None or row.get("macd_hist") is None:
-        parts.append("RSI/MACD pending")
-    return "   🟡 not BUY NOW — waiting for trigger; reason: " + "; ".join(parts)
-
-
-def _insert_waiting_visibility_notes(block_lines, rows):
-    lines = list(block_lines or [])
-    for idx, row in reversed(list(enumerate(rows or [], 1))):
-        prefix = f"{idx}. "
-        for pos in range(len(lines) - 1, -1, -1):
-            if str(lines[pos]).startswith(prefix):
-                lines.insert(pos + 1, _waiting_visibility_reason(row))
-                break
     return lines
 
 
@@ -1689,15 +1827,9 @@ def _waiting_lines(high, suppress_tickers=None, summary=None):
         return (rvol, rsi)
 
     rows.sort(key=_sort_key, reverse=True)
-    # Keep existing WAITING pullbacks visible even when indicators are missing/3-of-4;
-    # this is report-only visibility, not BUY NOW eligibility or strategy logic.
-    rows = [
-        r for r in rows
-        if not (r.get("rsi") is None and r.get("macd_hist") is None)
-        or (_row_ticker(r) in pending_by_ticker and _pillar_num(r.get("score")) >= 3)
-    ]
-    rows = rows[:10]
-    return _insert_waiting_visibility_notes(pullback_block(rows), rows)
+    # Fix #35: hide tickers with no indicator data at all (both RSI and MACD None)
+    rows = [r for r in rows if not (r.get("rsi") is None and r.get("macd_hist") is None)]
+    return pullback_block(rows)
 
 def _gates_lines(high):
     hot = _unique([h for h in high if str(h.get("action", "")).upper() == "SKIP" and str(h.get("reason", "")).startswith("TOO EXTENDED")])
@@ -1810,8 +1942,11 @@ def _build_report(summary):
     before_scan_signal_id = summary.get("_before_scan_signal_id")
     buy_now_tickers = _buy_now_tickers(before_scan_signal_id, high=high, summary=summary)
     lines = _header_lines(summary, hold_count)
+    lines += _perme_engine_packet_lines(summary)
     lines += _sell_now_lines(summary)
     lines += _position_risk_alert_lines(summary)
+    lines += _review_now_lines(summary)
+    lines += _macro_watch_lines(summary)
     lines += _holding_lines(summary)
     lines += _buy_now_lines(summary, before_scan_signal_id, high=high)
     lines += _actions_lines(buys, sells, summary, before_scan_signal_id, high=high, buy_now_tickers=buy_now_tickers)
@@ -1894,6 +2029,23 @@ def _cache_open_trade_prices(trades):
         conn.close()
     except Exception as e:
         print(f"[intraday] trade price cache update skipped: {e}")
+
+    # P0L-9/P0L-10 STAGING dual-write: valuation_marks, fired only AFTER the
+    # legacy price-cache write above has already committed. Never fatal -- a
+    # failure here cannot undo or block the legacy cache write. P0L-10
+    # hardening: missing price_source is NEVER defaulted to live_provider.
+    # If the caller (trade object) does not explicitly set price_source, we
+    # pass None through so _dualwrite_valuation_mark() applies its own
+    # conservative 'stale_cache' + is_fallback=1 default and logs a WARN
+    # invariant -- silence must never be mistaken for a live quote.
+    for trade in trades:
+        price_source = getattr(trade, "price_source", None)  # None if caller never set it
+        is_fallback = getattr(trade, "is_fallback", None)
+        atlas_db._bk_safe(
+            atlas_db._dualwrite_valuation_mark,
+            trade.ticker.upper(), float(trade.current_price), price_source, is_fallback,
+            legacy_trades_id=getattr(trade, "trade_id", None) or getattr(trade, "id", None),
+        )
 
 
 def _cached_open_trade_prices():
@@ -2224,12 +2376,75 @@ def _run_intraday_locked(now, force=False, dry_run=False):
     print(report_msg)
     print("[intraday] telegram report body end")
 
+    # P0L-9/P0L-10 STAGING dual-write: report_snapshots. Preserves the exact
+    # report text as rendered (no re-derivation), independent of send
+    # outcome. Fired AFTER the report text is finalized, never fatal -- a
+    # failure here can never block or alter the Telegram send below.
+    # P0L-10 hardening: inputs_manifest_json now includes price_source and
+    # is_fallback for every priced (open-position) ticker line, sourced from
+    # the most recent valuation_marks row per ticker -- never inferred or
+    # defaulted to live_provider here either.
+    def _bk_emit_report_snapshot(cur):
+        import hashlib as _hashlib
+        raw_sha = _hashlib.sha256(report_msg.encode("utf-8")).hexdigest()
+        priced_tickers = {}
+        try:
+            open_trades_rows = cur.execute(
+                "SELECT id, ticker FROM trades WHERE status='OPEN'"
+            ).fetchall()
+            for trade_id, ticker in open_trades_rows:
+                vm_row = cur.execute(
+                    """SELECT vm.price_source, vm.is_fallback, vm.price_decimal_text
+                       FROM valuation_marks vm
+                       JOIN position_lots pl ON pl.id = vm.lot_id
+                       WHERE pl.legacy_trades_id = ?
+                       ORDER BY vm.id DESC LIMIT 1""",
+                    (trade_id,),
+                ).fetchone()
+                if vm_row:
+                    priced_tickers[str(ticker).upper()] = {
+                        "price_source": vm_row[0],
+                        "is_fallback": bool(vm_row[1]),
+                        "price_decimal_text": vm_row[2],
+                    }
+                else:
+                    # No valuation_marks row exists at all for this ticker this
+                    # cycle -- explicitly record as unknown/fallback, never
+                    # silently omit it or imply a live price was used.
+                    priced_tickers[str(ticker).upper()] = {
+                        "price_source": "unknown_no_mark",
+                        "is_fallback": True,
+                        "price_decimal_text": None,
+                    }
+        except Exception as e:
+            print(f"[dual_write] report snapshot price-provenance manifest build skipped: {e}")
+
+        inputs_manifest = {
+            "buy_count": len(summary.get("buys", []) or []),
+            "sell_count": len([r for r in (summary.get("exit_results") or []) if r.get("action") == "SELL"]),
+            "high_candidate_count": len(summary.get("high_candidates", []) or []),
+            "dry_run": bool(dry_run),
+            "priced_tickers": priced_tickers,
+        }
+        cur.execute(
+            """INSERT INTO report_snapshots
+               (report_type, generated_at, raw_body_text, raw_body_sha256,
+                inputs_manifest_json, dry_run)
+               VALUES (?,?,?,?,?,?)""",
+            ("intraday", atlas_db._now(), report_msg, raw_sha,
+             __import__("json").dumps(inputs_manifest), 1 if dry_run else 0),
+        )
+
+    atlas_db._bk_safe(_bk_emit_report_snapshot)
+
     try:
         if not dry_run:
+            # P0I-2: consolidated main report send to Atlas DM/admin route only;
+            # group/topic vars no longer used here. Proactive ALERT/SELL DM below is unchanged.
             ok = send_telegram(
                 report_msg,
-                chat_id=_reports_group_chat_id(),
-                message_thread_id=_interday_thread_id(),
+                chat_id=_owner_chat_id(),
+                message_thread_id=None,
             )
             print(f"[intraday] telegram report success={ok}")
             # Proactive DM for urgent position alerts
@@ -2237,10 +2452,26 @@ def _run_intraday_locked(now, force=False, dry_run=False):
             if alerts:
                 import time as _time
                 _now = _time.time()
+                try:
+                    open_tickers = {str(p.get("ticker") or "").upper() for p in (atlas_db.get_open_positions() or [])}
+                except Exception:
+                    open_tickers = None  # unknown — do not incorrectly exclude if lookup fails
                 dm_parts = []
                 for a in alerts:
                     ticker = a.get("ticker", "?")
                     action_str = str(a.get("action", "?")).upper()
+                    # Re-check ALERT rows are still OPEN before proactive DM send (closes race
+                    # where a later stop-hit SELL in the same cycle already closed the ticker).
+                    # SELL rows are exempt: run_exits() closes the position as part of producing
+                    # this exact SELL row, so it is expected to be absent from get_open_positions().
+                    if action_str != "SELL" and open_tickers is not None and str(ticker).upper() not in open_tickers:
+                        print(f"[intraday] proactive DM skip {ticker}: no longer OPEN")
+                        continue
+                    # Generic macro-caution ALERT rows are MACRO WATCH — report-only, no DM.
+                    severity = classify_alert_severity(a, summary)
+                    if severity == "MACRO_WATCH":
+                        print(f"[intraday] proactive DM skip {ticker}: classified MACRO_WATCH (generic macro caution)")
+                        continue
                     # SELL always fires immediately — no cooldown
                     if action_str == "SELL":
                         dm_parts.append(a)

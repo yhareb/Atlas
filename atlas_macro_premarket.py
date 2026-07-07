@@ -27,9 +27,11 @@ sys.path.insert(0, SCRIPTS_DIR)
 from atlas_time import is_trading_day
 
 try:
-    from atlas_notify import send_telegram as _send_telegram
+    from atlas_notify import send_telegram as _send_telegram, _admin_chat_id as _owner_chat_id
 except Exception:
     _send_telegram = None
+    def _owner_chat_id():
+        return None
 
 ET = ZoneInfo("America/New_York")
 MASSIVE_BASE = os.environ.get("MASSIVE_BASE", "https://api.massive.com")
@@ -197,11 +199,84 @@ def _section(title: str) -> str:
     return f"━━━ {title} ━━━"
 
 
-def _tone_line(sp_pct: float | None, concentration: str) -> str:
-    """Derive a single deterministic tone sentence from futures direction and breadth."""
+NO_RELEVANT_HEADLINES = "No relevant market-moving headlines found."
+NO_VERIFIED_CALENDAR = "No verified calendar source available."
+
+_MARKET_MOVING_TERMS = {
+    "tariff", "sanction", "export control", "rate", "yield", "fed", "fomc", "inflation",
+    "cpi", "pce", "jobs", "unemployment", "guidance", "earnings", "revenue", "margin",
+    "forecast", "preannounce", "warning", "downgrade", "upgrade", "antitrust", "regulation",
+    "merger", "acquisition", "ipo", "bankruptcy", "default", "supply chain",
+}
+_JUNK_HEADLINE_TERMS = {
+    "mrbeast", "celebrity", "movie", "film", "streaming", "music", "gaming", "sports",
+    "iphone fold", "foldable iphone", "consumer tips", "lifestyle", "recipe", "travel",
+    "election", "campaign", "poll", "senate", "congress", "white house", "child safety", "social media",
+}
+
+
+def _has_any(text: str, terms: set[str]) -> bool:
+    lower = str(text or "").lower()
+    for term in terms:
+        t = term.lower().strip()
+        if not t:
+            continue
+        if " " in t or "-" in t:
+            if t in lower:
+                return True
+        elif re.search(rf"\b{re.escape(t)}\b", lower):
+            return True
+    return False
+
+
+def _is_junk_headline(text: str) -> bool:
+    lower = str(text or "").lower()
+    if not any(term in lower for term in _JUNK_HEADLINE_TERMS):
+        return False
+    return not _has_any(lower, _MARKET_MOVING_TERMS)
+
+
+def _filter_market_headlines(items: list[str], required_terms: set[str], limit: int) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items or []:
+        text = _clean_text(item, max_len=220)
+        key = text.lower()
+        if not text or key in seen:
+            continue
+        if _is_junk_headline(text):
+            continue
+        if required_terms and not _has_any(text, required_terms):
+            continue
+        seen.add(key)
+        out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _valid_breadth_counts(breadth: dict) -> bool:
+    try:
+        nyse_total = sum(int(breadth.get(k) or 0) for k in ("nyse_advancers", "nyse_decliners", "nyse_unchanged"))
+        nas_total = sum(int(breadth.get(k) or 0) for k in ("nasdaq_advancers", "nasdaq_decliners", "nasdaq_unchanged"))
+    except Exception:
+        return False
+    return nyse_total > 0 and nas_total > 0
+
+
+def _tone_line(sp_pct: float | None, concentration: str, nq_pct: float | None = None, soxx_pct: float | None = None) -> str:
+    """Derive report-only tone from futures, breadth, Nasdaq, and SOXX pressure."""
     if sp_pct is None:
         return "Tone unclear — futures data unavailable. Wait for cash open."
     broad = (concentration or "").lower() == "broad"
+    tech_pressure = any(v is not None and v <= -0.5 for v in (nq_pct, soxx_pct))
+    if tech_pressure and sp_pct > -0.5:
+        parts = [f"S&P futures {sp_pct:+.2f}%"]
+        if nq_pct is not None:
+            parts.append(f"Nasdaq futures {nq_pct:+.2f}%")
+        if soxx_pct is not None:
+            parts.append(f"SOXX {soxx_pct:+.2f}%")
+        return "Cautious tech-led tape — " + ", ".join(parts) + ". Nasdaq/SOXX pressure argues against calling the open neutral."
     if sp_pct >= 0.5 and broad:
         return f"Risk-on — S&P futures +{sp_pct:.2f}%, breadth broad. Participation supports the move."
     if sp_pct >= 0.5 and not broad:
@@ -243,7 +318,7 @@ def deterministic_narrative(ctx: dict) -> str:
     lines.append(_section("📊 2. NYSE / NASDAQ BREADTH"))
     breadth = ctx.get("breadth") or {}
     concentration = breadth.get("concentration", "mixed")
-    if "nyse_advancers" in breadth:
+    if "nyse_advancers" in breadth and _valid_breadth_counts(breadth):
         nyse_a = breadth.get("nyse_advancers", 0)
         nyse_d = breadth.get("nyse_decliners", 0)
         nyse_u = breadth.get("nyse_unchanged", 0)
@@ -259,7 +334,10 @@ def deterministic_narrative(ctx: dict) -> str:
     else:
         adv = breadth.get("advancers", 0)
         dec = breadth.get("decliners", 0)
-        lines.append(f"Pre-market proxy  🟢 Adv {adv}  🔴 Dec {dec}")
+        if adv or dec:
+            lines.append(f"Pre-market proxy  🟢 Adv {adv}  🔴 Dec {dec}")
+        else:
+            lines.append("Breadth unavailable — provider returned invalid zero coverage.")
     lines.append(f"Concentration: {concentration.upper()}")
     lines.append("")
 
@@ -276,7 +354,7 @@ def deterministic_narrative(ctx: dict) -> str:
         for item in semi_news:
             lines.append(f"📰 {item[:180]}")
     else:
-        lines.append("📭 Quiet — no major semiconductor or equipment headlines overnight.")
+        lines.append(f"📭 {NO_RELEVANT_HEADLINES}")
     lines.append("")
 
     # ── Section 4: Artificial Intelligence ─────────────────────────────────
@@ -286,7 +364,7 @@ def deterministic_narrative(ctx: dict) -> str:
         for item in ai_news:
             lines.append(f"📰 {item[:180]}")
     else:
-        lines.append("📭 Quiet overnight — no major AI model, capex, regulatory, or deal headlines.")
+        lines.append(f"📭 {NO_RELEVANT_HEADLINES}")
     lines.append("")
 
     # ── Section 5: Catalysts & Breaking News ────────────────────────────────
@@ -296,7 +374,7 @@ def deterministic_narrative(ctx: dict) -> str:
         for item in catalyst_news:
             lines.append(f"📰 {item[:180]}")
     else:
-        lines.append("📭 No major catalyst headlines — export controls, earnings, or macro shock.")
+        lines.append(f"📭 {NO_RELEVANT_HEADLINES}")
     lines.append("")
 
     # ── Section 6: Global Markets ───────────────────────────────────────────
@@ -313,10 +391,11 @@ def deterministic_narrative(ctx: dict) -> str:
         icon = _arrow(q.get("pct"))
         pct  = _fmt_quote_pct(q.get("pct"))
         if label == "US 10Y Yield":
-            # Yahoo ^TNX quotes yield × 10 (e.g. 43.7 = 4.37%)
             raw = q.get("price")
             try:
-                level = f"{float(raw) / 10:.2f}%"
+                raw_f = float(raw)
+                # Yahoo ^TNX may arrive either as 4.48 (=4.48%) or 44.8 (=4.48%).
+                level = f"{(raw_f / 10 if raw_f > 20 else raw_f):.2f}%"
             except Exception:
                 level = "N/A"
         else:
@@ -331,7 +410,17 @@ def deterministic_narrative(ctx: dict) -> str:
         sp_pct = float(sp_pct)
     except Exception:
         sp_pct = None
-    lines.append(_tone_line(sp_pct, concentration))
+    nq_pct = nq.get("pct")
+    soxx_pct = soxx.get("pct")
+    try:
+        nq_pct = float(nq_pct)
+    except Exception:
+        nq_pct = None
+    try:
+        soxx_pct = float(soxx_pct)
+    except Exception:
+        soxx_pct = None
+    lines.append(_tone_line(sp_pct, concentration, nq_pct=nq_pct, soxx_pct=soxx_pct))
     lines.append("")
 
     # ── Section 8: Key Events Today ─────────────────────────────────────────
@@ -340,20 +429,23 @@ def deterministic_narrative(ctx: dict) -> str:
     econ        = (events_ctx.get("economic_events")    or [])[:6]
     earnings    = (events_ctx.get("earnings_before_open") or [])[:3]
     fed         = (events_ctx.get("fed_speakers")        or [])[:3]
-    has_content = bool(econ or earnings or fed)
     if econ:
         for item in econ:
             lines.append(f"🗓 {item[:180]}")
+    else:
+        lines.append("📭 No verified economic calendar events available.")
+    lines.append("Earnings before open:")
     if earnings:
-        lines.append("Earnings before open:")
         for item in earnings:
-            lines.append(f"   📰 {item[:160]}")
+            lines.append(f"   🗓 {item[:160]}")
+    else:
+        lines.append(f"   {NO_VERIFIED_CALENDAR}")
+    lines.append("Fed speakers:")
     if fed:
-        lines.append("Fed speakers:")
         for item in fed:
             lines.append(f"   🎙 {item[:160]}")
-    if not has_content:
-        lines.append("📭 Light calendar — no major scheduled events today.")
+    else:
+        lines.append(f"   {NO_VERIFIED_CALENDAR}")
 
     return "\n".join(lines)
 
@@ -688,18 +780,25 @@ def breadth_snapshot() -> dict:
 
 def tech_semis_snapshot() -> dict:
     sox_proxy = snapshot_stock("SOXX")
-    semi_news = benzinga_news("semiconductor analyst rating equipment chip", limit=8, hours=24)
+    semi_terms = {"semiconductor", "semiconductors", "chip", "chips", "ai chip", "equipment", "wafer", "foundry", "memory", "gpu", "datacenter", "analyst", "rating", "capex", "export control"}
+    semi_news = _filter_market_headlines(
+        benzinga_news("semiconductor analyst rating equipment chip", limit=20, hours=24),
+        semi_terms,
+        limit=8,
+    )
     return {"sox_proxy": sox_proxy, "analyst_and_equipment_news": semi_news}
 
 
 def ai_snapshot() -> dict:
     ai_terms = "artificial intelligence model release hyperscaler capex regulation acquisition"
-    return {"ai_news": benzinga_news(ai_terms, limit=10, hours=24)}
+    required = {"artificial intelligence", " ai ", "model", "hyperscaler", "capex", "datacenter", "gpu", "regulation", "acquisition", "chip", "semiconductor"}
+    return {"ai_news": _filter_market_headlines(benzinga_news(ai_terms, limit=20, hours=24), required, limit=10)}
 
 
 def catalysts_snapshot() -> dict:
     terms = "export controls earnings before open options expiry CPI PCE Fed speaker macro"
-    return {"catalyst_news": benzinga_news(terms, limit=10, hours=24)}
+    required = {"export control", "earnings", "guidance", "options", "expiry", "cpi", "pce", "fed", "rate", "yield", "macro", "tariff", "sanction", "inflation", "jobs"}
+    return {"catalyst_news": _filter_market_headlines(benzinga_news(terms, limit=20, hours=24), required, limit=10)}
 
 
 def global_markets_snapshot() -> dict:
@@ -749,8 +848,8 @@ def scheduled_events_snapshot() -> dict:
             if detail.strip():
                 events.append(detail.strip())
         events = events[:10]
-    earnings = benzinga_news("earnings before open", limit=8, hours=18)
-    fed = benzinga_news("Federal Reserve Fed speaker", limit=6, hours=18)
+    earnings = []
+    fed = []
     return {"economic_events": events, "earnings_before_open": earnings, "fed_speakers": fed}
 
 
@@ -783,7 +882,7 @@ def send_report(message: str) -> bool:
         print("[macro_premarket] Telegram module unavailable; printing only")
         print(message)
         return False
-    return bool(_send_telegram(message, label="macro_premarket", parse_mode=""))
+    return bool(_send_telegram(message, label="macro_premarket", parse_mode="", chat_id=_owner_chat_id(), message_thread_id=None))
 
 
 def main(argv: list[str] | None = None) -> int:

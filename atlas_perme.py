@@ -29,6 +29,10 @@ from zoneinfo import ZoneInfo
 
 from atlas_provider_guard import eodhd_get_json  # noqa: E402
 from atlas_rag_flags import parse_flags  # noqa: E402
+try:
+    from atlas_perme_engine_packet import validate_packet as _validate_engine_packet
+except Exception:
+    _validate_engine_packet = None
 
 ET = ZoneInfo("America/New_York")
 SCRIPTS_DIR = Path("/Users/yasser/scripts")
@@ -874,6 +878,97 @@ def write_latest_context(briefing: str, outbox: Path, generated_at: datetime) ->
     return path
 
 
+
+def _packet_event_severity(row: dict[str, Any]) -> str:
+    impact = str(row.get("impact") or row.get("Impact") or "").upper()
+    name = _event_name(row).upper()
+    if impact == "HIGH" or any(k in name for k in HIGH_MAIN_EVENT_KEYWORDS):
+        return "HIGH"
+    if impact == "MEDIUM" or any(k in name for k in MEDIUM_MAIN_EVENT_KEYWORDS):
+        return "MEDIUM"
+    return "LOW"
+
+
+def _packet_direction(context: dict[str, Any], severity: str) -> str:
+    sectors = context.get("massive_sector_etfs") or []
+    try:
+        worst = min([float(r.get("change_pct")) for r in sectors if r.get("change_pct") is not None] or [0.0])
+    except Exception:
+        worst = 0.0
+    if severity == "HIGH" or worst <= -1.0:
+        return "RISK_OFF"
+    return "NEUTRAL"
+
+
+def _packet_sector(context: dict[str, Any]) -> str:
+    sectors = context.get("massive_sector_etfs") or []
+    if not sectors:
+        return ""
+    try:
+        row = sorted(sectors, key=lambda r: abs(float(r.get("change_pct") or 0)), reverse=True)[0]
+        return str(row.get("sector") or row.get("ticker") or "").upper()
+    except Exception:
+        return ""
+
+
+def _packet_tickers(context: dict[str, Any]) -> list[str]:
+    out = []
+    for row in context.get("benzinga_earnings") or []:
+        ticker = str(row.get("ticker") or row.get("symbol") or "").upper().strip()
+        if ticker and ticker not in out:
+            out.append(ticker)
+    return out[:12]
+
+
+def build_engine_packets_from_context(context: dict[str, Any], generated_at: datetime, ttl_minutes: int = 240) -> list[dict[str, Any]]:
+    """Build schema-valid engine packets from structured provider facts only, never prose."""
+    rows = [r for r in (context.get("eodhd_economic_calendar") or []) if isinstance(r, dict)]
+    if not rows:
+        rows = [{}]
+    severity = "LOW"
+    evidence_count = 0
+    event_type = "CONTEXT"
+    for row in rows:
+        row_sev = _packet_event_severity(row)
+        if row_sev == "HIGH":
+            severity = "HIGH"
+        elif row_sev == "MEDIUM" and severity != "HIGH":
+            severity = "MEDIUM"
+        if row:
+            evidence_count += 1
+            if event_type == "CONTEXT":
+                event_type = _event_name(row).upper() or "MACRO_EVENT"
+    packet = {
+        "schema": "perme_engine_packet_v1",
+        "generated_at_et": generated_at.astimezone(ET).isoformat(timespec="seconds"),
+        "ttl_minutes": int(ttl_minutes),
+        "severity": severity,
+        "confidence": 0.85 if severity == "HIGH" else 0.65 if severity == "MEDIUM" else 0.5,
+        "scope": "SECTOR" if _packet_sector(context) else "MARKET",
+        "sector": _packet_sector(context),
+        "tickers": _packet_tickers(context),
+        "event_type": event_type,
+        "direction": _packet_direction(context, severity),
+        "evidence_count": max(1, evidence_count),
+        "reason_code": "STRUCTURED_MACRO_FACTS",
+        "allowed_actions": ["ANNOTATE", "REVIEW_NOW"],
+        "forbidden_actions": ["BUY", "SELL", "CHANGE_STOP", "CHANGE_TARGET"],
+    }
+    return [packet]
+
+
+def write_engine_packet(context: dict[str, Any], outbox: Path, generated_at: datetime) -> Path:
+    path = Path(os.environ.get("PERME_ENGINE_PACKET_PATH") or os.environ.get("ATLAS_PERME_ENGINE_PACKET_PATH") or (outbox / "perme_engine_packet_v1.jsonl"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    packets = build_engine_packets_from_context(context, generated_at=generated_at)
+    if _validate_engine_packet is not None:
+        for packet in packets:
+            result = _validate_engine_packet(packet)
+            if not result.ok:
+                raise RuntimeError(f"engine packet validation failed: {result.error}")
+    path.write_text("".join(json.dumps(p, sort_keys=True, separators=(",", ":")) + "\n" for p in packets), encoding="utf-8")
+    return path
+
 def _owner_dm_chat_id_var() -> str:
     return OWNER_DM_CHAT_ID_ENV
 
@@ -1046,6 +1141,7 @@ def main(argv: list[str] | None = None) -> int:
     path.write_text(briefing.rstrip() + "\n")
     output_bytes = path.stat().st_size
     latest_context_path = write_latest_context(briefing, path.parent, generated_at)
+    engine_packet_path = write_engine_packet(context, path.parent, generated_at)
     if args.dry_run:
         print("[atlas_rag] dry-run: indexer suppressed")
     else:
@@ -1066,6 +1162,7 @@ def main(argv: list[str] | None = None) -> int:
         "source_mode": context.get("source_mode"),
         "output_path": str(path),
         "latest_context_path": str(latest_context_path),
+        "engine_packet_path": str(engine_packet_path),
         "bytes": output_bytes,
         "news_count": len(context.get("benzinga_news") or []),
         "earnings_count": len(context.get("benzinga_earnings") or []),

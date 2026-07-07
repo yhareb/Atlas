@@ -27,9 +27,11 @@ sys.path.insert(0, SCRIPTS_DIR)
 from atlas_time import is_trading_day
 
 try:
-    from atlas_notify import send_telegram as _send_telegram
+    from atlas_notify import send_telegram as _send_telegram, _admin_chat_id as _owner_chat_id
 except Exception:
     _send_telegram = None
+    def _owner_chat_id():
+        return None
 
 ET = ZoneInfo("America/New_York")
 EODHD_BASE = "https://eodhd.com/api"
@@ -509,18 +511,14 @@ def send_report(message: str) -> bool:
         print("[macro_postmarket] Telegram module unavailable; printing only")
         print(message)
         return False
-    group_chat = _reports_group_chat_id()
-    thread_id = _postmarket_thread_id()
-    if group_chat:
-        return bool(_send_telegram(
-            message,
-            label="macro_postmarket",
-            parse_mode="",
-            chat_id=group_chat,
-            message_thread_id=thread_id,
-        ))
-    # Fallback to default (owner DM) if group chat not configured
-    return bool(_send_telegram(message, label="macro_postmarket", parse_mode=""))
+    # P0I-2: consolidated to Atlas DM/admin route only; group/topic vars no longer used here.
+    return bool(_send_telegram(
+        message,
+        label="macro_postmarket",
+        parse_mode="",
+        chat_id=_owner_chat_id(),
+        message_thread_id=None,
+    ))
 
 
 def main(argv: list[str] | None = None) -> int:
