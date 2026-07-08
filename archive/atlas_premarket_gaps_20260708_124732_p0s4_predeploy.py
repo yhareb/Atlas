@@ -450,8 +450,8 @@ def main(argv=None):
         report,
         label="premarket_gaps",
         parse_mode=None,
-        route="professor_dm",
-        report_type="premarket_gaps",
+        chat_id=_reports_group_chat_id(),
+        message_thread_id=_premarket_thread_id(),
     )
     print(f"[telegram] sent={ok}")
     return 0 if ok else 1

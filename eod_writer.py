@@ -20,7 +20,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 import atlas_db
 import atlas_portfolio as port
 from atlas_time import current_et_market_date_str, is_trading_day
-from atlas_notify import send_telegram
+from atlas_notify import send_telegram, _admin_chat_id as _owner_chat_id
 from atlas_symbol_meta import ticker_label
 from atlas_report_blocks import holding_block, watch_list_block
 
@@ -37,24 +37,25 @@ def _env_int(name):
 
 
 def _reports_group_chat_id():
+    # P0N-2: retained for reference/audit only; no longer used by
+    # _send_report_telegram() below. ATLAS HANDOFF now routes to Atlas
+    # DM/admin only, matching the P0I-2 consolidation already applied to
+    # atlas_macro_postmarket.py and pre_market_report.py.
     return os.environ.get("ATLAS_REPORTS_GROUP_CHAT_ID") or None
 
 
 def _postmarket_thread_id():
+    # P0N-2: retained for reference/audit only; no longer used by
+    # _send_report_telegram() below.
     return _env_int("ATLAS_TOPIC_POSTMARKET_THREAD_ID")
 
 
 def _send_report_telegram(message):
-    group_chat = _reports_group_chat_id()
-    if group_chat:
-        return send_telegram(
-            message,
-            label="eod_writer",
-            parse_mode="",
-            chat_id=group_chat,
-            message_thread_id=_postmarket_thread_id(),
-        )
-    return send_telegram(message, label="eod_writer", parse_mode="")
+    # P0N-2: consolidated to Atlas DM/admin route only; group/topic vars
+    # (ATLAS_REPORTS_GROUP_CHAT_ID, ATLAS_TOPIC_POSTMARKET_THREAD_ID) are no
+    # longer read or used here. Matches the route already used by
+    # atlas_macro_postmarket.py and pre_market_report.py (P0I-2).
+    return send_telegram(message, label="eod_writer", parse_mode="", chat_id=_owner_chat_id(), message_thread_id=None)
 
 
 def _score_label(score):

@@ -43,7 +43,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, date, timedelta, time
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, os.environ.get("ATLAS_SCRIPTS_DIR", "/Users/yasser/scripts"))
+sys.path.insert(0, "/Users/yasser/scripts")
 
 import atlas_db
 import atlas_account as acct
@@ -1038,26 +1038,6 @@ def evaluate_exit(lot, dry_run=True, regime=None):
         atlas_db.update_trade_stop(lot.get("id"), round(stop, 2))
 
     days = _days_open(entry_at)
-
-    manual_hold_override = False
-    try:
-        manual_hold_override = atlas_db.has_active_manual_hold_override(trade_id=lot.get("id"), ticker=ticker)
-    except Exception:
-        manual_hold_override = False
-    stop_breached_for_override = (last <= hard_stop) or (last <= stop and not (risk_off_tightened and last < entry))
-    if manual_hold_override and stop_breached_for_override:
-        return {
-            "ticker": ticker, "action": "HOLD", "qty": qty, "entry": round(entry, 2),
-            "reason": f"Professor hold override active; stop breached; last {last:.2f} <= stop {hard_stop:.2f}",
-            "last": round(last, 2), "stop": round(hard_stop, 2), "target": round(target, 2),
-            "gain_R": round(gain_R, 2) if gain_R is not None else None, "regime_ok": regime_ok,
-            "manual_override": True, "stop_breached": True, "system_wanted": "SELL", "risk": "HIGH",
-            "broker_sell_submitted": False,
-            "earnings_context": earnings_ctx,
-            "earnings_warning": earnings_ctx.get("holding_warning_note") if earnings_ctx.get("holding_warning") else None,
-            "fda_calendar": fda_calendar,
-            "fda_warning": fda_calendar.get("holding_warning_note") if isinstance(fda_calendar, dict) and fda_calendar.get("holding_warning") else None,
-        }
 
     if last >= target:
         action, reason, price = "SELL", f"2R target hit; last {last:.2f} >= target {target:.2f}", round(last, 2)

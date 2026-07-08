@@ -18,7 +18,6 @@ import atlas_db
 import atlas_portfolio as port
 from atlas_symbol_meta import ticker_label
 from atlas_report_blocks import holding_block, pullback_block, watch_list_block
-from atlas_report_authority import render_portfolio_visibility_block, normalize_open_position_rows, pending_exposure_compact_lines
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -26,7 +25,7 @@ ET = ZoneInfo("America/New_York")
 
 
 def send_telegram_message(message):
-    return send_telegram(message, label="morning_briefing", route="professor_dm", report_type="morning_briefing")
+    return send_telegram(message, label="morning_briefing")
 
 
 def _num(value, default=None):
@@ -89,9 +88,21 @@ def _latest_handoff(market_day):
 
 def _holding_lines():
     rows = atlas_db.get_open_positions()
-    pending = atlas_db.get_pending_broker_confirmation_trades()
-    positions = normalize_open_position_rows(rows, price_lookup=lambda ticker: _latest_price(ticker, fallback=None))
-    return render_portfolio_visibility_block(positions, pending)
+    positions = []
+    for row in rows:
+        ticker = str(row.get("ticker") or "?").upper()
+        entry = _num(row.get("price"), 0.0)
+        qty = _num(row.get("quantity"), 0.0)
+        last = _latest_price(ticker, fallback=entry)
+        positions.append({
+            "ticker": ticker,
+            "entry_price": entry,
+            "current_price": last,
+            "stop_loss": row.get("stop_loss"),
+            "target_price": row.get("target_price"),
+            "quantity": qty,
+        })
+    return holding_block(positions, {})
 
 def _pending_stop_target(row):
     trigger = _num(row.get("trigger_price"))
@@ -126,7 +137,6 @@ def _armed_lines(market_day):
         item.setdefault("entry", item.get("trigger_price"))
         item.setdefault("entry_price", item.get("trigger_price"))
         item.setdefault("current_price", item.get("reference_price"))
-        item.setdefault("current_price_source", "[CACHE]")
         item.setdefault("price", item.get("reference_price"))
         data.append(item)
     lines = pullback_block(data)

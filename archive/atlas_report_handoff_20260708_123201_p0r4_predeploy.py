@@ -17,7 +17,6 @@ import atlas_portfolio as port
 import atlas_symbol_meta as _symbol_meta
 from atlas_symbol_meta import ticker_label
 from atlas_report_blocks import holding_block, pullback_block, watch_list_block
-from atlas_report_authority import render_portfolio_visibility_block, provider_or_fallback_price, resolve_price_authority
 from atlas_time import current_et_market_date, add_trading_days, previous_et_trading_date_str
 
 SEP = "─────────────────────────────────────────"
@@ -115,23 +114,19 @@ def _open_position_lines():
         entry = _num(row.get("price"))
         qty = _num(row.get("quantity"), 0.0)
         cached_now = row.get("current_price") or row.get("last_price")
-        live = _latest_price(ticker, fallback=None)
-        pa = resolve_price_authority(ticker, entry, provider_price=live, provider_source="handoff_live" if live not in (None, "") else None, cached_price=cached_now, cached_timestamp=row.get("last_price_at"))
+        now = _latest_price(ticker, fallback=_num(cached_now, entry))
         positions.append({
             "ticker": ticker,
             "entry_price": entry,
-            "current_price": pa.get("display_price"),
-            "current_price_source": pa.get("source_label"),
-            "price_authority": pa,
+            "current_price": now,
             "stop_loss": row.get("stop_loss"),
             "target_price": row.get("target_price"),
             "quantity": qty,
         })
-    pending = atlas_db.get_pending_broker_confirmation_trades()
-    lines = render_portfolio_visibility_block(positions, pending)
+    lines = holding_block(positions, {})
     if lines and lines[0] == "":
         lines = lines[1:]
-    return lines, len(rows) + len(pending)
+    return lines, len(rows)
 
 def _position_note(ticker):
     notes = {
@@ -180,7 +175,6 @@ def _pending_pullback_lines(limit=None):
             "entry": item.get("trigger_price"),
             "entry_price": item.get("trigger_price"),
             "current_price": item.get("reference_price"),
-            "current_price_source": "[CACHE]",
             "price": item.get("reference_price"),
         })
         data.append(item)

@@ -26,7 +26,6 @@ for _path in (SCRIPTS_DIR, "/Users/yasser/scripts"):
 import atlas_db  # noqa: E402
 from atlas_symbol_meta import ticker_label  # noqa: E402
 from atlas_report_blocks import holding_block  # noqa: E402
-from atlas_report_authority import render_portfolio_visibility_block, normalize_open_position_rows, SOURCE_RENDER_CALC, SOURCE_DB, SOURCE_TFE, SOURCE_BROKER, resolve_price_authority, valuation_excluded_tickers  # noqa: E402
 from atlas_notify import send_telegram, _admin_chat_id as _owner_chat_id  # noqa: E402
 
 if os.environ.get("ATLAS_DB"):
@@ -177,11 +176,11 @@ def _pending_broker_confirmation_lines() -> list[str]:
         pnl_pct = ((exit_price - entry) / entry * 100.0) if entry else 0.0
         lines.append(
             f"⚠️ {ticker}\n"
-            f"   🚦 Exit trigger {SOURCE_DB}: {_price(exit_price)} (stop {SOURCE_DB}/{SOURCE_TFE} {_price(stop)})\n"
-            f"   🕐 Triggered {SOURCE_DB}: {exit_at}\n"
-            f"   📊 Est. P/L {SOURCE_RENDER_CALC}: {_signed_money(pnl)} ({_fmt_pct(pnl_pct, signed=True, decimals=1)})\n"
-            f"   broker_confirmed {SOURCE_BROKER}: NO\n"
-            f"   cash_credit {SOURCE_DB}: NO"
+            f"   🚦 Exit trigger: {_price(exit_price)} (stop {_price(stop)})\n"
+            f"   🕐 Triggered: {exit_at}\n"
+            f"   📊 Est. P/L: {_signed_money(pnl)} ({_fmt_pct(pnl_pct, signed=True, decimals=1)})\n"
+            f"   broker_confirmed: NO\n"
+            f"   cash_credit: NO"
         )
         lines.append("")
     return lines
@@ -200,35 +199,32 @@ def build_report() -> str:
         entry = _num(row.get("entry_price"))
         qty = _num(row.get("quantity"))
         close = _snapshot_close_price(ticker)
-        pa = resolve_price_authority(ticker, entry, provider_price=close, provider_source="eod_snapshot" if close not in (None, "") else None, cached_price=row.get("current_price") or row.get("last_price"), cached_timestamp=row.get("last_price_at"))
+        if close is None:
+            close = entry
         stop = _num(row.get("stop_loss"))
         target = _num(row.get("target_price"))
-        if pa.get("is_valuation_valid"):
-            value = _num(pa.get("valuation_price")) * qty
-            pnl = value - (entry * qty)
-            pct = ((pnl / (entry * qty)) * 100.0) if entry and qty else 0.0
-            total_unrealized += pnl
-            total_entry_cost += entry * qty
-            total_value += value
-        else:
-            value = None; pnl = None; pct = None
-        rows.append({"ticker": ticker, "entry_price": entry, "current_price": pa.get("display_price"), "current_price_source": pa.get("source_label"), "price_authority": pa, "stop_loss": stop, "target_price": target, "quantity": qty, "unrealized_pl_usd": pnl, "unrealized_pl_pct": pct, "current_value": value, "invested_capital": entry * qty, "row": row})
+        pnl = (close - entry) * qty
+        pct = ((close - entry) / entry * 100.0) if entry else 0.0
+        value = close * qty
+        total_unrealized += pnl
+        total_entry_cost += entry * qty
+        total_value += value
+        rows.append({"ticker": ticker, "entry_price": entry, "current_price": close, "stop_loss": stop, "target_price": target, "quantity": qty, "unrealized_pl_usd": pnl, "unrealized_pl_pct": pct, "current_value": value, "invested_capital": entry * qty, "row": row})
     roi = (total_unrealized / total_entry_cost * 100.0) if total_entry_cost else 0.0
-    excluded = valuation_excluded_tickers(rows)
     equity = cash + total_value
     lines = [
         f"━━━ 📊 EOD POSITIONS — {market_day} ━━━",
         "",
-        f"💰 Equity {SOURCE_RENDER_CALC} {_money(equity)} · Cash [LEDGER] {_money(cash)} · {len(rows)} positions · ROI {SOURCE_RENDER_CALC} {_fmt_pct(roi)}" + (f" · Valuation PARTIAL excl {','.join(excluded)}" if excluded else ""),
+        f"💰 Equity {_money(equity)} · Cash {_money(cash)} · {len(rows)} positions · ROI {_fmt_pct(roi)}",
         "",
     ]
-    lines.extend(render_portfolio_visibility_block(normalize_open_position_rows(rows), atlas_db.get_pending_broker_confirmation_trades()))
+    lines.extend(holding_block(rows, {}))
+    lines.extend(_pending_broker_confirmation_lines())
     if rows:
-        valued_rows = [r for r in rows if r.get("unrealized_pl_pct") is not None]
-        best = max(valued_rows, key=lambda r: r["unrealized_pl_pct"]) if valued_rows else None
-        worst = min(valued_rows, key=lambda r: r["unrealized_pl_pct"]) if valued_rows else None
-        best_line = f"Best {SOURCE_RENDER_CALC}: {best['ticker']} {_fmt_pct(best['unrealized_pl_pct'], decimals=0)}" if best else f"Best {SOURCE_RENDER_CALC}: none — valuation partial"
-        worst_line = f"Worst {SOURCE_RENDER_CALC}: {worst['ticker']} {_fmt_pct(worst['unrealized_pl_pct'], decimals=0)}" if worst else f"Worst {SOURCE_RENDER_CALC}: none — valuation partial"
+        best = max(rows, key=lambda r: r["unrealized_pl_pct"])
+        worst = min(rows, key=lambda r: r["unrealized_pl_pct"])
+        best_line = f"Best: {best['ticker']} {_fmt_pct(best['unrealized_pl_pct'], decimals=0)}"
+        worst_line = f"Worst: {worst['ticker']} {_fmt_pct(worst['unrealized_pl_pct'], decimals=0)}"
     else:
         best_line = "Best: none"
         worst_line = "Worst: none"
@@ -236,7 +232,7 @@ def build_report() -> str:
         "━━━ 📈 TODAY'S SUMMARY ━━━",
         best_line,
         worst_line,
-        f"Cash [LEDGER]: {_money(cash)}",
+        f"Cash: {_money(cash)}",
     ]
     return "\n".join(lines)
 

@@ -50,81 +50,6 @@ def _bot_token():
     return _cfg("TELEGRAM_BOT_TOKEN")
 
 
-def _cfg_source(*keys):
-    """Return the first configured value plus its env-var name; never log values."""
-    for key in keys:
-        value = _cfg(key)
-        if value:
-            return value, key
-    return "", "UNSET"
-
-
-def _group_route_allowlist():
-    raw = _cfg("ATLAS_TELEGRAM_GROUP_ROUTE_ALLOWLIST", prefer_env_file=False)
-    return {x.strip().lower() for x in str(raw or "").split(",") if x.strip()}
-
-
-def _thread_var_for_report(report_type):
-    report = str(report_type or "").strip().lower()
-    if report in {"pre_market", "premarket", "premarket_gaps", "pre_market_gaps"}:
-        return "ATLAS_TOPIC_PREMARKET_THREAD_ID"
-    if report in {"intraday", "interday"}:
-        return "ATLAS_TOPIC_INTERDAY_THREAD_ID"
-    if report in {"post_market", "postmarket", "eod", "eod_writer", "handoff"}:
-        return "ATLAS_TOPIC_POSTMARKET_THREAD_ID"
-    return "ATLAS_TOPIC_THREAD_ID"
-
-
-def resolve_report_route(route="professor_dm", report_type=None):
-    """Central Atlas Telegram route contract.
-
-    Default Professor-facing route is Atlas DM/admin. Group/topic routing is
-    fail-closed unless the report_type is explicitly allowlisted by name.
-    Returned dict contains raw destination values for the sender, but logs must
-    use only *_source fields and booleans.
-    """
-    route_name = str(route or "professor_dm").strip().lower()
-    report = str(report_type or "atlas").strip().lower()
-    if route_name in {"professor_dm", "dm", "admin", "atlas_dm"}:
-        chat, source = _cfg_source(
-            "TELEGRAM_ADMIN_CHAT_ID",
-            "TELEGRAM_FALLBACK_CHAT_ID",
-            "TELEGRAM_ALLOWED_USERS",
-            "TELEGRAM_HOME_CHANNEL",
-            "TELEGRAM_CHAT_ID_EXPECTED",
-        )
-        return {
-            "route": "professor_dm",
-            "chat_id": chat,
-            "message_thread_id": None,
-            "chat_source": source,
-            "thread_source": "NONE",
-            "allowed": True,
-        }
-    if route_name in {"approved_group_topic", "group_topic", "group"}:
-        allowlist = _group_route_allowlist()
-        if report not in allowlist:
-            raise ValueError(f"group route not allowlisted for report_type={report or 'unknown'}")
-        chat, source = _cfg_source("ATLAS_REPORTS_GROUP_CHAT_ID")
-        thread_var = _thread_var_for_report(report)
-        thread_value, thread_source = _cfg_source(thread_var)
-        thread_id = None
-        if thread_value:
-            try:
-                thread_id = int(thread_value)
-            except Exception:
-                raise ValueError(f"invalid thread id in {thread_var}")
-        return {
-            "route": "approved_group_topic",
-            "chat_id": chat,
-            "message_thread_id": thread_id,
-            "chat_source": source,
-            "thread_source": thread_source if thread_id is not None else "NONE",
-            "allowed": True,
-        }
-    raise ValueError(f"unknown telegram route {route_name}")
-
-
 def validate_telegram_chat(force=False, startup=False):
     """Network validation intentionally disabled.
 
@@ -157,20 +82,11 @@ def _chunks(message, limit=3800):
     return chunks
 
 
-def send_telegram(message, label="atlas", parse_mode="Markdown", print_fallback=True, chat_id=None, message_thread_id=None, route=None, report_type=None):
-    """Robust non-fatal Telegram sender with central route contract support."""
+def send_telegram(message, label="atlas", parse_mode="Markdown", print_fallback=True, chat_id=None, message_thread_id=None):
+    """Robust non-fatal Telegram sender: 3 attempts, 5s connect / 25s read, 2s/5s backoff."""
     token = _bot_token()
-    if route is not None:
-        resolved = resolve_report_route(route=route, report_type=report_type or label)
-        chat = str(resolved.get("chat_id") or "").strip()
-        message_thread_id = resolved.get("message_thread_id")
-        print(
-            f"[atlas_notify] routing: route={resolved.get('route')} chat_source={resolved.get('chat_source')} thread_set={message_thread_id is not None} thread_source={resolved.get('thread_source')}",
-            file=sys.stderr,
-        )
-    else:
-        chat = str(chat_id).strip() if chat_id not in (None, "") else _chat_id()
-        print(f"[atlas_notify] routing: route=legacy chat_id_arg_set={chat_id not in (None, '')} resolved_chat_set={bool(chat)} thread_set={message_thread_id is not None}", file=sys.stderr)
+    chat = str(chat_id).strip() if chat_id not in (None, "") else _chat_id()
+    print(f"[atlas_notify] routing: chat_id_arg_set={chat_id not in (None, '')} resolved_chat_set={bool(chat)} thread_set={message_thread_id is not None}", file=sys.stderr)
     if not token or not chat:
         print(f"[{label}] telegram skipped: TELEGRAM_BOT_TOKEN or chat id unset")
         if print_fallback:
@@ -229,6 +145,6 @@ def send_telegram(message, label="atlas", parse_mode="Markdown", print_fallback=
     return True
 
 
-def send_message(message, label="atlas", parse_mode="Markdown", print_fallback=True, chat_id=None, message_thread_id=None, route=None, report_type=None):
+def send_message(message, label="atlas", parse_mode="Markdown", print_fallback=True, chat_id=None, message_thread_id=None):
     """Compatibility alias for callers that expect send_message()."""
-    return send_telegram(message, label=label, parse_mode=parse_mode, print_fallback=print_fallback, chat_id=chat_id, message_thread_id=message_thread_id, route=route, report_type=report_type)
+    return send_telegram(message, label=label, parse_mode=parse_mode, print_fallback=print_fallback, chat_id=chat_id, message_thread_id=message_thread_id)

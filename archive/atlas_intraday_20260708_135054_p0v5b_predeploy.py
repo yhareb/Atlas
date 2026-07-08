@@ -49,7 +49,6 @@ if os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB"):
 from atlas_symbol_meta import ticker_label
 from atlas_schemas import AtlasSignal, AtlasTrade
 from atlas_report_blocks import holding_block, pullback_block, watch_list_block
-from atlas_report_authority import render_pending_broker_confirmation as _shared_pending_broker_confirmation_block, SOURCE_DB, SOURCE_TFE, SOURCE_BROKER, SOURCE_LEDGER, SOURCE_PROVIDER, SOURCE_CACHE, SOURCE_FALLBACK, SOURCE_RENDER_CALC, resolve_price_authority, valuation_excluded_tickers
 _ALERT_COOLDOWN: dict = {}  # ticker -> {"ts": float, "dist": float} — cooldown state for proactive DM
 
 _ENV_PATH = os.path.expanduser("~/.hermes/profiles/atlas/.env")
@@ -698,20 +697,15 @@ def _header_lines(summary, hold_count):
             macro_note += f" · 🧠 {sent}: {reason}"
     positions = summary.get("open_positions_count", hold_count)
     try:
-        positions_for_valuation = _authority_open_position_rows(summary)
-        valid = [p for p in positions_for_valuation if (p.get("price_authority") or {}).get("is_valuation_valid")]
-        excluded = valuation_excluded_tickers(positions_for_valuation)
-        invested = sum(_num(p.get("entry_price") or p.get("price")) * _num(p.get("quantity") or p.get("shares")) for p in valid)
-        current_value = sum(_num((p.get("price_authority") or {}).get("valuation_price")) * _num(p.get("quantity") or p.get("shares")) for p in valid)
-        roi = ((current_value - invested) / invested * 100.0) if invested else 0.0
-        positions_note = " · valuation PARTIAL excl " + ",".join(excluded) if excluded else ""
+        trades = _open_trades(summary)
+        invested = sum(t.invested_capital for t in trades)
+        roi = (sum(t.current_value - t.invested_capital for t in trades) / invested * 100.0) if invested else 0.0
     except Exception:
         roi = 0.0
-        positions_note = ""
     lines = [
         f"🦅 ATLAS INTRADAY — {now_et} ET",
         f"📡 {regime} · SPY {spy}{macro_note}",
-        f"💰 Equity {_money(account.get('equity'))} · Cash {_money(account.get('cash'))} · {positions} positions · ROI {_fmt_pct(roi, signed=True, decimals=1)}{positions_note}",
+        f"💰 Equity {_money(account.get('equity'))} · Cash {_money(account.get('cash'))} · {positions} positions · ROI {_fmt_pct(roi, signed=True, decimals=1)}",
     ]
     perme_line = _perme_header_line(_perme_flags(summary))
     if perme_line:
@@ -1603,53 +1597,17 @@ def _pending_entry_lines():
     return lines
 
 
-
-def _authority_open_position_rows(summary=None):
-    summary = summary if isinstance(summary, dict) else {}
-    holds_by_ticker = {_row_ticker(h): h for h in (summary.get("exit_results", []) or []) if isinstance(h, dict) and _row_ticker(h)}
-    try:
-        rows = atlas_db.get_open_positions()
-    except Exception:
-        rows = atlas_db.get_trades(status="OPEN")
-    out = []
-    for row in rows or []:
-        row = dict(row or {})
-        ticker = _row_ticker(row)
-        entry = row.get("entry_price") or row.get("price")
-        hold = holds_by_ticker.get(ticker, {})
-        provider_price = hold.get("last") or hold.get("current_price")
-        cached_price = row.get("current_price") or row.get("last_price")
-        cached_ts = row.get("last_price_at") or row.get("current_price_at")
-        pa = resolve_price_authority(ticker, entry, provider_price=provider_price, provider_source="intraday_cycle" if provider_price not in (None, "") else None, cached_price=cached_price, cached_timestamp=cached_ts)
-        item = dict(row)
-        item.update({"ticker": ticker, "entry_price": entry, "current_price": pa.get("display_price"), "current_price_source": pa.get("source_label"), "price_authority": pa})
-        for flag in ("manual_override", "stop_breached", "system_wanted", "risk", "broker_sell_submitted"):
-            if flag in hold:
-                item[flag] = hold.get(flag)
-        try:
-            if atlas_db.has_active_manual_hold_override(trade_id=item.get("id") or item.get("trade_id"), ticker=ticker):
-                item["manual_override"] = True
-                item["system_wanted"] = item.get("system_wanted") or "SELL"
-                item["risk"] = item.get("risk") or "HIGH"
-                item["broker_sell_submitted"] = bool(item.get("broker_sell_submitted", False))
-                try:
-                    item["stop_breached"] = float(item.get("current_price") or 0) <= float(item.get("stop_loss") or 0)
-                except Exception:
-                    item["stop_breached"] = bool(item.get("stop_breached", True))
-        except Exception:
-            pass
-        out.append(item)
-    return out
-
 def _holding_lines(summary):
     summary = summary if isinstance(summary, dict) else {}
-    positions = _authority_open_position_rows(summary)
-    return holding_block(positions, summary or {})
+    trades = _open_trades(summary)
+    if summary.get("live"):
+        _cache_open_trade_prices(trades)
+    return holding_block(trades, summary or {})
 
 
 def _pending_broker_confirmation_lines(summary=None):
-    """P0M-1 READ-ONLY report section. Equivalent pending-state coverage to
-    shared authority helper; report-only and no strategy/TFE/DB mutation."""
+    """P0M-1 READ-ONLY report section. Report-only: does not touch trade
+    status lifecycle, strategy, TFE, stops, targets, or exits."""
     try:
         rows = atlas_db.get_pending_broker_confirmation_trades()
     except Exception as exc:
@@ -1669,11 +1627,11 @@ def _pending_broker_confirmation_lines(summary=None):
         pnl_pct = ((exit_price - entry) / entry * 100.0) if entry else 0.0
         lines.append(
             f"⚠️ {ticker}\n"
-            f"   🚦 Exit trigger {SOURCE_DB}: {_price(exit_price)} (stop {SOURCE_DB}/{SOURCE_TFE} {_price(stop)})\n"
-            f"   🕐 Triggered {SOURCE_DB}: {exit_at}\n"
-            f"   📊 Est. P/L {SOURCE_RENDER_CALC}: {_signed_money(pnl)} ({_fmt_pct(pnl_pct, signed=True, decimals=1)})\n"
-            f"   broker_confirmed {SOURCE_BROKER}: NO\n"
-            f"   cash_credit {SOURCE_DB}: NO"
+            f"   🚦 Exit trigger: {_price(exit_price)} (stop {_price(stop)})\n"
+            f"   🕐 Triggered: {exit_at}\n"
+            f"   📊 Est. P/L: {_signed_money(pnl)} ({_fmt_pct(pnl_pct, signed=True, decimals=1)})\n"
+            f"   broker_confirmed: NO\n"
+            f"   cash_credit: NO"
         )
         lines.append("")
     return lines
@@ -2150,17 +2108,16 @@ def _quick_status_portfolio_footer(open_rows):
         shares = _num(row.get("quantity") or row.get("shares"), 0.0)
         entry = _num(row.get("entry_price") or row.get("price"), 0.0)
         cached = cached_prices.get(ticker, {})
-        pa = resolve_price_authority(ticker, entry, cached_price=cached.get("current_price") or cached.get("last_price"), cached_timestamp=cached.get("last_price_at"))
-        if pa.get("is_valuation_valid"):
-            total_invested += entry * shares
-            current_value += _num(pa.get("valuation_price")) * shares
+        current = _num(cached.get("current_price") or cached.get("last_price"), entry)
+        total_invested += entry * shares
+        current_value += current * shares
     blended_roi_dollar = current_value - total_invested
     blended_roi_pct = (blended_roi_dollar / total_invested * 100.0) if total_invested else 0.0
     return [
         "─────────────────────",
-        f"💼 Total Invested {SOURCE_RENDER_CALC}: {_money(total_invested)}",
-        f"📊 Current Value {SOURCE_RENDER_CALC}:  {_money(current_value)}",
-        f"📈 Blended ROI {SOURCE_RENDER_CALC}:    {_fmt_pct(blended_roi_pct, signed=True, decimals=1)} ({_signed_money(blended_roi_dollar)})",
+        f"💼 Total Invested: {_money(total_invested)}",
+        f"📊 Current Value:  {_money(current_value)}",
+        f"📈 Blended ROI:    {_fmt_pct(blended_roi_pct, signed=True, decimals=1)} ({_signed_money(blended_roi_dollar)})",
     ]
 
 

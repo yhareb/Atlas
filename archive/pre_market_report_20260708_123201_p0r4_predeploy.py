@@ -19,7 +19,6 @@ if os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB"):
     atlas_db.DB_PATH = os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB")
 from atlas_symbol_meta import normalize_price, normalize_snapshot_fields, ticker_label
 from atlas_report_blocks import holding_block, pullback_block, watch_list_block
-from atlas_report_authority import render_portfolio_visibility_block, provider_or_fallback_price, resolve_price_authority, SOURCE_PROVIDER, SOURCE_FALLBACK, SOURCE_CACHE, SOURCE_RENDER_CALC
 from atlas_time import current_et_market_date, is_trading_day, current_et_market_date_str, previous_et_trading_date_str
 from atlas_engine import _llm_judge_catalyst
 
@@ -164,8 +163,7 @@ def get_futures():
         if t:
             price = (t.get("day") or {}).get("c") or (t.get("prevDay") or {}).get("c")
             pct = t.get("todaysChangePerc")
-            source = SOURCE_PROVIDER if (t.get("day") or {}).get("c") else SOURCE_FALLBACK
-            lines.append(f"  {label} ({sym}) {source}: ${price:,.2f}  {SOURCE_RENDER_CALC} {arrow(pct)}" if price else f"  {label} ({sym}) {SOURCE_FALLBACK}: N/A")
+            lines.append(f"  {label} ({sym}): ${price:,.2f}  {arrow(pct)}" if price else f"  {label} ({sym}): N/A")
         else:
             lines.append(f"  {label} ({sym}): N/A")
     return lines
@@ -181,8 +179,7 @@ def get_top_movers():
                 pct = t.get("todaysChangePerc", 0)
                 price = normalize_price(ticker, (t.get("day") or {}).get("c"))
                 sym = "▲ +" if direction == "gainers" else "▼ "
-                price_badge = SOURCE_PROVIDER if price else SOURCE_FALLBACK
-            lst.append(f"  • {label} {price_badge} {'$'+f'{price:.2f}' if price else 'N/A'}  {SOURCE_RENDER_CALC} {sym}{abs(pct):.2f}%")
+                lst.append(f"  • {label} {'$'+f'{price:.2f}' if price else 'N/A'}  {sym}{abs(pct):.2f}%")
     return gl, ll
 
 def get_handoff_snapshot(max_buy=PRE_MARKET_HANDOFF_BUY_LIMIT, max_watch=PRE_MARKET_HANDOFF_WATCH_LIMIT):
@@ -197,15 +194,13 @@ def get_handoff_snapshot(max_buy=PRE_MARKET_HANDOFF_BUY_LIMIT, max_watch=PRE_MAR
         snap = massive_get(f"/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}")
         if snap and snap.get("ticker"):
             t = normalize_snapshot_fields(ticker, snap["ticker"]); price = (t.get("day") or {}).get("c"); pct = t.get("todaysChangePerc")
-            price_badge = SOURCE_PROVIDER if price else SOURCE_FALLBACK
-            bl.append(f"  • {ticker_label(ticker, t)} {price_badge} {'$'+f'{price:.2f}' if price else 'N/A'}  {SOURCE_RENDER_CALC} {arrow(pct)}")
+            bl.append(f"  • {ticker_label(ticker, t)} {'$'+f'{price:.2f}' if price else 'N/A'}  {arrow(pct)}")
         else: bl.append(f"  • {ticker}")
     for ticker in (data.get("WATCH",[]) or [])[:max_watch]:
         snap = massive_get(f"/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}")
         if snap and snap.get("ticker"):
             t = normalize_snapshot_fields(ticker, snap["ticker"]); price = (t.get("day") or {}).get("c"); pct = t.get("todaysChangePerc")
-            price_badge = SOURCE_PROVIDER if price else SOURCE_FALLBACK
-            wl.append(f"  • {ticker_label(ticker, t)} {price_badge} {'$'+f'{price:.2f}' if price else 'N/A'}  {SOURCE_RENDER_CALC} {arrow(pct)}")
+            wl.append(f"  • {ticker_label(ticker, t)} {'$'+f'{price:.2f}' if price else 'N/A'}  {arrow(pct)}")
         else: wl.append(f"  • {ticker}")
     return bl, wl
 
@@ -697,7 +692,7 @@ def _eodhd_vix_quote():
             prev_close = _to_float(rows[-2].get("close"))
             price = _to_float(rows[-1].get("close"))
             pct = ((price / prev_close) - 1.0) * 100.0 if price and prev_close else None
-            return {"ticker": "VIX.INDX", "price": price, "prev_close": prev_close, "pct": pct, "volume": None, "prev_volume": None, "source": "[PROVIDER]"}
+            return {"ticker": "VIX.INDX", "price": price, "prev_close": prev_close, "pct": pct, "volume": None, "prev_volume": None}
     except Exception:
         return None
     return None
@@ -727,7 +722,7 @@ def _yahoo_vix_quote():
             if len(valid) >= 2:
                 prev_close = valid[-2]
         pct = ((price / prev_close) - 1.0) * 100.0 if price and prev_close else None
-        return {"ticker": "^VIX", "price": price, "prev_close": prev_close, "pct": pct, "volume": None, "prev_volume": None, "source": "[FALLBACK]"}
+        return {"ticker": "^VIX", "price": price, "prev_close": prev_close, "pct": pct, "volume": None, "prev_volume": None}
     except Exception:
         return None
 
@@ -750,8 +745,8 @@ def _snapshot_quote(sym):
         open_price = _to_float(row.get("o"))
         pct = ((price / open_price) - 1.0) * 100.0 if price and open_price else None
         if price:
-            return {"ticker": "I:VIX", "price": price, "prev_close": open_price, "pct": pct, "volume": _to_float(row.get("v")), "prev_volume": None, "source": "[PROVIDER]"}
-        return _eodhd_vix_quote() or _yahoo_vix_quote() or {"ticker": "^VIX", "price": None, "prev_close": None, "pct": None, "volume": None, "prev_volume": None, "source": "[FALLBACK]"}
+            return {"ticker": "I:VIX", "price": price, "prev_close": open_price, "pct": pct, "volume": _to_float(row.get("v")), "prev_volume": None}
+        return _eodhd_vix_quote() or _yahoo_vix_quote() or {"ticker": "^VIX", "price": None, "prev_close": None, "pct": None, "volume": None, "prev_volume": None}
 
     data = massive_get(f"/v2/snapshot/locale/us/markets/stocks/tickers/{sym}") or {}
     t = normalize_snapshot_fields(sym, data.get("ticker") or {})
@@ -759,14 +754,13 @@ def _snapshot_quote(sym):
     prev = t.get("prevDay") or {}
     last_trade = t.get("lastTrade") or {}
     price = _to_float(day.get("c")) or _to_float(last_trade.get("p")) or _to_float(prev.get("c"))
-    price_source = "[PROVIDER]" if (_to_float(day.get("c")) or _to_float(last_trade.get("p"))) else "[FALLBACK]"
     prev_close = _to_float(prev.get("c"))
     pct = _to_float(t.get("todaysChangePerc"))
     if pct is None and price and prev_close:
         pct = ((price / prev_close) - 1.0) * 100.0
     volume = _to_float(day.get("v")) or _to_float(t.get("volume"))
     prev_volume = _to_float(prev.get("v"))
-    return {"ticker": sym, "price": price, "prev_close": prev_close, "pct": pct, "volume": volume, "prev_volume": prev_volume, "source": price_source}
+    return {"ticker": sym, "price": price, "prev_close": prev_close, "pct": pct, "volume": volume, "prev_volume": prev_volume}
 
 
 def _sentiment_value(ticker):
@@ -809,20 +803,16 @@ def _open_position_lines(macro_lines):
         ticker = str(row.get("ticker") or "?").upper()
         shares = _to_float(row.get("quantity"), 0) or 0
         entry = _to_float(row.get("price"))
-        quote = _snapshot_quote(ticker) or {}
-        pa = resolve_price_authority(ticker, entry, provider_price=quote.get("price"), provider_source=quote.get("source"), cached_price=row.get("current_price") or row.get("last_price"), cached_timestamp=row.get("last_price_at"))
+        now = _snapshot_quote(ticker).get("price") or entry
         positions.append({
             "ticker": ticker,
             "entry_price": entry,
-            "current_price": pa.get("display_price"),
-            "current_price_source": pa.get("source_label"),
-            "price_authority": pa,
+            "current_price": now,
             "stop_loss": row.get("stop_loss"),
             "target_price": row.get("target_price"),
             "quantity": shares,
         })
-    pending = atlas_db.get_pending_broker_confirmation_trades()
-    return render_portfolio_visibility_block(positions, pending)
+    return holding_block(positions, {})
 
 def _overnight_headlines(limit=5):
     return [re.sub(r"^\s*•\s*", "", str(x)).strip() for x in get_benzinga_headlines()[:limit] if str(x).strip()]
@@ -1060,8 +1050,7 @@ def _pullback_and_hot_lines():
     for row in atlas_db.get_pending_pullbacks(status="WAITING"):
         ticker = str(row.get("ticker") or "?").upper()
         trigger = _to_float(row.get("trigger_price"))
-        quote = _snapshot_quote(ticker) or {}
-        now, now_source = provider_or_fallback_price(quote.get("price"), _to_float(row.get("reference_price")))
+        now = _snapshot_quote(ticker).get("price") or _to_float(row.get("reference_price"))
         pct = (((now / trigger) - 1.0) * 100.0) if now and trigger else None
         if pct is not None and pct > 10:
             hot.append(f"{ticker_label(ticker, row)} +{pct:.0f}%")
@@ -1081,7 +1070,6 @@ def _pullback_and_hot_lines():
             "entry": trigger,
             "entry_price": trigger,
             "current_price": now,
-            "current_price_source": now_source,
             "price": now,
         })
         pullback_rows.append(item)
@@ -1099,12 +1087,12 @@ def _sector_pulse_lines():
             sym = future_map[fut]
             q = fut.result()
             if q.get("pct") is not None:
-                rows.append((sym, q["pct"], labels.get(sym, "sector"), q.get("source") or SOURCE_PROVIDER))
+                rows.append((sym, q["pct"], labels.get(sym, "sector")))
     rows.sort(key=lambda x: abs(x[1]), reverse=True)
     lines = []
-    for sym, pct, label, source in rows[:4]:
+    for sym, pct, label in rows[:4]:
         reason = f"{label} leading" if pct >= 0 else f"{label} under pressure"
-        lines.append(f"{sym} {source} {SOURCE_RENDER_CALC} {_fmt_pct(pct)} — {reason}")
+        lines.append(f"{sym} {_fmt_pct(pct)} — {reason}")
     return lines
 
 
@@ -1201,7 +1189,7 @@ def generate_wavef_pre_market_brief(send=False, market_day=None):
         sentiment += "; macro events on deck"
 
     lines = [
-        f"🦅 ATLAS PRE-MARKET BRIEF — {date_label} · SPY {spy.get('source') or SOURCE_PROVIDER} {_fmt_price(spy.get('price'))} ({SOURCE_RENDER_CALC} {_fmt_pct(spy.get('pct'))}) | QQQ {qqq.get('source') or SOURCE_PROVIDER} {_fmt_price(qqq.get('price'))} ({SOURCE_RENDER_CALC} {_fmt_pct(qqq.get('pct'))}) | VIX {vix.get('source') or SOURCE_FALLBACK} {_fmt_price(vix.get('price'))} ({SOURCE_RENDER_CALC} {_fmt_pct(vix.get('pct'))}) · {sentiment}",
+        f"🦅 ATLAS PRE-MARKET BRIEF — {date_label} · SPY {_fmt_price(spy.get('price'))} ({_fmt_pct(spy.get('pct'))}) | QQQ {_fmt_price(qqq.get('price'))} ({_fmt_pct(qqq.get('pct'))}) | VIX {_fmt_price(vix.get('price'))} ({_fmt_pct(vix.get('pct'))}) · {sentiment}",
         "",
         _section("MACRO BRIEFING"),
     ]

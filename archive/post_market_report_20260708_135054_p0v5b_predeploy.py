@@ -600,9 +600,6 @@ def generate_post_market_report(send=True, market_date=None, now_et=None):
     if today in NYSE_HOLIDAYS_2026 or today.weekday() >= 5:
         return  # Silent on holidays and weekends
     from atlas_report_handoff import build_atlas_handoff_report
-    # P0V-3: active post-market path delegates portfolio authority to atlas_report_handoff,
-    # which uses atlas_report_authority after P0R. Legacy branch below remains unreachable
-    # and is scheduled for safe retirement in a later batch.
     message = _space_report_items(build_atlas_handoff_report(context="post_market", report_date=today))
     if send:
         send_telegram(message)

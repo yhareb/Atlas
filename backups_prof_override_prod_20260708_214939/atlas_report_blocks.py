@@ -188,11 +188,6 @@ def _as_position(row: Any) -> dict[str, Any]:
         "current_value": current_value,
         "unrealized_pl_usd": pl_usd,
         "unrealized_pl_pct": pl_pct,
-        "manual_override": bool(_row_value(row, "manual_override", default=False)),
-        "stop_breached": bool(_row_value(row, "stop_breached", default=False)),
-        "system_wanted": _row_value(row, "system_wanted", default=None),
-        "risk": _row_value(row, "risk", default=None),
-        "broker_sell_submitted": bool(_row_value(row, "broker_sell_submitted", default=False)),
     }
 
 def portfolio_footer(total_invested: Any, current_value: Any, blended_roi: Any | None = None) -> list[str]:
@@ -236,16 +231,8 @@ def holding_block(positions: Iterable[Any] | None, summary: dict[str, Any] | Non
                 f"   🚦 Stop {SOURCE_DB}/{SOURCE_TFE} {_price(trade['stop_loss'])}",
                 f"   🎯 Target {SOURCE_DB}/{SOURCE_TFE} {_price(trade['target_price'])}",
                 f"   {SOURCE_RENDER_CALC} ({_fmt_pct(trade['unrealized_pl_pct'], signed=True, decimals=0)} · {_signed_money(trade['unrealized_pl_usd'])} · ~{_money(trade['current_value'])})",
+                "",
             ]
-            if trade.get("manual_override") and trade.get("stop_breached"):
-                lines += [
-                    "   ⚠️ MANUAL OVERRIDE — STOP BREACHED — HIGH RISK",
-                    f"   System wanted: {trade.get('system_wanted') or 'SELL'}",
-                    "   Professor override: HOLD",
-                    f"   Broker sell placed: {'YES' if trade.get('broker_sell_submitted') else 'NO'}",
-                    "   Broker confirmation pending: NO",
-                ]
-            lines.append("")
         else:
             reason = (trade.get("price_authority") or {}).get("reason") or "price_unavailable"
             lines += [

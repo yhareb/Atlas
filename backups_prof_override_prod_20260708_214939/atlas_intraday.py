@@ -1623,21 +1623,6 @@ def _authority_open_position_rows(summary=None):
         pa = resolve_price_authority(ticker, entry, provider_price=provider_price, provider_source="intraday_cycle" if provider_price not in (None, "") else None, cached_price=cached_price, cached_timestamp=cached_ts)
         item = dict(row)
         item.update({"ticker": ticker, "entry_price": entry, "current_price": pa.get("display_price"), "current_price_source": pa.get("source_label"), "price_authority": pa})
-        for flag in ("manual_override", "stop_breached", "system_wanted", "risk", "broker_sell_submitted"):
-            if flag in hold:
-                item[flag] = hold.get(flag)
-        try:
-            if atlas_db.has_active_manual_hold_override(trade_id=item.get("id") or item.get("trade_id"), ticker=ticker):
-                item["manual_override"] = True
-                item["system_wanted"] = item.get("system_wanted") or "SELL"
-                item["risk"] = item.get("risk") or "HIGH"
-                item["broker_sell_submitted"] = bool(item.get("broker_sell_submitted", False))
-                try:
-                    item["stop_breached"] = float(item.get("current_price") or 0) <= float(item.get("stop_loss") or 0)
-                except Exception:
-                    item["stop_breached"] = bool(item.get("stop_breached", True))
-        except Exception:
-            pass
         out.append(item)
     return out
 

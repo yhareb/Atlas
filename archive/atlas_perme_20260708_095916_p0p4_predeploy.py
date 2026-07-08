@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import time
@@ -27,8 +28,6 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 from atlas_provider_guard import eodhd_get_json  # noqa: E402
-import atlas_db  # noqa: E402
-from atlas_report_authority import portfolio_context_tickers  # noqa: E402
 from atlas_rag_flags import parse_flags  # noqa: E402
 try:
     from atlas_perme_engine_packet import validate_packet as _validate_engine_packet
@@ -535,17 +534,15 @@ SECTOR_HOLDING_TICKERS = {
 
 
 def _open_holding_tickers() -> set[str]:
-    # Portfolio context must include OPEN plus broker/cash-pending exposure;
-    # never use status='OPEN' alone for Professor-facing context.
+    # Use the canonical Atlas trade ledger. The legacy positions table is gone.
+    db_path = "/Users/yasser/scripts/atlas.db"
     try:
-        open_rows = atlas_db.get_open_positions()
+        con = sqlite3.connect(db_path)
+        rows = con.execute("SELECT ticker FROM trades WHERE status='OPEN'").fetchall()
+        con.close()
+        return {str(row[0] or "").upper() for row in rows if row and row[0]}
     except Exception:
-        open_rows = []
-    try:
-        pending_rows = atlas_db.get_pending_broker_confirmation_trades()
-    except Exception:
-        pending_rows = []
-    return portfolio_context_tickers(open_rows, pending_rows)
+        return set()
 
 
 def _sector_holding_tickers(sector: str) -> list[str]:
@@ -765,764 +762,55 @@ def _earnings_sentence(context: dict[str, Any] | None) -> str | None:
     return None
 
 
-def _clean_market_phrase(text: str, limit: int = 180) -> str:
-    cleaned = " ".join(str(text or "").replace("**", "").split())
-    cleaned = re.sub(r"\bRSI\s+(?:at\s+)?([0-9]+(?:\.[0-9]+)?)\b", r"RSI \1", cleaned, flags=re.I)
-    if len(cleaned) > limit:
-        cleaned = cleaned[:limit].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
-    return cleaned
-
-
-def _brief_bullets(briefing: str, heading: str) -> list[str]:
-    bullets: list[str] = []
-    for line in _markdown_section(briefing, heading):
-        cleaned = _clean_section_line(line)
-        if cleaned and cleaned.lower() not in {"none", "none."}:
-            bullets.append(cleaned)
-    return bullets
-
-
-def _first_matching_line(lines: list[str], terms: tuple[str, ...]) -> str | None:
-    for line in lines:
-        upper = line.upper()
-        if any(term in upper for term in terms):
-            return line
-    return lines[0] if lines else None
-
-
-def _market_tape_from_evidence(evidence: list[str]) -> str:
-    tape = _first_matching_line(evidence, ("SMH", "XLK", "NASDAQ", "S&P", "SPY", "DOW", "XLE", "XLF"))
-    if not tape:
-        return "Tape detail is limited; treat the brief as context until live market data confirms direction."
-    return _clean_market_phrase(tape, 210)
-
-
-def _driver_from_evidence(evidence: list[str], risks: list[str]) -> str:
-    driver = _first_matching_line(evidence, ("TRUMP", "TARIFF", "SANCTION", "CEASEFIRE", "WAR", "IRAN", "MIDDLE EAST", "HORMUZ", "TAIWAN", "CHINA", "EXPORT RESTRICTION", "FEDWATCH", "RATE-HIKE", "RATE HIKE", "VIX", "OIL", "GOLD", "DOLLAR", "YIELDS", "NASDAQ FUTURES", "SAMSUNG", "FED", "FOMC", "CPI", "NFP", "ADP", "AI", "SEMICONDUCTOR"))
-    if not driver:
-        driver = _first_matching_line(risks, ("MASSIVE CATALYST", "POLICY", "GEOPOLITICAL", "TARIFF", "SANCTION", "CEASEFIRE", "IRAN", "HORMUZ", "CHINA", "TAIWAN", "RATE", "FEDWATCH", "SEMICONDUCTOR", "ENERGY", "FED"))
-    if not driver:
-        return "No single driver is clean enough to overstate; keep the move framed as mixed macro/tape context."
-    return _clean_market_phrase(driver, 220)
-
-
-def _rotation_from_evidence(evidence: list[str], flags: list[str]) -> str:
-    text = " ".join(evidence + flags).upper()
-    winners = []
-    stretched = []
-    losers = []
-    if "XLE" in text or "ENERGY" in text or "OIL" in text or "HORMUZ" in text or "IRAN" in text or "MIDDLE EAST" in text:
-        winners.append("energy")
-    if "GOLD" in text:
-        winners.append("gold/safety")
-    if "DOLLAR" in text or "USD" in text:
-        winners.append("dollar defensives")
-    if "FINANCIALS" in text:
-        stretched.append("financials")
-    if "HEALTHCARE" in text:
-        stretched.append("healthcare")
-    if "SMH" in text or "SEMI" in text or "SEMICONDUCTOR" in text or "CHIP" in text or "TAIWAN" in text or "EXPORT RESTRICTION" in text:
-        losers.append("semiconductors")
-    if "XLK" in text or "TECH" in text or "NASDAQ" in text or "FUTURES" in text:
-        losers.append("tech/growth")
-    if winners or stretched or losers:
-        clauses = []
-        if winners:
-            clauses.append(f"money favored {', '.join(winners)}")
-        if stretched:
-            clauses.append(f"{', '.join(stretched)} looked stretched rather than fresh leadership")
-        if losers:
-            clauses.append(f"{', '.join(losers)} came under pressure")
-        return "; ".join(clauses).capitalize() + "."
-    return "Rotation signal is not strong enough to call; do not force a sector narrative."
-
-def _geopolitical_market_impact(evidence: list[str], flags: list[str]) -> str | None:
-    text = " ".join(evidence + flags).upper()
-    if not any(term in text for term in ("TRUMP", "TARIFF", "SANCTION", "CEASEFIRE", "WAR", "IRAN", "MIDDLE EAST", "HORMUZ", "CHINA", "TAIWAN", "EXPORT RESTRICTION", "FEDWATCH", "RATE-HIKE", "RATE HIKE", "ELECTION", "POLICY")):
-        return None
-    moved = []
-    if "NASDAQ" in text or "FUTURES" in text:
-        moved.append("equity futures / Nasdaq risk appetite")
-    if "VIX" in text:
-        moved.append("VIX volatility")
-    if "OIL" in text or "HORMUZ" in text or "IRAN" in text or "MIDDLE EAST" in text:
-        moved.append("oil/energy")
-    if "GOLD" in text:
-        moved.append("gold/safety bid")
-    if "DOLLAR" in text or "USD" in text:
-        moved.append("dollar")
-    if "YIELD" in text or "FEDWATCH" in text or "RATE-HIKE" in text or "RATE HIKE" in text:
-        moved.append("yields / rate-pricing")
-    sectors = []
-    if any(term in text for term in ("OIL", "IRAN", "HORMUZ", "MIDDLE EAST")):
-        sectors.append("energy")
-    if any(term in text for term in ("NASDAQ", "TECH", "CHIP", "TAIWAN", "EXPORT RESTRICTION")):
-        sectors.append("tech/semis")
-    if any(term in text for term in ("YIELD", "FEDWATCH", "RATE")):
-        sectors.append("banks and high-duration growth")
-    market = ", ".join(list(dict.fromkeys(moved))) if moved else "risk appetite"
-    sector_text = ", ".join(list(dict.fromkeys(sectors))) if sectors else "broad index risk"
-    return f"Political/geopolitical shock is market-relevant because it moved {market}. Sectors affected: {sector_text}. TFE should watch confirmation in price, volatility, rates, and sector breadth — context only, no trade instruction."
-
-
-def _portfolio_impact_from_flags(flags: list[str]) -> str:
-    tickers = []
-    sectors = []
-    for flag in flags:
-        item = str(flag or "").strip()
-        upper = item.upper()
-        if upper.startswith(("TICKER_NOTE:", "EARNINGS_RISK:")):
-            tickers.append(item.split(":", 1)[1].strip().upper())
-        elif upper.startswith(("SECTOR_NOTE:", "SECTOR_OVERBOUGHT:")):
-            sectors.append(item.split(":", 1)[1].strip().upper())
-    parts = []
-    if tickers:
-        parts.append("watch " + ", ".join(list(dict.fromkeys(tickers))[:6]))
-    if sectors:
-        parts.append("sector context: " + ", ".join(list(dict.fromkeys(sectors))[:4]))
-    if parts:
-        return "; ".join(parts) + ". Context only — no execution instruction."
-    return "No direct portfolio ticker flag in this brief. Context only — no execution instruction."
-
-
-def _perme_view_from_regime(briefing: str, flags: list[str]) -> str:
+def _market_tone_sentence(briefing: str, context: dict[str, Any] | None, now_et: datetime, flags: list[str]) -> str:
     regime = _regime_label(briefing, flags)
-    regime_line = _first_section_line(briefing, "REGIME", "No decisive regime sentence supplied.")
+    event = _first_macro_event(context, now_et)
     if regime == "RISK-OFF":
-        prefix = "Cautious tape."
+        base = "⚠️ Markets are on the defensive heading into the session."
     elif regime == "RISK-ON":
-        prefix = "Constructive tape."
+        base = "🟢 Markets have a constructive tone heading into the session."
     else:
-        prefix = "Neutral tape."
-    return f"{prefix} {_clean_market_phrase(regime_line, 185)}"
+        base = "📊 Markets are relatively calm heading into the session."
+    if event:
+        name, when = event
+        display_name = "a Fed speaker" if name.lower() == "fed speaker" else name
+        return f"{base} 📅 The main thing to watch today is {display_name} at {when}."
+    if _has_only_low_macro_events(context):
+        return f"{base} No major macro events today."
+    return f"{base} No major macro events today."
 
 
-def _next_catalyst_from_brief(context: dict[str, Any] | None, now_et: datetime, evidence: list[str], risks: list[str]) -> str:
+def _final_risk_sentence(briefing: str, flags: list[str]) -> str:
+    regime = _regime_label(briefing, flags)
+    if regime == "RISK-OFF":
+        return "⚠️ Nothing else is urgent for your other open positions. System is defensive — keep stops intact and avoid forcing new entries until the tape improves."
+    if regime == "RISK-ON":
+        return "🟢 Nothing urgent for your other open positions. System has a positive tilt, but entries still need Atlas confirmation."
+    return "Nothing urgent for your other open positions. System is running neutral — no new entries blocked, but no strong tailwind either."
+
+
+def _next_watch_sentence(context: dict[str, Any] | None, now_et: datetime) -> str:
     event = _first_macro_event(context, now_et)
     if event:
         name, when = event
-        return f"{name} at {when}. Translate the release into rates, liquidity, and sector impact."
-    catalyst = _first_matching_line(evidence + risks, ("FOMC", "FED", "CPI", "NFP", "ADP", "AUCTION", "EIA", "EARNINGS"))
-    if catalyst:
-        return _clean_market_phrase(catalyst, 190)
-    return "No major scheduled catalyst isolated; watch fresh macro headlines and Atlas/TFE confirmations."
-
-
-def _readability_emoji(text: str, default: str = "⚠️") -> str:
-    upper = str(text or "").upper()
-    if any(term in upper for term in ("SMH", "SEMI", "SEMICONDUCTOR", "CHIP")) and any(term in upper for term in ("PRESSURE", "UNDER PRESSURE", "WEAK", "FALL", "DOWN")):
-        return "🔻"
-    if any(term in upper for term in ("NASDAQ", "FUTURES", "VIX", "RISK-OFF", "CAUTIOUS", "FALL", "DOWN", "PRESSURE", "WEAK")):
-        return "📉"
-    if any(term in upper for term in ("UP", "RISE", "JUMP", "HIGHER", "CONSTRUCTIVE", "FAVORED")) and not any(term in upper for term in ("VIX", "OIL SHOCK", "RISK")):
-        return "📈"
-    if any(term in upper for term in ("FED", "FEDWATCH", "YIELD", "RATE", "AUCTION")):
-        return "🏦"
-    if any(term in upper for term in ("OIL", "ENERGY", "HORMUZ", "IRAN", "MIDDLE EAST")):
-        return "🛢️"
-    if any(term in upper for term in ("DOLLAR", "USD", "FX")):
-        return "💵"
-    if any(term in upper for term in ("NASDAQ", "TECH", "GROWTH")):
-        return "💻"
-    if any(term in upper for term in ("AI", "ARTIFICIAL INTELLIGENCE")):
-        return "🧠"
-    if any(term in upper for term in ("SMH", "SEMI", "SEMICONDUCTOR", "CHIP")):
-        return "🔻"
-    if any(term in upper for term in ("DEFENSIVE", "DEFENSIVES", "HEALTHCARE", "STAPLES", "SAFETY")):
-        return "🛡️"
-    return default
-
-def _scan_line(icon: str, text: str) -> str:
-    return f"{icon} {text}"
+        return f"📅 Next to watch: {name} at {when} today."
+    return "📅 Next to watch: No major macro events today; normal Atlas gates and any fresh macro headlines."
 
 
 def _perme_macro_prose(briefing: str, context: dict[str, Any] | None, now_et: datetime, flags: list[str]) -> str:
-    """Bloomberg/CNN market-desk style prose. Headline+tone, what moved, why it
-    matters, portfolio relevance, next catalyst, Perme read — as natural, fluent,
-    publishable paragraphs. No section labels, no slash-joined phrases, no raw
-    list joins, no overloaded everything-at-once sentences, no awkward
-    "the SMH"/"or FOMC Minutes"/"FedWatch, odds shifted" phrasing. English only.
-    No jargon, no provenance labels, no buy/sell/stop/target language."""
-    evidence = _brief_bullets(briefing, "EVIDENCE")
-    risks = _brief_bullets(briefing, "RISK FACTORS")
-    regime = _regime_label(briefing, flags)
-    regime_text = _first_section_line(briefing, "REGIME", "")
-    driver = _driver_from_evidence(evidence, risks)
-    tape = _market_tape_from_evidence(evidence)
-    rotation = _rotation_from_evidence(evidence, flags)
-    portfolio = _portfolio_impact_from_flags(flags)
-    perme_view = _perme_view_from_regime(briefing, flags)
-    catalyst = _next_catalyst_from_brief(context, now_et, evidence, risks)
-    geopolitical = _geopolitical_market_impact(evidence, flags)
-
-    seen_abbrevs: set[str] = set()
-
-    if regime == "RISK-OFF":
-        headline = "Markets are leaning cautious today."
-    elif regime == "RISK-ON":
-        headline = "Markets are leaning constructive today."
-    else:
-        headline = "Markets are mixed today, with no clear direction yet."
-
-    driver_clean = _prep(driver, seen_abbrevs)
-    tape_clean = _prep(tape, seen_abbrevs)
-    rotation_clean = _apply_direct_phrase_fixes(_rewrite_sector_fund_tickers(_strip_role_jargon(rotation), seen_abbrevs), seen_abbrevs)
-
-    fused = _compose_moved_sentence(driver_clean, tape_clean, rotation_clean, catalyst, regime_text)
-    if fused:
-        tone_paragraph = headline
-        moved_paragraph = fused
-    else:
-        tone_paragraph = f"{headline} {driver_clean}".strip()
-        if tape_clean.strip().rstrip(".") == driver_clean.strip().rstrip("."):
-            moved_paragraph = _reconcile_moved("", rotation_clean).strip()
-        else:
-            moved_paragraph = _reconcile_moved(tape_clean, rotation_clean)
-        moved_paragraph = _rewrite_rsi_reading(moved_paragraph, seen_abbrevs)
-
-    if geopolitical:
-        why_paragraph = _rewrite_why_it_matters(_prep(geopolitical, seen_abbrevs))
-    else:
-        why_paragraph = "No single headline is driving today's tape; the moves reflect ordinary day-to-day positioning rather than a specific news trigger."
-
-    portfolio_paragraph = _rewrite_portfolio_relevance(_prep(portfolio, seen_abbrevs))
-
-    catalyst_paragraph = _rewrite_next_catalyst(_prep(catalyst, seen_abbrevs))
-    perme_read_paragraph = _rewrite_tape_tone(_prep(perme_view, seen_abbrevs))
-    if not perme_read_paragraph:
-        perme_read_paragraph = "No strong read either way today — this is background market context, not a trading decision."
-
-    paragraphs = [p for p in (tone_paragraph, moved_paragraph, why_paragraph, portfolio_paragraph, catalyst_paragraph, perme_read_paragraph) if p]
-    expanded = [_capitalize_first(_deslash(re.sub(r",\s*,", ",", _expand_first_mentions(p, seen_abbrevs)))) for p in paragraphs]
-    expanded = [p if p.endswith((".", "!", "?")) else p + "." for p in expanded]
-    return "\n\n".join(expanded)
-
-
-# ---------------------------------------------------------------------------
-# P0H-6 Perme humanization: plain-language glossary + editorial rewrite helpers
-# ---------------------------------------------------------------------------
-_ABBREV_GLOSSARY: dict[str, str] = {
-    "CPI": "the main US inflation report",
-    "PPI": "a measure of wholesale-level inflation",
-    "NONFARM PAYROLLS": "the monthly US jobs report",
-    "NFP": "the monthly US jobs report",
-    "ADP": "an early private read on the jobs market",
-    "GDP": "the broadest measure of economic growth",
-    "ISM": "a survey of factory and services activity",
-    "PCE": "the Fed's preferred inflation gauge",
-    "VIX": "Wall Street's volatility index",
-    "RATE-HIKE": "an increase in the Fed's benchmark interest rate",
-    "RATE HIKE": "an increase in the Fed's benchmark interest rate",
-    "EIA": "the weekly US government report on oil and fuel inventories",
-    "SPY": "the S&P 500 index fund",
-    "QQQ": "the Nasdaq-100 index fund",
-}
-
-# Tokens handled as a direct phrase substitution instead of a "TOKEN (explanation)"
-# or appositive pattern, because the appositive read unnatural for these specific
-# terms per Prof's explicit correction (e.g. "or FOMC Minutes" -> "the Fed's FOMC
-# minutes"; "FedWatch odds shifted" -> "the market's Fed-rate odds shifted").
-_DIRECT_PHRASE_FIXES: list[tuple[re.Pattern, str, tuple[str, ...]]] = [
-    (re.compile(r"\bFOMC\s+MINUTES\b", re.I), "the Fed's FOMC minutes", ("FOMC", "FOMC MINUTES")),
-    # P0H-7: "FedWatch repricing" (with a leading preposition, e.g. "on FedWatch
-    # repricing") is handled as its own full-phrase fix BEFORE the generic
-    # "FedWatch odds"/bare "FedWatch" fixes below, per Prof's correction that
-    # "the market's Fed-rate odds tracker repricing" is an awkward noun-pileup.
-    # Rewritten into a plain verb clause: "..., as traders repriced the odds of
-    # a Fed move." instead of stacking two nouns ("tracker" + "repricing").
-    (re.compile(r"\s+on\s+FedWatch\s+repricing\b", re.I), ", with traders repricing the odds of a Fed move", ("FEDWATCH",)),
-    (re.compile(r"\bFedWatch\s+repricing\b", re.I), "traders repricing the odds of a Fed move", ("FEDWATCH",)),
-    (re.compile(r"\bFedWatch\s+odds\b", re.I), "the market's Fed-rate odds", ("FEDWATCH",)),
-    (re.compile(r"\bFedWatch\b", re.I), "the market's Fed-rate odds tracker", ("FEDWATCH",)),
-]
-
-# Sector-fund tickers rewritten directly into plain sector-stock language rather
-# than an appositive ("the semiconductor sector fund, the SMH,"), per Prof's
-# correction: "the SMH" should read as "semiconductor stocks" (or, when a fund
-# label is genuinely useful, "the SMH semiconductor ETF" — plain sector language is
-# used here since these mentions are always describing the sector's move, not the
-# fund product itself).
-_SECTOR_FUND_TICKERS: dict[str, str] = {
-    "SMH": "semiconductor stocks",
-    "XLK": "technology stocks",
-    "XLE": "energy stocks",
-    "XLF": "financial stocks",
-}
-
-
-def _rewrite_sector_fund_tickers(text: str, seen: set[str]) -> str:
-    """Rewrite bare sector-fund ticker mentions into plain sector-stock language,
-    fixing subject-verb agreement (singular ticker subject -> plural sector noun)."""
-    for ticker, phrase in _SECTOR_FUND_TICKERS.items():
-        pattern = re.compile(r"\b" + re.escape(ticker) + r"\s+is\b", re.I)
-        text = pattern.sub(phrase + " are", text)
-        pattern_bare = re.compile(r"\b" + re.escape(ticker) + r"\b", re.I)
-        if pattern_bare.search(text):
-            text = pattern_bare.sub(phrase, text)
-            seen.add(ticker)
-    return text
-
-
-def _apply_direct_phrase_fixes(text: str, seen: set[str]) -> str:
-    """Apply direct phrase substitutions (FOMC minutes, FedWatch odds, ...) before
-    generic glossary expansion runs, so these specific terms never hit the more
-    generic 'explanation, or TOKEN,' appositive machinery and never produce
-    duplicated-noun phrasing like 'FedWatch, odds shifted'."""
-    for pattern, replacement, seen_tokens in _DIRECT_PHRASE_FIXES:
-        if pattern.search(text):
-            already_explained = seen_tokens[0] in seen
-            text = pattern.sub(replacement if not already_explained else replacement.split(",")[-1].strip() or replacement, text)
-            for token in seen_tokens:
-                seen.add(token)
-    return text
-
-
-def _abbrev_pattern() -> re.Pattern:
-    keys = sorted(_ABBREV_GLOSSARY.keys(), key=len, reverse=True)
-    escaped = [re.escape(k) for k in keys]
-    return re.compile(r"\b(" + "|".join(escaped) + r")\b", re.IGNORECASE)
-
-
-_ABBREV_RE = _abbrev_pattern()
-
-# Index/ETF tokens that read naturally as "<explanation>, the <TOKEN>, ..."
-# (definite-article appositive). Sector-fund tickers (SMH/XLK/XLE/XLF) are
-# deliberately excluded — they are handled by _rewrite_sector_fund_tickers()
-# instead, per Prof's correction that "the SMH" reads unnaturally.
-_DEFINITE_ARTICLE_TOKENS = {"VIX", "SPY", "QQQ"}
-
-
-def _expand_first_mentions(text: str, seen: set[str]) -> str:
-    """Explain each abbreviation in plain English first, on its first mention only.
-    Index tokens (VIX, SPY, QQQ) use a definite-article appositive: 'Wall Street's
-    volatility index, the VIX, rises...'. Other abbreviations use a lighter
-    'or TOKEN' appositive. seen is a shared, mutable set across the whole message
-    so an abbreviation already explained earlier is left as the bare token later."""
-    def _replace(match: "re.Match[str]") -> str:
-        token = match.group(1)
-        key = token.upper()
-        if key in seen:
-            return token
-        seen.add(key)
-        explanation = _ABBREV_GLOSSARY.get(key)
-        if not explanation:
-            return token
-        if key in _DEFINITE_ARTICLE_TOKENS:
-            return f"{explanation}, the {token},"
-        return f"{explanation}, or {token},"
-
-    return _ABBREV_RE.sub(_replace, text)
-
-
-def _rewrite_rsi_reading(text: str, seen: set[str]) -> str:
-    """Rewrite a raw 'RSI 72.5' / 'RSI at 72.5' fragment into flowing prose instead of
-    abbreviation-expanding it inline. Marks RSI as already seen so the generic
-    glossary expansion does not also fire on the same token."""
-    def _replace(match: "re.Match[str]") -> str:
-        seen.add("RSI")
-        value = match.group(1)
-        return f"a momentum reading (RSI) of {value}"
-
-    return re.sub(r"\bRSI\s+(?:at\s+)?([0-9]+(?:\.[0-9]+)?)\b", _replace, text, flags=re.I)
-
-
-_ROLE_DISCLAIMER_PATTERNS = (
-    re.compile(r"\bTFE should\b.*?(?=[.!?]|$)", re.I),
-    re.compile(r"—?\s*context only,?\s*no trade instruction\.?", re.I),
-    re.compile(r"\.?\s*Context only\s*—\s*no execution instruction\.?", re.I),
-    re.compile(r"⚖️.*?Context vs TFE action.*?(?=$)", re.I | re.S),
-    re.compile(r"\[PROVIDER\]|\[LLM\]|\[FALLBACK\]|\[CACHE\]|\[RENDER-CALC\]", re.I),
-)
-
-
-def _strip_role_jargon(text: str) -> str:
-    cleaned = text
-    for pattern in _ROLE_DISCLAIMER_PATTERNS:
-        cleaned = pattern.sub("", cleaned)
-    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" .;—-")
-    return cleaned
-
-
-_SECTOR_ALIASES = {
-    "semiconductors": ("smh", "semiconductor", "chip", "semis"),
-    "tech/growth": ("nasdaq", "tech", "xlk", "growth"),
-    "energy": ("oil", "energy", "xle"),
-    "financials": ("bank", "financial", "xlf"),
-}
-
-# Friendly noun each canonical sector reads as in fused, publishable prose.
-_FRIENDLY_SECTOR_NOUN = {
-    "semiconductors": "chip",
-    "tech/growth": "growth",
-    "energy": "energy",
-    "financials": "bank",
-}
-
-
-def _sector_keys_in(text: str) -> set[str]:
-    upper = text.upper()
-    found = set()
-    for canonical, aliases in _SECTOR_ALIASES.items():
-        if any(alias.upper() in upper for alias in (canonical,) + aliases):
-            found.add(canonical)
-    return found
-
-
-# Bare-slash pairs (e.g. "Hormuz/Iran", "gold/safety") where both sides are plain
-# words with no surrounding spaces. Rewritten to "A and B" as a general safety net,
-# distinct from the spaced " / " phrase-mapping used for mover/sector lists.
-_BARE_SLASH_RE = re.compile(r"\b([A-Za-z][A-Za-z\-]*)/([A-Za-z][A-Za-z\-]*)\b")
-
-
-def _deslash(text: str) -> str:
-    """Rewrite any remaining bare slash-joined word pair into natural 'A and B'
-    prose. Applied as a final safety-net pass on every paragraph so no raw slash
-    survives regardless of which upstream helper produced it."""
-    def _replace(match: "re.Match[str]") -> str:
-        left, right = match.group(1), match.group(2)
-        return f"{left} and {right}"
-
-    return _BARE_SLASH_RE.sub(_replace, text)
-
-
-def _humanize_rotation(text: str) -> str:
-    """Rewrite the raw 'money favored X, Y; Z looked stretched; W, V came under
-    pressure' template (from _rotation_from_evidence) into flowing market-desk
-    prose instead of a semicolon-joined raw list, e.g. 'Money flowed into energy
-    and gold, while chip and growth names came under pressure.'"""
-    clauses = [c.strip(" .") for c in text.split(";") if c.strip(" .")]
-    if not clauses:
-        return text
-
-    favored, stretched, pressured, other = [], [], [], []
-    for clause in clauses:
-        m = re.match(r"^money favored (.+)$", clause, re.I)
-        if m:
-            favored.append(m.group(1))
-            continue
-        m = re.match(r"^(.+?) looked stretched rather than fresh leadership$", clause, re.I)
-        if m:
-            stretched.append(m.group(1))
-            continue
-        m = re.match(r"^(.+?) came under pressure$", clause, re.I)
-        if m:
-            pressured.append(m.group(1))
-            continue
-        other.append(clause)
-
-    def _friendly_join(raw_items: list[str], cap: int = 3) -> str:
-        names = []
-        for raw in raw_items:
-            for part in raw.split(","):
-                part = part.strip()
-                if not part:
-                    continue
-                canonical = None
-                for sector, aliases in _SECTOR_ALIASES.items():
-                    if part.lower() == sector or part.lower() in aliases:
-                        canonical = _FRIENDLY_SECTOR_NOUN[sector]
-                        break
-                if canonical:
-                    names.append(canonical + " names" if canonical in ("chip", "growth", "bank") else canonical)
-                else:
-                    names.append(_deslash(part).replace("_", " "))
-        names = list(dict.fromkeys(names))[:cap]
-        if not names:
-            return ""
-        if len(names) == 1:
-            return names[0]
-        return ", ".join(names[:-1]) + " and " + names[-1]
-
-    sentence_parts = []
-    if favored:
-        sentence_parts.append(f"Money flowed into {_friendly_join(favored)}")
-    if stretched:
-        prefix = "while" if sentence_parts else "Meanwhile,"
-        sentence_parts.append(f"{prefix} {_friendly_join(stretched)} looked stretched rather than showing fresh leadership")
-    if pressured:
-        prefix = "while" if sentence_parts else "Meanwhile,"
-        sentence_parts.append(f"{prefix} {_friendly_join(pressured)} came under pressure")
-    for clause in other:
-        sentence_parts.append(_deslash(clause))
-
-    if not sentence_parts:
-        return _deslash(text)
-    result = " ".join(sentence_parts) + "."
-    result = result[0].upper() + result[1:]
-    return result
-
-
-def _reconcile_moved(tape: str, rotation: str) -> str:
-    """Avoid a flat contradiction like 'SMH is up' followed by 'semiconductors came
-    under pressure' in the same paragraph — but only drop a rotation clause when it
-    actually conflicts with the tape's direction for the SAME sector. A rotation
-    clause about a different sector is not a contradiction and is kept. The
-    surviving rotation clauses are then rewritten into flowing prose via
-    _humanize_rotation() rather than left as a raw semicolon-joined list."""
-    tape_sectors = _sector_keys_in(tape)
-    tape_up = any(w in tape.lower() for w in ("up", "rise", "higher", "jump"))
-    tape_down = any(w in tape.lower() for w in ("down", "fall", "pressure", "lower"))
-    tape_dir = "up" if tape_up and not tape_down else ("down" if tape_down and not tape_up else None)
-
-    kept_clauses = []
-    for clause in re.split(r";\s*", rotation):
-        clause = clause.strip(" .;")
-        if not clause:
-            continue
-        clause_sectors = _sector_keys_in(clause)
-        clause_up = any(w in clause.lower() for w in ("favored", "leadership"))
-        clause_down = any(w in clause.lower() for w in ("pressure", "came under"))
-        clause_dir = "up" if clause_up and not clause_down else ("down" if clause_down and not clause_up else None)
-        overlap = tape_sectors & clause_sectors
-        if overlap and tape_dir and clause_dir and tape_dir != clause_dir:
-            continue
-        kept_clauses.append(clause)
-
-    rotation_kept = _humanize_rotation("; ".join(kept_clauses))
-    return " ".join(p for p in (tape, rotation_kept) if p)
-
-
-def _fed_hint_from(*texts: str) -> str:
-    joined = " ".join(texts).lower()
-    if "fomc" in joined or "fed " in joined or joined.startswith("fed") or "federal reserve" in joined:
-        return " ahead of the Fed update"
-    return ""
-
-
-def _compose_moved_sentence(driver: str, tape: str, rotation: str, catalyst: str, regime_text: str) -> str | None:
-    """When oil/energy strength and chip/growth softness both appear together
-    (with a Fed-related catalyst nearby), fuse them into one fluent market-desk
-    sentence instead of two separate clause fragments, e.g. 'Oil's rebound pushed
-    energy stocks higher, while chip and growth names stayed under pressure ahead
-    of the Fed update.' Returns None when this specific pattern does not apply, so
-    the caller can fall back to the generic tape/rotation reconciliation."""
-    combined_tape_driver = f"{driver} {tape}".lower()
-    if "oil" not in combined_tape_driver:
-        return None
-    oil_up = any(w in combined_tape_driver for w in ("up", "rise", "higher", "rebound", "jump"))
-    if not oil_up:
-        return None
-
-    down_sectors = []
-    for clause in re.split(r";\s*", rotation):
-        clause = clause.strip(" .;")
-        if not clause:
-            continue
-        if any(w in clause.lower() for w in ("pressure", "came under")):
-            for sector in _sector_keys_in(clause):
-                if sector in ("semiconductors", "tech/growth"):
-                    down_sectors.append(sector)
-    if not down_sectors:
-        return None
-
-    subject = "Oil's rebound" if "rebound" in combined_tape_driver else "Oil's advance"
-    nouns = list(dict.fromkeys(_FRIENDLY_SECTOR_NOUN[s] for s in down_sectors))
-    down_phrase = (" and ".join(nouns) + " names") if nouns else "growth names"
-    fed_hint = _fed_hint_from(catalyst, regime_text)
-    return f"{subject} pushed energy stocks higher, while {down_phrase} stayed under pressure{fed_hint}."
-
-
-_MOVER_PHRASE_MAP = {
-    "equity futures / nasdaq risk appetite": "stocks",
-    "vix volatility": "volatility",
-    "oil/energy": "oil",
-    "gold/safety bid": "gold",
-    "dollar": "the dollar",
-    "yields / rate-pricing": "rates",
-    # P0H-7: bare-slash movers ("oil/energy", "gold/safety bid") are already
-    # de-slashed into "oil and energy" / "gold and safety bid" by the shared
-    # _prep() pass that runs before this map is consulted, so the original
-    # slash-joined keys above never match post-_prep() text. Add the
-    # de-slashed forms as additional keys so these movers still collapse to
-    # a single plain noun ("oil", "gold") instead of surviving as a two-word
-    # literal inside the mover list.
-    "oil and energy": "oil",
-    "gold and safety bid": "gold",
-}
-_SECTOR_PHRASE_MAP = {
-    "energy": "energy stocks",
-    "tech/semis": "tech and chip stocks",
-    "banks and high-duration growth": "banks and growth stocks",
-}
-
-# Cap on how many movers/sectors are named in one sentence before the phrasing is
-# shortened, per Prof's correction that overloaded, everything-at-once sentences
-# read as a system dump rather than editorial writing.
-_MAX_LISTED_ITEMS = 3
-
-
-def _humanize_list(items: list[str], phrase_map: dict[str, str], cap: int = _MAX_LISTED_ITEMS) -> str:
-    parts = []
-    for item in items:
-        key = item.strip().lower()
-        natural = phrase_map.get(key)
-        if natural is None:
-            natural = _deslash(item.strip().replace(" / ", " and "))
-        parts.append(natural)
-    parts = list(dict.fromkeys(p for p in parts if p))[:cap]
-    if not parts:
-        return ""
-    if len(parts) == 1:
-        return parts[0]
-    return ", ".join(parts[:-1]) + " and " + parts[-1]
-
-
-# P0H-7: per-mover verb phrase, keyed by the canonical noun each mover already
-# collapses to via _MOVER_PHRASE_MAP. Used so the "why it matters" paragraph
-# reads as editorial prose ("stocks are softer, oil is firmer, and rates
-# remain in focus") instead of a bare noun list ("stocks, oil and energy and
-# rates"), per Prof's explicit correction and target-style example.
-_MOVER_VERB_PHRASES: dict[str, str] = {
-    "stocks": "stocks are softer",
-    "volatility": "volatility is elevated",
-    "oil": "oil is firmer",
-    "gold": "gold is firmer",
-    "the dollar": "the dollar is firmer",
-    "rates": "rates remain in focus",
-}
-
-# Hand-written template sentence shapes for the most common mover
-# combinations, so the frequent cases read as bespoke editorial sentences
-# rather than a generic capped join. Keys are frozensets of canonical mover
-# nouns (post _MOVER_PHRASE_MAP); order of clauses in the value is fixed to
-# read naturally regardless of the order movers appeared in the source flags.
-_MOVER_TEMPLATE_SHAPES: dict[frozenset, str] = {
-    frozenset({"stocks", "oil", "rates"}): "stocks are softer, oil is firmer, and rates remain in focus",
-    frozenset({"stocks", "volatility"}): "stocks are under pressure while volatility climbs",
-    frozenset({"oil", "gold"}): "oil and gold are both firmer as traders reach for safety",
-}
-
-
-def _mover_sentence(movers_raw: list[str], cap: int = _MAX_LISTED_ITEMS) -> str:
-    """Build the mover clause of the 'why it matters' paragraph. Tries a
-    hand-written template shape first for common combinations; falls back to
-    a generic verb-phrase join (still per-mover prose, never a bare noun
-    list) for anything else."""
-    canonical = []
-    for item in movers_raw:
-        key = item.strip().lower()
-        natural = _MOVER_PHRASE_MAP.get(key)
-        if natural is None:
-            natural = _deslash(item.strip().replace(" / ", " and "))
-        canonical.append(natural)
-    canonical = list(dict.fromkeys(c for c in canonical if c))[:cap]
-    if not canonical:
-        return ""
-
-    shape = _MOVER_TEMPLATE_SHAPES.get(frozenset(canonical))
-    if shape:
-        return shape
-
-    verb_parts = [_MOVER_VERB_PHRASES.get(c, f"{c} is in focus") for c in canonical]
-    if len(verb_parts) == 1:
-        return verb_parts[0]
-    return ", ".join(verb_parts[:-1]) + " and " + verb_parts[-1]
-
-
-def _rewrite_why_it_matters(text: str) -> str:
-    """Replace the robotic 'Political/geopolitical shock is market-relevant because
-    it moved X. Sectors affected: Y.' template — and its raw slash-joined phrases —
-    with plain, fully de-slashed, length-capped market-desk prose. Matches whether
-    the leading 'Political/geopolitical' token has already been de-slashed to
-    'Political and geopolitical' by an earlier _prep() pass or not.
-
-    P0H-7: the mover clause is built via _mover_sentence(), which uses hand-written
-    template shapes for common combinations and a per-mover verb-phrase join
-    otherwise, instead of a bare noun list ("stocks, oil and energy and rates")."""
-    match = re.match(
-        r"^Political(?:/| and )geopolitical shock is market-relevant because it moved (.+?)\.\s*Sectors affected:\s*(.+?)\.?$",
-        text,
-        re.I,
-    )
-    if match:
-        movers_raw = [m.strip() for m in match.group(1).split(",")]
-        sectors_raw = [s.strip() for s in match.group(2).split(",")]
-        movers_sentence = _mover_sentence(movers_raw)
-        sectors_natural = _humanize_list(sectors_raw, _SECTOR_PHRASE_MAP, cap=2)
-        return f"Geopolitical headlines are behind today's move — {movers_sentence} — with {sectors_natural} feeling it most directly."
-    return _deslash(text.replace(" / ", " and "))
-
-
-def _rewrite_portfolio_relevance(text: str) -> str:
-    """Replace 'watch TICKER; sector context: SECTOR' with clean portfolio prose:
-    'In the portfolio, TICKER is exposed to today's SECTOR-led move — ...'."""
-    def _sector_adjective(raw: str) -> str:
-        key = raw.strip().lower()
-        for canonical, aliases in _SECTOR_ALIASES.items():
-            if key == canonical or key in aliases:
-                return _FRIENDLY_SECTOR_NOUN[canonical] + "-led"
-        word = raw.strip().lower()
-        if word.endswith("s") and len(word) > 4:
-            word = word[:-1]
-        return word + "-led"
-
-    match = re.match(r"^watch (.+?);\s*sector context:\s*(.+?)\.?$", text, re.I)
-    if match:
-        tickers, sectors_raw = match.group(1).strip(), match.group(2).strip()
-        sector_list = [s.strip() for s in sectors_raw.split(",") if s.strip()][:2]
-        adjective = " and ".join(dict.fromkeys(_sector_adjective(s) for s in sector_list)) if sector_list else "sector"
-        verb = "is" if "," not in tickers else "are"
-        return f"In the portfolio, {tickers} {verb} exposed to today's {adjective} move — nothing that calls for action on its own, but worth watching."
-    match = re.match(r"^watch (.+?)\.?$", text, re.I)
-    if match:
-        tickers = match.group(1).strip()
-        verb = "is" if "," not in tickers else "are"
-        return f"In the portfolio, {tickers} {verb} in view today — nothing urgent there, just one to keep on the radar."
-    match = re.match(r"^sector context:\s*(.+?)\.?$", text, re.I)
-    if match:
-        sectors = match.group(1).strip()
-        return f"None of the open positions are named directly today, but {sectors.lower()} is the group to watch."
-    if text.lower().startswith("no direct portfolio ticker flag"):
-        return "Nothing in today's flow points at the open positions directly, so treat this as background rather than a signal about any specific holding."
-    return text
-
-
-def _rewrite_next_catalyst(text: str) -> str:
-    """Replace the robotic 'X at Y. Translate the release into rates, liquidity, and
-    sector impact.' template with plain market-desk phrasing."""
-    match = re.match(
-        r"^(.+?) at (.+?)\.\s*Translate the release into rates, liquidity, and sector impact\.?$",
-        text,
-        re.I,
-    )
-    if match:
-        name, when = match.group(1).strip().rstrip(","), match.group(2).strip()
-        return f"Keep an eye on {name}, due at {when} — releases like this can move rates and shift sector leadership quickly."
-    if text.lower().startswith("no major scheduled catalyst isolated"):
-        return "Nothing major is scheduled right now — keep an eye on fresh headlines for anything that changes the picture."
-    return text
-
-
-def _rewrite_tape_tone(text: str) -> str:
-    """Replace the terse 'Cautious tape.' / 'Constructive tape.' / 'Neutral tape.'
-    lead-in with a plain sentence."""
-    replacements = {
-        "Cautious tape.": "The overall tone is cautious.",
-        "Constructive tape.": "The overall tone is constructive.",
-        "Neutral tape.": "The overall tone is neutral, without a strong lean either way.",
-    }
-    for old, new in replacements.items():
-        if text.startswith(old):
-            return new + text[len(old):]
-    return text
-
-
-def _capitalize_first(text: str) -> str:
-    for i, ch in enumerate(text):
-        if ch.isalpha():
-            return text[:i] + ch.upper() + text[i + 1:]
-    return text
-
-
-def _prep(text: str, seen: set[str]) -> str:
-    """Standard pre-processing pipeline applied to every raw source fragment before
-    its specific rewrite function runs: strip role jargon, apply the direct
-    phrase fixes (FOMC minutes, FedWatch odds), rewrite bare sector-fund tickers
-    into plain sector-stock language, then de-slash anything left over."""
-    cleaned = _strip_role_jargon(text)
-    cleaned = _apply_direct_phrase_fixes(cleaned, seen)
-    cleaned = _rewrite_sector_fund_tickers(cleaned, seen)
-    return _deslash(cleaned)
+    paragraphs = [
+        f"📍 Macro Pulse — {now_et.strftime('%H:%M')} ET",
+        _market_tone_sentence(briefing, context, now_et, flags),
+    ]
+    hot = _sector_hot_sentence(context)
+    if hot:
+        paragraphs.append(hot)
+    earnings = _earnings_sentence(context)
+    if earnings:
+        paragraphs.append(earnings)
+    paragraphs.append(_final_risk_sentence(briefing, flags))
+    paragraphs.append(_next_watch_sentence(context, now_et))
+    return "\n\n".join(paragraphs)
 
 
 def format_telegram_brief(briefing: str, routine: str, now_et: datetime, context: dict[str, Any] | None = None) -> str:

@@ -26,7 +26,6 @@ for _path in (SCRIPTS_DIR, "/Users/yasser/scripts"):
 import atlas_db  # noqa: E402
 from atlas_symbol_meta import ticker_label  # noqa: E402
 from atlas_notify import send_telegram  # noqa: E402
-from atlas_report_authority import pending_exposure_compact_lines, SOURCE_PROVIDER, SOURCE_RENDER_CALC  # noqa: E402
 
 if os.environ.get("ATLAS_DB"):
     atlas_db.DB_PATH = os.environ["ATLAS_DB"]
@@ -163,22 +162,18 @@ def build_alert() -> str | None:
             triggered.append({"ticker": ticker, "entry": entry, "premarket": pre, "stop": stop, "move": move, "distance": distance, "row": row})
     if not triggered:
         return None
-    pending_rows = atlas_db.get_pending_broker_confirmation_trades()
     lines = [
         f"⚠️ OVERNIGHT GAP ALERT — {market_day} 8:00 AM ET",
-        "Open-position gap alert only — not full portfolio coverage.",
         "",
     ]
-    lines.extend(pending_exposure_compact_lines(pending_rows))
-    lines.append("")
     for idx, item in enumerate(triggered, 1):
         label = ticker_label(item["ticker"], item["row"])
         lines += [
             f"{idx}. 🔴 {label} — GAP DOWN",
-            f"   💵 Entry [DB] {_price(item['entry'])}",
-            f"   👀 Pre-market {SOURCE_PROVIDER} {_price(item['premarket'])}",
-            f"   📉 {SOURCE_RENDER_CALC} {_fmt_pct(item['move'])} overnight",
-            f"   🚦 Stop [DB]/[TFE] {_price(item['stop'])} · distance {SOURCE_RENDER_CALC}: {_fmt_pct(item['distance'], signed=False)}",
+            f"   💵 Entry {_price(item['entry'])}",
+            f"   👀 Pre-market {_price(item['premarket'])}",
+            f"   📉 {_fmt_pct(item['move'])} overnight",
+            f"   🚦 Stop {_price(item['stop'])} · distance: {_fmt_pct(item['distance'], signed=False)}",
             "",
         ]
     return "\n".join(lines).rstrip()
