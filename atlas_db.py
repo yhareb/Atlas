@@ -6,20 +6,6 @@ from datetime import datetime
 
 DB_PATH = os.environ.get("ATLAS_DB", "/Users/yasser/scripts/atlas.db")
 
-# --------------------------------------------------------------------------- #
-# Real-time push to The Vault (Option A).
-#
-# Atlas remains the SINGLE SOURCE OF TRUTH. After Atlas writes a row locally,
-# it also pushes a copy to The Vault so the dashboard updates instantly. The
-# push is fire-and-forget and can NEVER raise into Atlas: if vault_client is
-# missing, unconfigured, or the network is down, Atlas keeps working exactly as
-# before and the scheduled vault_sync.py re-sends the row later (idempotent).
-# --------------------------------------------------------------------------- #
-try:
-    import vault_client as _vault
-except Exception:  # noqa: BLE001 — Atlas must run even without the pusher present
-    _vault = None
-
 try:
     from atlas_audit import log_db_event as _atlas_log_db_event
 except Exception:
@@ -42,18 +28,9 @@ def _audit_db_event(table_name, operation, row_id=None, ticker=None, source_func
         pass
 
 
-def _safe_push(fn_name, *args):
-    """Invoke a vault_client.push_* function, swallowing every error."""
-    if _vault is None:
-        return
-    try:
-        getattr(_vault, fn_name)(*args)
-    except Exception:  # noqa: BLE001 — never let a push break an Atlas write
-        pass
-
 
 def _fetch_trade_rows(ids):
-    """Read specific trade lots by id as dicts (for pushing to the Vault)."""
+    """Read specific trade lots by id as dicts."""
     ids = [int(i) for i in (ids or []) if i is not None]
     if not ids:
         return []
@@ -559,13 +536,6 @@ def log_signal(ticker, signal, score, rvol, entry_price, stop_loss, max_loss_per
     conn.close()
     _audit_db_event("signals", "INSERT", new_id, ticker, "log_signal")
 
-    # Real-time push to the Vault (fire-and-forget; never raises).
-    _safe_push("push_signal", {
-        "id": new_id, "timestamp": _now(), "ticker": ticker, "signal": signal,
-        "score": score, "rvol": rvol, "entry_price": entry_price,
-        "stop_loss": stop_loss, "max_loss_per_share": max_loss_per_share,
-        "atr": atr, "trend_stack": trend_stack, "relative_strength": relative_strength,
-        })
 
 
 # --------------------------------------------------------------------------- #
@@ -619,9 +589,6 @@ def open_trade(ticker, entry_price, quantity, fees=0.0, notes=None, entry_at=Non
     conn.commit()
     conn.close()
     _audit_db_event("trades", "INSERT", trade_id, ticker, "open_trade")
-
-    # Real-time push of the new lot (fire-and-forget; never raises).
-    _safe_push("push_trades", _fetch_trade_rows([trade_id]))
     return trade_id
 
 
@@ -728,7 +695,6 @@ def confirm_trade_fill(trade_id, broker_qty, broker_price, broker_fees, broker_r
              debit, _bk_cash_ledger_id, broker_ref=broker_ref,
              stop_loss=stop_loss, target_price=target_price)
     _audit_db_event("trades", "UPDATE", trade_id, ticker, "confirm_trade_fill")
-    _safe_push("push_trades", _fetch_trade_rows([trade_id]))
     return _fetch_trade_rows([trade_id])[0]
 
 
@@ -839,7 +805,7 @@ def close_trade(ticker, exit_price, quantity=None, fees=0.0, exit_at=None):
 
     # Lots affected by this sell: the CLOSED lots we created/closed, plus any
     # parent lots whose quantity shrank from a partial split (their ids are the
-    # open-lot ids we iterated). Push them all so the Vault mirrors the split.
+    # open-lot ids we iterated).
     affected_ids = list(closed_ids) + [int(r[0]) for r in open_lots]
 
     conn.commit()
@@ -849,8 +815,6 @@ def close_trade(ticker, exit_price, quantity=None, fees=0.0, exit_at=None):
     for _affected_id in set(affected_ids) - set(closed_ids):
         _audit_db_event("trades", "UPDATE", _affected_id, ticker, "close_trade")
 
-    # Real-time push of every affected lot (fire-and-forget; never raises).
-    _safe_push("push_trades", _fetch_trade_rows(sorted(set(affected_ids))))
     return closed_ids
 
 
@@ -924,7 +888,6 @@ def close_trade_broker_confirmed(ticker, trade_id, exit_price, quantity, fees, b
     _bk_cash_ledger_id = cursor.execute("SELECT id FROM cash_ledger ORDER BY id DESC LIMIT 1").fetchone()[0]
     conn.close()
     _audit_db_event("trades", "UPDATE", trade_id, ticker, "close_trade_broker_confirmed")
-    _safe_push("push_trades", _fetch_trade_rows([trade_id]))
 
     # P0L-9 STAGING dual-write: fires only after the legacy commit above.
     # Never fatal -- failures here cannot undo or block the legacy write.
@@ -1078,7 +1041,6 @@ def update_trade_stop(trade_id, stop_loss):
     conn.close()
     if changed:
         _audit_db_event("trades", "UPDATE", int(trade_id), None, "update_trade_stop")
-    _safe_push("push_trades", _fetch_trade_rows([int(trade_id)]))
     return changed
 
 
@@ -1095,7 +1057,6 @@ def set_manual_stop_lock(trade_id, locked=True):
     conn.close()
     if changed:
         _audit_db_event("trades", "UPDATE", int(trade_id), None, "set_manual_stop_lock")
-        _safe_push("push_trades", _fetch_trade_rows([int(trade_id)]))
     return changed
 
 
@@ -1428,9 +1389,6 @@ def update_handoff(date_str, data_dict):
     conn.close()
     _audit_db_event("handoff", "UPDATE" if existing_id else "INSERT", handoff_id[0] if handoff_id else None, None, "update_handoff", {"date": date_str})
 
-    # Real-time push of the handoff snapshot (fire-and-forget; never raises).
-    _safe_push("push_handoff", date_str, data_dict)
-
 
 def get_handoff(date_str):
     conn = get_connection()
@@ -1579,3 +1537,169 @@ def get_pending_broker_confirmation_trades(limit=500):
         if tk in credited_tickers: continue
         out.append(c)
     return out
+
+
+# --- P0B1/P0B3 broker screenshot intake governance helpers ---
+from decimal import Decimal, ROUND_HALF_UP
+
+P0B1_APPROVE_TARGET_PHRASE = "Approve official Atlas target update"
+P0B1_APPROVE_STOP_PHRASE = "Approve official Atlas stop update"
+
+
+def _p0b1_decimal(value):
+    if value in (None, ""):
+        return None
+    try:
+        return Decimal(str(value).replace("$", "").replace(",", "").strip())
+    except Exception:
+        return None
+
+
+def _p0b1_price_micros(value):
+    dec = _p0b1_decimal(value)
+    if dec is None:
+        return None, None
+    return int((dec * Decimal("1000000")).to_integral_value(rounding=ROUND_HALF_UP)), format(dec, "f")
+
+
+def _p0b1_cents(value):
+    dec = _p0b1_decimal(value)
+    if dec is None:
+        return None, None
+    return int((dec * Decimal("100")).to_integral_value(rounding=ROUND_HALF_UP)), format(dec, "f")
+
+
+def _p0b1_quantity_scaled(value):
+    dec = _p0b1_decimal(value)
+    if dec is None:
+        return None, None, None
+    scale = 8
+    return int((dec * (Decimal(10) ** scale)).to_integral_value(rounding=ROUND_HALF_UP)), scale, format(dec, "f")
+
+
+def _p0b1_money(value):
+    dec = _p0b1_decimal(value)
+    return "N/A" if dec is None else f"${dec.quantize(Decimal('0.01'))}"
+
+
+def broker_tp_sl_mismatch_warnings(*, ticker=None, legacy_trades_id=None,
+                                   broker_take_profit_display=None,
+                                   broker_stop_display=None,
+                                   atlas_target=None, atlas_stop=None,
+                                   tolerance=Decimal("0.01")):
+    """Return broker-vs-Atlas TP/SL mismatch warnings without mutating model fields."""
+    conn = get_connection(); cur = conn.cursor()
+    if (atlas_target is None or atlas_stop is None) and legacy_trades_id is not None:
+        cur.execute("SELECT ticker, target_price, stop_loss FROM trades WHERE id=?", (int(legacy_trades_id),))
+        row = cur.fetchone()
+        if row:
+            ticker = ticker or row[0]
+            atlas_target = row[1] if atlas_target is None else atlas_target
+            atlas_stop = row[2] if atlas_stop is None else atlas_stop
+    elif (atlas_target is None or atlas_stop is None) and ticker:
+        cur.execute("SELECT id, target_price, stop_loss FROM trades WHERE ticker=? AND status='OPEN' ORDER BY entry_at ASC, id ASC LIMIT 1", (str(ticker).upper(),))
+        row = cur.fetchone()
+        if row:
+            legacy_trades_id = legacy_trades_id or row[0]
+            atlas_target = row[1] if atlas_target is None else atlas_target
+            atlas_stop = row[2] if atlas_stop is None else atlas_stop
+    conn.close()
+    warnings=[]
+    btp=_p0b1_decimal(broker_take_profit_display); at=_p0b1_decimal(atlas_target)
+    if btp is not None and at is not None and abs(btp-at) > tolerance:
+        warnings.append({"code":"BROKER_TP_DIFFERS_FROM_ATLAS_TARGET","ticker":ticker,"broker":format(btp,"f"),"atlas":format(at,"f")})
+    bsl=_p0b1_decimal(broker_stop_display); astop=_p0b1_decimal(atlas_stop)
+    if bsl is not None and astop is not None and abs(bsl-astop) > tolerance:
+        warnings.append({"code":"BROKER_SL_DIFFERS_FROM_ATLAS_STOP","ticker":ticker,"broker":format(bsl,"f"),"atlas":format(astop,"f")})
+    return warnings
+
+
+def render_broker_display_warning_lines(snapshot):
+    """Render operator warning lines for broker-display TP/SL mismatch rows."""
+    ticker = str((snapshot or {}).get("ticker") or "?").upper()
+    lines=[]
+    warning_text = str((snapshot or {}).get("warning_text") or "")
+    if "BROKER_TP_DIFFERS_FROM_ATLAS_TARGET" in warning_text:
+        lines.append(f"⚠️ {ticker} broker TP {_p0b1_money((snapshot or {}).get('broker_take_profit_display_text'))} differs from Atlas target {_p0b1_money((snapshot or {}).get('atlas_target_text_at_ingest'))} — BROKER_TP_DIFFERS_FROM_ATLAS_TARGET. Broker display only; no Atlas target update without approval phrase.")
+    if "BROKER_SL_DIFFERS_FROM_ATLAS_STOP" in warning_text:
+        lines.append(f"⚠️ {ticker} broker SL {_p0b1_money((snapshot or {}).get('broker_stop_display_text'))} differs from Atlas stop {_p0b1_money((snapshot or {}).get('atlas_stop_text_at_ingest'))} — BROKER_SL_DIFFERS_FROM_ATLAS_STOP. Broker display only; no Atlas stop update without approval phrase.")
+    return lines
+
+
+def record_broker_position_display_snapshot(*, ticker, broker_ref=None, shares=None,
+                                            broker_entry=None, broker_current=None,
+                                            broker_take_profit_display=None,
+                                            broker_stop_display=None,
+                                            broker_pl=None, broker_value=None,
+                                            legacy_trades_id=None, lot_id=None,
+                                            evidence_id=None, source_filename=None):
+    """Append broker display snapshot only; never mutates trades target/stop/risk fields."""
+    ticker = str(ticker or "").upper().strip()
+    if not ticker:
+        raise ValueError("ticker required")
+    conn = get_connection(); cur = conn.cursor()
+    atlas_target = atlas_stop = None
+    if legacy_trades_id is None:
+        cur.execute("SELECT id, target_price, stop_loss FROM trades WHERE ticker=? AND status='OPEN' ORDER BY entry_at ASC, id ASC LIMIT 1", (ticker,))
+        row = cur.fetchone()
+        if row:
+            legacy_trades_id, atlas_target, atlas_stop = row
+    else:
+        cur.execute("SELECT target_price, stop_loss FROM trades WHERE id=?", (int(legacy_trades_id),))
+        row=cur.fetchone()
+        if row:
+            atlas_target, atlas_stop = row
+    shares_scaled, shares_scale, shares_text = _p0b1_quantity_scaled(shares)
+    broker_entry_micros, broker_entry_text = _p0b1_price_micros(broker_entry)
+    broker_current_micros, broker_current_text = _p0b1_price_micros(broker_current)
+    broker_tp_micros, broker_tp_text = _p0b1_price_micros(broker_take_profit_display)
+    broker_sl_micros, broker_sl_text = _p0b1_price_micros(broker_stop_display)
+    broker_pl_cents, broker_pl_text = _p0b1_cents(broker_pl)
+    broker_value_cents, broker_value_text = _p0b1_cents(broker_value)
+    atlas_target_micros, atlas_target_text = _p0b1_price_micros(atlas_target)
+    atlas_stop_micros, atlas_stop_text = _p0b1_price_micros(atlas_stop)
+    warnings = broker_tp_sl_mismatch_warnings(ticker=ticker, legacy_trades_id=legacy_trades_id,
+        broker_take_profit_display=broker_take_profit_display, broker_stop_display=broker_stop_display,
+        atlas_target=atlas_target, atlas_stop=atlas_stop)
+    warning_codes = ",".join(w["code"] for w in warnings)
+    target_warn = int(any(w["code"] == "BROKER_TP_DIFFERS_FROM_ATLAS_TARGET" for w in warnings))
+    stop_warn = int(any(w["code"] == "BROKER_SL_DIFFERS_FROM_ATLAS_STOP" for w in warnings))
+    cur.execute("""INSERT INTO broker_position_display_snapshots
+        (legacy_trades_id, lot_id, ticker, broker_ref, shares_text, shares_scaled, shares_scale,
+         broker_entry_micros, broker_entry_text, broker_current_micros, broker_current_text,
+         broker_take_profit_display_micros, broker_take_profit_display_text,
+         broker_stop_display_micros, broker_stop_display_text,
+         broker_pl_cents, broker_pl_text, broker_value_cents, broker_value_text,
+         atlas_target_micros_at_ingest, atlas_target_text_at_ingest,
+         atlas_stop_micros_at_ingest, atlas_stop_text_at_ingest,
+         target_diff_warning, stop_diff_warning, warning_text, evidence_id, source_filename)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (legacy_trades_id, lot_id, ticker, broker_ref, shares_text, shares_scaled, shares_scale,
+         broker_entry_micros, broker_entry_text, broker_current_micros, broker_current_text,
+         broker_tp_micros, broker_tp_text, broker_sl_micros, broker_sl_text,
+         broker_pl_cents, broker_pl_text, broker_value_cents, broker_value_text,
+         atlas_target_micros, atlas_target_text, atlas_stop_micros, atlas_stop_text,
+         target_warn, stop_warn, warning_codes, evidence_id, source_filename))
+    snapshot_id = cur.lastrowid
+    conn.commit(); conn.close()
+    return {"id": snapshot_id, "ticker": ticker, "legacy_trades_id": legacy_trades_id, "warnings": warnings, "warning_text": warning_codes}
+
+
+def approve_official_atlas_target_update(trade_id, new_target_price, approval_phrase):
+    if approval_phrase != P0B1_APPROVE_TARGET_PHRASE:
+        raise PermissionError("Exact phrase required: Approve official Atlas target update")
+    conn=get_connection(); cur=conn.cursor()
+    cur.execute("UPDATE trades SET target_price=?, updated_at=? WHERE id=?", (float(new_target_price), _now(), int(trade_id)))
+    changed=cur.rowcount; conn.commit(); conn.close()
+    return changed
+
+
+def approve_official_atlas_stop_update(trade_id, new_stop_loss, approval_phrase):
+    if approval_phrase != P0B1_APPROVE_STOP_PHRASE:
+        raise PermissionError("Exact phrase required: Approve official Atlas stop update")
+    conn=get_connection(); cur=conn.cursor()
+    cur.execute("UPDATE trades SET stop_loss=?, updated_at=? WHERE id=?", (float(new_stop_loss), _now(), int(trade_id)))
+    changed=cur.rowcount; conn.commit(); conn.close()
+    return changed
+
+# --- end P0B1/P0B3 helpers ---

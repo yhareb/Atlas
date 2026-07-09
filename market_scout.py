@@ -58,6 +58,10 @@ def _is_tradeable_equity(sym):
 # Ensure it can find the engine
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from atlas_engine import analyze_ticker
+try:
+    import atlas_fda_calendar
+except Exception:
+    atlas_fda_calendar = None
 MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY")
 MASSIVE_BASE = os.environ.get("MASSIVE_BASE", "https://api.massive.com")
 EODHD_API_KEY = os.environ.get("EODHD_API_KEY") or os.environ.get("EODHD_TOKEN")
@@ -505,6 +509,7 @@ def discover_tickers():
     volume_order = []
     rs_order = []
     momentum_order = []
+    fda_order = []
 
     def _add_to_bucket(bucket, sym):
         tmp = set()
@@ -540,6 +545,14 @@ def discover_tickers():
             _add_to_bucket(earnings_order, sym)
     except Exception as e:
         print(f"[market_scout] earnings calendar discovery failed: {e}")
+
+    # FDA calendar discovery: metadata/discovery only, capped and deduped. No scoring change.
+    try:
+        if atlas_fda_calendar is not None:
+            for sym in atlas_fda_calendar.discover_fda_tickers(days=60, limit=10):
+                _add_to_bucket(fda_order, sym)
+    except Exception as e:
+        print(f"[market_scout] FDA calendar discovery skipped: {type(e).__name__}: {e}")
 
     # Large-cap quality: liquid US mega/large caps without a same-day momentum requirement.
     try:
@@ -621,7 +634,7 @@ def discover_tickers():
             print(f"[market_scout] EODHD screener failed: {e}")
 
     # Fallback high-liquidity universe if no discovery feeds return names (e.g. weekend/pre-market)
-    if not any((catalyst_order, earnings_order, large_cap_quality_order, mover_order, volume_order, rs_order, momentum_order)):
+    if not any((catalyst_order, earnings_order, fda_order, large_cap_quality_order, mover_order, volume_order, rs_order, momentum_order)):
         fallback = {"NVDA", "TSLA", "AAPL", "AMD", "MSFT", "META", "AMZN", "GOOGL", "NFLX", "SMCI", "PLTR", "COIN"}
         for sym in fallback:
             _add_to_bucket(catalyst_order, sym)
@@ -637,10 +650,11 @@ def discover_tickers():
                     out.append(t)
         return out
 
-    full_order = _dedupe_ordered(catalyst_order, earnings_order, large_cap_quality_order, mover_order, volume_order, rs_order, momentum_order)
+    full_order = _dedupe_ordered(catalyst_order, earnings_order, fda_order, large_cap_quality_order, mover_order, volume_order, rs_order, momentum_order)
     capped_order = _dedupe_ordered(
         catalyst_order[:20],
         earnings_order[:20],
+        fda_order[:10],
         large_cap_quality_order[:30],
         mover_order[:20],
         volume_order[:20],
@@ -652,6 +666,7 @@ def discover_tickers():
     _LAST_DISCOVERY_BUCKETS = {
         "catalyst": list(catalyst_order),
         "earnings": list(earnings_order),
+        "fda": list(fda_order),
         "large_cap_quality": list(large_cap_quality_order),
         "movers": list(mover_order),
         "volume": list(volume_order),

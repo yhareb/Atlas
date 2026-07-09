@@ -78,7 +78,6 @@ def main() -> int:
     import atlas_account as acct  # noqa: WPS433
 
     atlas_db.DB_PATH = str(temp_db)
-    atlas_db._vault = None
     atlas_db._atlas_log_db_event = None
     acct.DB_PATH = str(temp_db)
 

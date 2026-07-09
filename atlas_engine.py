@@ -8,6 +8,10 @@ import datetime
 from datetime import timedelta
 from zoneinfo import ZoneInfo
 
+try:
+    import atlas_fda_calendar
+except Exception:
+    atlas_fda_calendar = None
 sys.path.insert(0, "/Users/yasser/scripts")
 import atlas_db
 from atlas_time import current_et_market_date, trading_days_between
@@ -1478,60 +1482,72 @@ def _load_fda_calendar_window():
 
 
 def check_fda_calendar(ticker, fundamentals=None, holding=False):
-    # Benzinga FDA Calendar context. Entry blackout only; never exits/sizes/scores.
-    ticker = (ticker or "").upper()
-    sector_info = _fda_sector_info(ticker, fundamentals=fundamentals)
-    if not _is_biotech_sector(sector_info):
-        return {"ticker": ticker, "status": "skipped", "biotech": False, "tag": None,
-                "sector": sector_info.get("sector"), "industry": sector_info.get("industry")}
-
-    payload = _load_fda_calendar_window()
-    result = {"ticker": ticker, "status": payload.get("status"), "biotech": True,
-              "sector": sector_info.get("sector"), "industry": sector_info.get("industry"),
-              "events": [], "tag": None}
-    if payload.get("status") != "ok":
-        result.update({"note": "🧬 FDA date unknown", "date_unknown": True, "tag": "🧬 FDA date unknown"})
-        return result
-
-    today = current_et_market_date()
-    for row in payload.get("rows") or []:
-        symbols = _fda_symbols(row)
-        if ticker not in symbols:
-            continue
-        event_day = _safe_date(row.get("target_date") or row.get("date"))
-        cls = _classify_fda_event(row)
-        days = trading_days_between(today, event_day) if event_day else None
-        drug = row.get("drug") or {}
-        event = {
-            "event_type": row.get("event_type"), "class": cls, "date": event_day.isoformat() if event_day else None,
-            "days": days, "drug": drug.get("name"), "status": row.get("status"),
-            "outcome": row.get("outcome"), "symbols": symbols,
-        }
-        result["events"].append(event)
-        if event_day and days is not None and days > 0 and days <= 3 and cls == "upcoming_binary":
-            note = f"🧬 FDA decision in {days}d — no new entry"
-            result.update({"entry_blackout": True, "blackout_reason": note, "entry_blackout_note": note, "tag": note, "nearest_event": event})
-        elif event_day and days is not None and days > 0 and days <= 5 and cls == "upcoming_binary" and holding:
-            note = f"🧬 FDA in {days}d"
-            result.update({"holding_warning": True, "holding_warning_note": note, "tag": note, "nearest_event": event})
-        elif event_day and (today - event_day).days >= 0 and (today - event_day).days <= 14 and cls == "past_positive" and not result.get("entry_blackout"):
-            note = "🧬 FDA approval"
-            result.update({"positive_outcome": True, "positive_outcome_note": note, "tag": note, "nearest_event": event})
-        elif event_day and (today - event_day).days >= 0 and (today - event_day).days <= 14 and cls == "past_negative" and not result.get("entry_blackout") and not result.get("positive_outcome"):
-            note = "🧬 FDA caution"
-            result.update({"negative_outcome": True, "negative_outcome_note": note, "tag": note, "nearest_event": event})
-        elif (not event_day or cls == "ambiguous") and not result.get("entry_blackout") and not result.get("tag"):
-            result.update({"date_unknown": True, "note": "🧬 FDA date unknown", "tag": "🧬 FDA date unknown", "nearest_event": event})
-    if not result["events"]:
-        result.update({"status": "none", "tag": None})
-    return result
-
-
-def _parse_earnings_date(value):
-    try:
-        return datetime.date.fromisoformat(str(value)[:10])
-    except Exception:
-        return None
+    """Selective FDA Stage 1 metadata gate. No score/catalyst-pillar mutation."""
+    t = str(ticker or "").upper().strip()
+    sector_info = _fda_sector_info(t, fundamentals)
+    sector = (sector_info or {}).get("sector")
+    industry = (sector_info or {}).get("industry")
+    biotech = bool(_is_biotech_sector(sector_info))
+    decision = {
+        "ticker": t,
+        "allowed": False,
+        "reason_code": "FDA_CHECK_BLOCKED_MISSING_DATA",
+        "events": [],
+    }
+    metadata = {}
+    if isinstance(sector_info, dict):
+        metadata.update(sector_info)
+    metadata.setdefault("sector", sector)
+    metadata.setdefault("industry", industry)
+    fda_meta = None
+    helper_available = atlas_fda_calendar is not None
+    if helper_available and t:
+        try:
+            fda_cache = atlas_fda_calendar.load_or_refresh_fda_cache()
+            decision = atlas_fda_calendar.should_check_fda(t, metadata=metadata, cache=fda_cache)
+            if decision.get("allowed"):
+                fda_meta = atlas_fda_calendar.get_fda_metadata_for_ticker(t, metadata=metadata, cache=fda_cache)
+        except Exception as exc:  # noqa: BLE001 - FDA metadata may not break engine flow
+            decision = {
+                "ticker": t,
+                "allowed": False,
+                "reason_code": "FDA_CHECK_BLOCKED_HELPER_ERROR",
+                "error": f"{type(exc).__name__}: {exc}",
+                "events": [],
+            }
+    events = list((fda_meta or {}).get("fda_events") or decision.get("events") or [])
+    next_event = events[0] if events else None
+    reason = decision.get("reason_code")
+    if reason == "FDA_CHECK_ALLOWED_CALENDAR_MATCH":
+        biotech = True
+    tag = None
+    if next_event:
+        event_type = next_event.get("event_type") or "FDA event"
+        target_date = next_event.get("target_date") or "date unknown"
+        tag = f"🧬 {event_type} {target_date}"
+    status = "ok" if events else ("eligible_no_event" if decision.get("allowed") else "skipped")
+    return {
+        "ticker": t,
+        "status": status,
+        "biotech": biotech,
+        "sector": sector,
+        "industry": industry,
+        "events": events,
+        "tag": tag,
+        "entry_blackout": False,
+        "holding_warning": False,
+        "entry_blackout_note": None,
+        "holding_warning_note": None,
+        "positive_outcome_note": None,
+        "negative_outcome_note": None,
+        "fda_check_decision": "ALLOW" if decision.get("allowed") else "BLOCK",
+        "fda_event_count": len(events),
+        "fda_relevance_reason": reason,
+        "fda_source_endpoint": (fda_meta or {}).get("fda_source_endpoint") or (next_event or {}).get("source_endpoint"),
+        "fda_next_event": next_event,
+        "fda_calendar_normalized": fda_meta,
+        "fda_helper_available": helper_available,
+    }
 
 
 def _earnings_rows(ticker, start_day, end_day, limit=10):

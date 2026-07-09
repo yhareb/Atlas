@@ -24,6 +24,7 @@ from atlas_notify import send_telegram  # noqa: E402
 _EVENT_UNKNOWN = "UNKNOWN"
 _EVENT_BUY = "BUY_FILL"
 _EVENT_SELL = "SELL_FILL"
+_EVENT_DISPLAY = "BROKER_POSITION_DISPLAY"
 
 
 _COMPANY_TICKER_HINTS = {
@@ -164,6 +165,8 @@ def _classify(text: str) -> str:
         return _EVENT_SELL
     if any(k in upper for k in ("BUY", "ORDER FILLED", "OPEN")) and any(k in upper for k in ("EXECUTED", "TRADE STORY", "AVERAGE PRICE", "UNITS", "REFERENCE")):
         return _EVENT_BUY
+    if _ticker_value(text) and any(k in upper for k in ("TP", "TARGET", "SL", "STOP", "CURRENT", "POSITION VALUE", "VALUE", "P/L")):
+        return _EVENT_DISPLAY
     return _EVENT_UNKNOWN
 
 
@@ -192,9 +195,45 @@ def _parse_buy(text: str) -> dict[str, Any]:
         r"BUY\s+[A-Z0-9.\-]+[^\n$]*@\s*\$?([0-9.,]+)",
         r"price\s*[:#]?\s*\$?([0-9.,]+)",
     ], text)
-    out["stop_loss"] = _number_after([r"(?:Stop|SL)\s*[:#]?\s*\$?([0-9.,]+)"], text)
-    out["target_price"] = _number_after([r"(?:Target|TP)\s*[:#]?\s*\$?([0-9.,]+)"], text)
+    out["broker_stop_display"] = _number_after([r"(?:Stop|SL)\s*[:#]?\s*\$?([0-9.,]+)"], text)
+    out["broker_take_profit_display"] = _number_after([r"(?:Target|TP)\s*[:#]?\s*\$?([0-9.,]+)"], text)
+    out["broker_current"] = _number_after([r"Current\s*[:#]?\s*\$?([0-9.,]+)", r"Market\s+value\s*[:#]?\s*\$?([0-9.,]+)"], text)
+    out["broker_pl"] = _number_after([r"P\s*/\s*L\s*[:#]?\s*([+-]?\$?[0-9.,]+)", r"Profit\s*/\s*Loss\s*[:#]?\s*([+-]?\$?[0-9.,]+)"], text)
+    out["broker_value"] = _number_after([r"Value\s*[:#]?\s*\$?([0-9.,]+)", r"Position\s+value\s*[:#]?\s*\$?([0-9.,]+)"], text)
     return out
+
+
+def _parse_display(text: str) -> dict[str, Any]:
+    out = _parse_buy(text)
+    out["shares"] = out.pop("quantity", None)
+    out["broker_entry"] = out.pop("entry_price", None)
+    out.pop("fees", None)
+    # Defense-in-depth: display parse must never expose model field keys.
+    out.pop("target_price", None)
+    out.pop("stop_loss", None)
+    out.pop("risk_pct", None)
+    return out
+
+
+def _has_broker_display_values(data: dict[str, Any]) -> bool:
+    return any(data.get(k) not in (None, "") for k in (
+        "broker_take_profit_display", "broker_stop_display", "broker_current", "broker_pl", "broker_value"
+    ))
+
+
+def _record_display_snapshot(data: dict[str, Any], source_filename: str) -> dict[str, Any] | None:
+    if not data.get("ticker") or not _has_broker_display_values(data):
+        return None
+    return atlas_db.record_broker_position_display_snapshot(
+        ticker=data.get("ticker"), broker_ref=data.get("broker_ref"),
+        shares=data.get("shares", data.get("quantity")),
+        broker_entry=data.get("broker_entry", data.get("entry_price")),
+        broker_current=data.get("broker_current"),
+        broker_take_profit_display=data.get("broker_take_profit_display"),
+        broker_stop_display=data.get("broker_stop_display"),
+        broker_pl=data.get("broker_pl"), broker_value=data.get("broker_value"),
+        source_filename=source_filename,
+    )
 
 
 def _parse_sell(text: str) -> dict[str, Any]:
@@ -245,11 +284,21 @@ def detect_and_register(extracted_text: str, source_filename: str) -> dict:
                 data["ticker"], data["entry_price"], max(1, int(float(data["quantity"]))),
                 fees=0.0,
                 notes=f"Broker ingest source={source_filename}; ref={data['broker_ref']}",
-                stop_loss=data.get("stop_loss"), target_price=data.get("target_price"), status="PENDING_FILL",
+                status="PENDING_FILL",
             )
             row = atlas_db.confirm_trade_fill(trade_id, data["quantity"], data["entry_price"], data.get("fees") or 0.0, data["broker_ref"])
+            display_snapshot = _record_display_snapshot(data, source_filename)
             _notify(f"✅ Broker ingest: BUY {data['ticker']} {data['entry_price']} registered automatically")
-            return {"event": _EVENT_BUY, "status": "registered", "trade_id": trade_id, "row": row, "source": source_filename}
+            return {"event": _EVENT_BUY, "status": "registered", "trade_id": trade_id, "row": row, "broker_display_snapshot": display_snapshot, "source": source_filename}
+
+        if event == _EVENT_DISPLAY:
+            data = _parse_display(text)
+            missing = _missing(data, ["ticker"])
+            if missing:
+                _log(f"DISPLAY parse missing={missing} file={source_filename}")
+                return {"event": _EVENT_UNKNOWN, "status": "ignored", "reason": "missing_fields", "missing": missing, "source": source_filename}
+            display_snapshot = _record_display_snapshot(data, source_filename)
+            return {"event": _EVENT_DISPLAY, "status": "registered", "broker_display_snapshot": display_snapshot, "source": source_filename}
 
         if event == _EVENT_SELL:
             data = _parse_sell(text)

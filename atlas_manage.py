@@ -22,7 +22,7 @@ SAFETY
   - Default mode is --dry-run = OFF only when you pass --live. Without --live,
     NOTHING is written: it just shows what it WOULD do.
   - All sells/buys go through the existing atlas_db FIFO ledger (open_trade /
-    close_trade), which already pushes to The Vault. No data is ever deleted.
+    close_trade). No data is ever deleted.
 
 USAGE
 -----
@@ -50,6 +50,10 @@ import atlas_portfolio as port
 from atlas_symbol_meta import company_name
 from atlas_time import current_et_market_date_str
 from atlas_engine import analyze_ticker, check_regime, check_macro_context, get_macro_sentiment
+try:
+    import atlas_fda_calendar
+except Exception:
+    atlas_fda_calendar = None
 try:
     from atlas_audit import log_signal as _atlas_log_signal
 except Exception:
@@ -152,6 +156,41 @@ def _pillar_count(score):
     except Exception:
         return 0
 
+
+
+
+def _load_fda_scan_context(candidates):
+    """Load FDA calendar once per scan for Stage 1 metadata-only annotation."""
+    if atlas_fda_calendar is None:
+        return {"active": False, "reason": "atlas_fda_calendar unavailable", "cache": {"rows": [], "index": {}}, "stats": {}}
+    try:
+        cache = atlas_fda_calendar.load_or_refresh_fda_cache(days=60)
+        stats = dict(cache.get("stats") or {})
+        stats.update(atlas_fda_calendar.get_stats())
+        return {"active": True, "cache": cache, "stats": stats, "candidate_count": len(candidates or [])}
+    except Exception as exc:
+        return {"active": False, "reason": f"{type(exc).__name__}: {exc}", "cache": {"rows": [], "index": {}}, "stats": {}}
+
+
+def _attach_fda_metadata(row, fda_context):
+    """Attach FDA metadata to a candidate/report row without touching score/action fields."""
+    if not isinstance(row, dict) or not isinstance(fda_context, dict) or not fda_context.get("active"):
+        return row
+    ticker = str(row.get("ticker") or row.get("symbol") or "").upper().strip()
+    if not ticker or atlas_fda_calendar is None:
+        return row
+    metadata = {}
+    if isinstance(row.get("fundamentals"), dict):
+        metadata.update(row.get("fundamentals") or {})
+    for key in ("sector", "industry", "type", "fda_relevant"):
+        if key in row and key not in metadata:
+            metadata[key] = row.get(key)
+    news_text = " ".join(str(row.get(k) or "") for k in ("reason", "signal", "catalyst", "catalyst_reason"))
+    fda = atlas_fda_calendar.get_fda_metadata_for_ticker(ticker, metadata=metadata, news_text=news_text, cache=fda_context.get("cache"))
+    if fda:
+        row.setdefault("fda_calendar_normalized", fda)
+        row.setdefault("fda_relevance_reason", fda.get("fda_relevance_reason"))
+    return row
 
 def _score_text(pillars):
     try:
@@ -941,6 +980,11 @@ def run(args):
 
     _timing_log("ticker_loop", "end", ticker_loop_start, extra=f"processed={idx} scanned={scanned_count} candidates_final={len(candidates)}")
 
+    fda_scan_context = _load_fda_scan_context(candidates)
+    for _row in high_candidates:
+        _attach_fda_metadata(_row, fda_scan_context)
+    LAST_RUN_SUMMARY["fda_scan_stats"] = fda_scan_context.get("stats", {})
+
     LAST_RUN_SUMMARY.update({
         "candidates": candidates,
         "scanned_count": scanned_count,
@@ -955,7 +999,7 @@ def run(args):
         "result": "ACTION" if (buys or sells) else "DO NOTHING",
     })
 
-    # --- PERSIST SCAN RESULT TO HANDOFF (so Vault + pre-market brief stay live) ---
+    # --- PERSIST SCAN RESULT TO HANDOFF (so pre-market brief stays live) ---
     if live:
         try:
             import datetime as _dt
@@ -977,7 +1021,7 @@ def run(args):
             LAST_RUN_SUMMARY["handoff_error"] = str(_e)
             print(f"  [handoff] persist skipped: {_e}")
     else:
-        print("  [handoff] DRY-RUN: skipping handoff persistence and vault sync")
+        print("  [handoff] DRY-RUN: skipping handoff persistence")
     # ------------------------------------------------------------------------------
 
     _finish(live, sells, buys)

@@ -2443,7 +2443,7 @@ def _run_intraday_locked(now, force=False, dry_run=False):
     buys = summary.get("buys", []) or []
     sells = summary.get("sells", []) or []
     if buys or sells:
-        print(f"Result: ACTION - {len(buys)} BUY(S), {len(sells)} SELL(S). See Vault.")
+        print(f"Result: ACTION - {len(buys)} BUY(S), {len(sells)} SELL(S). Review report.")
     else:
         print("Result: DO NOTHING. No new buys, no exits this cycle.")
 
