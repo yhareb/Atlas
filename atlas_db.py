@@ -2,6 +2,7 @@ import sqlite3
 import json
 import os
 import re
+from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime
 
 DB_PATH = os.environ.get("ATLAS_DB", "/Users/yasser/scripts/atlas.db")
@@ -717,15 +718,11 @@ def get_pending_fill_trades():
 
 
 def close_trade(ticker, exit_price, quantity=None, fees=0.0, exit_at=None):
-    """Close shares of `ticker` FIFO at `exit_price`.
+    """Legacy FIFO close path for non-broker-backed rows only.
 
-    Partial sells SPLIT lots: if you sell fewer shares than the oldest open
-    lot holds, that lot is split into a CLOSED portion (with realized P&L) and
-    a remaining OPEN portion. `fees` (the sell-side commission) is distributed
-    across the closed shares proportionally.
-
-    If `quantity` is None, ALL open shares of the ticker are closed.
-    Returns a list of the CLOSED trade ids created/affected.
+    Broker-backed positions must close through close_trade_broker_confirmed(),
+    which requires confirmed sell evidence and posts the matching cash credit.
+    Fractional quantities are preserved with Decimal arithmetic.
     """
     ticker = (ticker or "").upper()
     exit_price = float(exit_price)
@@ -740,13 +737,22 @@ def close_trade(ticker, exit_price, quantity=None, fees=0.0, exit_at=None):
         ORDER BY entry_at ASC, id ASC
     ''', (ticker,))
     open_lots = cursor.fetchall()
+    cursor.execute(
+        "SELECT COUNT(*) FROM trades WHERE ticker=? AND status='OPEN' AND COALESCE(broker_ref,'') != ''",
+        (ticker,),
+    )
+    if cursor.fetchone()[0]:
+        conn.close()
+        raise PermissionError(
+            f"Broker-backed {ticker} requires close_trade_broker_confirmed() with confirmed sell evidence"
+        )
 
-    total_open = sum(int(r[1]) for r in open_lots)
+    total_open = sum(Decimal(str(r[1])) for r in open_lots)
     if total_open == 0:
         conn.close()
         raise ValueError(f"No open shares of {ticker} to close.")
 
-    shares_to_close = int(quantity) if quantity not in (None, 0) else total_open
+    shares_to_close = Decimal(str(quantity)) if quantity not in (None, 0) else total_open
     if shares_to_close > total_open:
         # Don't oversell; clamp to what's open and note it.
         shares_to_close = total_open
@@ -758,19 +764,19 @@ def close_trade(ticker, exit_price, quantity=None, fees=0.0, exit_at=None):
     for lot_id, lot_qty, entry_price, entry_at, entry_fee, stop_loss, risk_pct, target_price in open_lots:
         if remaining <= 0:
             break
-        lot_qty = int(lot_qty)
-        entry_price = float(entry_price)
-        entry_fee = float(entry_fee or 0)
+        lot_qty = Decimal(str(lot_qty))
+        entry_price = Decimal(str(entry_price))
+        entry_fee = Decimal(str(entry_fee or 0))
 
         take = min(remaining, lot_qty)
         # Proportional fees for the portion being closed.
-        sell_fee_share = total_sell_fee * (take / shares_to_close) if shares_to_close else 0
-        entry_fee_share = entry_fee * (take / lot_qty) if lot_qty else 0
+        sell_fee_share = Decimal(str(total_sell_fee)) * (take / shares_to_close) if shares_to_close else Decimal("0")
+        entry_fee_share = entry_fee * (take / lot_qty) if lot_qty else Decimal("0")
 
-        gross = (exit_price - entry_price) * take
+        gross = (Decimal(str(exit_price)) - entry_price) * take
         realized = gross - entry_fee_share - sell_fee_share
         cost_basis = entry_price * take
-        realized_pct = (realized / cost_basis * 100) if cost_basis else None
+        realized_pct = (realized / cost_basis * Decimal("100")) if cost_basis else None
 
         if take == lot_qty:
             # Close the whole lot in place.
@@ -779,8 +785,8 @@ def close_trade(ticker, exit_price, quantity=None, fees=0.0, exit_at=None):
                 SET status='CLOSED', exit_price=?, exit_at=?, exit_fees=?,
                     entry_fees=?, realized_pnl=?, realized_pnl_pct=?, updated_at=?
                 WHERE id=?
-            ''', (exit_price, exit_at, sell_fee_share, entry_fee_share,
-                  realized, realized_pct, _now(), lot_id))
+            ''', (exit_price, exit_at, float(sell_fee_share), float(entry_fee_share),
+                  float(realized), None if realized_pct is None else float(realized_pct), _now(), lot_id))
             closed_ids.append(lot_id)
         else:
             # SPLIT: shrink the open lot, create a new CLOSED child lot.
@@ -788,15 +794,16 @@ def close_trade(ticker, exit_price, quantity=None, fees=0.0, exit_at=None):
             new_entry_fee = entry_fee - entry_fee_share
             cursor.execute('''
                 UPDATE trades SET quantity=?, entry_fees=?, updated_at=? WHERE id=?
-            ''', (new_open_qty, new_entry_fee, _now(), lot_id))
+            ''', (float(new_open_qty), float(new_entry_fee), _now(), lot_id))
             cursor.execute('''
                 INSERT INTO trades (ticker, status, quantity, entry_price, entry_at,
                                     exit_price, exit_at, entry_fees, exit_fees,
                                     realized_pnl, realized_pnl_pct, parent_id,
                                     stop_loss, risk_pct, target_price, manual_stop_lock, notes, updated_at)
-                VALUES (?, 'CLOSED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (ticker, take, entry_price, entry_at, exit_price, exit_at,
-                  entry_fee_share, sell_fee_share, realized, realized_pct, lot_id,
+                VALUES (?, 'CLOSED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            ''', (ticker, float(take), float(entry_price), entry_at, exit_price, exit_at,
+                  float(entry_fee_share), float(sell_fee_share), float(realized),
+                  None if realized_pct is None else float(realized_pct), lot_id,
                   stop_loss, risk_pct, target_price,
                   f"Partial close split from lot #{lot_id}.", _now()))
             closed_ids.append(cursor.lastrowid)
@@ -828,9 +835,12 @@ def close_trade_broker_confirmed(ticker, trade_id, exit_price, quantity, fees, b
     """
     ticker = (ticker or "").upper()
     trade_id = int(trade_id)
-    exit_price = float(exit_price)
-    quantity = float(quantity)
-    fees = float(fees or 0.0)
+    exit_price_decimal = Decimal(str(exit_price))
+    quantity_decimal = Decimal(str(quantity))
+    fees_decimal = Decimal(str(fees or 0.0))
+    exit_price = float(exit_price_decimal)
+    quantity = float(quantity_decimal)
+    fees = float(fees_decimal)
     broker_ref = str(broker_ref or "").strip() or None
     exit_at = exit_at or _now()
     if not ticker or trade_id <= 0 or exit_price <= 0 or quantity <= 0:
@@ -854,20 +864,22 @@ def close_trade_broker_confirmed(ticker, trade_id, exit_price, quantity, fees, b
     if status != "OPEN":
         conn.close()
         raise ValueError(f"Trade id {trade_id} is {status}, not OPEN")
-    open_qty = float(open_qty or 0.0)
-    if abs(open_qty - quantity) > 0.0001:
+    open_qty_decimal = Decimal(str(open_qty or 0.0))
+    if open_qty_decimal != quantity_decimal:
         conn.close()
         raise ValueError(f"Trade id {trade_id} quantity mismatch: open {open_qty}, broker {quantity}")
 
-    entry_price = float(entry_price)
-    entry_fees = float(entry_fees or 0.0)
+    entry_price_decimal = Decimal(str(entry_price))
+    entry_fees_decimal = Decimal(str(entry_fees or 0.0))
+    entry_price = float(entry_price_decimal)
+    entry_fees = float(entry_fees_decimal)
     if realized_pnl is None:
-        realized = ((exit_price - entry_price) * quantity) - entry_fees - fees
+        realized = float(((exit_price_decimal - entry_price_decimal) * quantity_decimal) - entry_fees_decimal - fees_decimal)
     else:
         realized = float(realized_pnl)
     if realized_pnl_pct is None:
-        cost_basis = entry_price * quantity
-        realized_pct = (realized / cost_basis * 100.0) if cost_basis else None
+        cost_basis_decimal = entry_price_decimal * quantity_decimal
+        realized_pct = float(Decimal(str(realized)) / cost_basis_decimal * Decimal("100")) if cost_basis_decimal else None
     else:
         realized_pct = float(realized_pnl_pct)
     close_note = f"Broker confirmed close ref {broker_ref}" if broker_ref else "Broker confirmed close"
@@ -882,7 +894,8 @@ def close_trade_broker_confirmed(ticker, trade_id, exit_price, quantity, fees, b
     if cursor.rowcount != 1:
         conn.rollback(); conn.close()
         raise RuntimeError(f"Failed to close trade id {trade_id}")
-    credit = (exit_price * quantity) - fees
+    credit_decimal = (exit_price_decimal * quantity_decimal) - fees_decimal
+    credit = float(credit_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
     _append_cash_ledger(cursor, credit, f"Broker sell {ticker} {broker_ref or ''}: {quantity} sh @ {exit_price} net credit {round(credit, 2)} fees {fees}".strip())
     conn.commit()
     _bk_cash_ledger_id = cursor.execute("SELECT id FROM cash_ledger ORDER BY id DESC LIMIT 1").fetchone()[0]
@@ -891,7 +904,7 @@ def close_trade_broker_confirmed(ticker, trade_id, exit_price, quantity, fees, b
 
     # P0L-9 STAGING dual-write: fires only after the legacy commit above.
     # Never fatal -- failures here cannot undo or block the legacy write.
-    _bk_buy_cost_basis_cents = _bk_to_cents(entry_price * quantity + entry_fees)
+    _bk_buy_cost_basis_cents = _bk_to_cents(entry_price_decimal * quantity_decimal + entry_fees_decimal)
     _bk_safe(_dualwrite_sell_fill, trade_id, ticker, quantity, exit_price,
              credit, _bk_cash_ledger_id, _bk_buy_cost_basis_cents, broker_ref=broker_ref)
     return _fetch_trade_rows([trade_id])[0]

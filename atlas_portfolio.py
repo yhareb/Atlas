@@ -39,6 +39,7 @@ import math
 import json
 import re
 import requests
+from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, date, timedelta, time
 from zoneinfo import ZoneInfo
@@ -879,7 +880,9 @@ def evaluate_exit(lot, dry_run=True, regime=None):
     raise the effective stop, but never lower the persisted decision stop.
     """
     ticker = lot["ticker"].upper()
-    qty = int(lot["quantity"])
+    # Preserve broker fractional-share quantities exactly in advisory output.
+    qty_decimal = Decimal(str(lot["quantity"]))
+    qty = str(qty_decimal)
     entry = float(lot["entry_price"])
     entry_at = lot.get("entry_at")
 
@@ -1084,15 +1087,13 @@ def evaluate_exit(lot, dry_run=True, regime=None):
             result["recommendation"] = macro_recommendation
         return result
 
-    if not dry_run:
-        try:
-            atlas_db.close_trade(ticker, price, quantity=qty)
-        except Exception as e:
-            return {"ticker": ticker, "action": "ERROR", "reason": str(e)}
-
+    # Exit detection is advisory-only. The position remains OPEN until
+    # close_trade_broker_confirmed() receives confirmed broker sell evidence,
+    # or an explicit Professor-authorized correction is applied separately.
     return {"ticker": ticker, "action": action, "reason": reason, "price": price, "qty": qty,
             "entry": round(entry, 2), "stop": round(stop, 2), "target": round(target, 2),
-            "regime_ok": regime_ok, "macro_alert": macro_alert_reason}
+            "regime_ok": regime_ok, "macro_alert": macro_alert_reason,
+            "advisory_only": True, "broker_confirmation_required": True}
 
 
 def _load_perme_context():

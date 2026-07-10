@@ -49,6 +49,9 @@ if os.environ.get("ATLAS_STAGING_DB") or os.environ.get("ATLAS_DB"):
 from atlas_symbol_meta import ticker_label
 from atlas_schemas import AtlasSignal, AtlasTrade
 from atlas_report_blocks import holding_block, pullback_block, watch_list_block
+from atlas_intraday_advisory import (advise as _advise_intraday, build_advisory_routing,
+    naturalize as _naturalize_report, regime as _advisory_regime, signal_family)
+from atlas_profit_protection_advisory import render_profit_protection_cards
 from atlas_report_authority import render_pending_broker_confirmation as _shared_pending_broker_confirmation_block, SOURCE_DB, SOURCE_TFE, SOURCE_BROKER, SOURCE_LEDGER, SOURCE_PROVIDER, SOURCE_CACHE, SOURCE_FALLBACK, SOURCE_RENDER_CALC, resolve_price_authority, valuation_excluded_tickers
 _ALERT_COOLDOWN: dict = {}  # ticker -> {"ts": float, "dist": float} — cooldown state for proactive DM
 
@@ -489,6 +492,7 @@ def _trim_macro_reason(reason):
     if "?" in text:
         text = "macro caution"
     text = re.sub(r":\s+[A-Z][a-z].*$", "", text).strip()
+    text = re.sub(r"\bRISK[-_ ](?:ON|OFF)\b", "defensive conditions", text, flags=re.I)
     if len(text) > 120:
         text = text[:120].rstrip()
     return text or "macro caution"
@@ -644,13 +648,8 @@ def _perme_header_line(flags):
 
 
 def _perme_engine_packet_lines(summary):
-    if _load_engine_packets is None or _render_engine_packet_annotations is None:
-        return []
-    path = os.environ.get("ATLAS_PERME_ENGINE_PACKET_PATH") or "/Users/yasser/atlas_inbox/perme_engine_packet_v1.jsonl"
-    packets, errors = _load_engine_packets(path)
-    if errors:
-        print(f"[intraday] Perme engine packet rejected={len(errors)} accepted={len(packets)}")
-    return _render_engine_packet_annotations(packets, summary or {})
+    """Legacy hook retained for callers; packet/machine output is never human-rendered."""
+    return []
 
 def _perme_report_context_lines(summary):
     context = (summary or {}).get("perme_report_context") or {}
@@ -684,18 +683,18 @@ def _header_lines(summary, hold_count):
     detail = str(summary.get("regime_detail") or "")
     m = re.search(r"SPY\s+([0-9.]+)", detail)
     spy = _price(m.group(1)) if m else "N/A"
-    if "RISK-ON" in detail.upper() or summary.get("regime_ok"):
-        regime = "🟢 RISK-ON"
-    else:
-        regime = "🔴 RISK-OFF"
+    regime_name = _advisory_regime(summary)
+    regime = {"RISK-ON": "🟢 RISK-ON", "CAUTION": "🟡 CAUTION", "RISK-OFF": "🔴 RISK-OFF"}[regime_name]
     macro_note = ""
     if isinstance(macro, dict) and macro.get("cautious"):
         macro_note = f" · {macro.get('note') or '⚠️ macro caution'}"
     if isinstance(macro_sent, dict) and macro_sent.get("active", True):
         sent = str(macro_sent.get("sentiment") or "NEUTRAL").upper()
-        if sent in {"CAUTION", "RISK_OFF"}:
+        if sent in {"CAUTION", "RISK_OFF", "RISK-OFF"}:
             reason = _trim_macro_reason(macro_sent.get("reason") or "macro caution")
-            macro_note += f" · 🧠 {sent}: {reason}"
+            # Preserve the source fact without printing a second regime token.
+            descriptor = "cautious macro sentiment" if sent == "CAUTION" else "defensive macro sentiment"
+            macro_note += f" · 🧠 {descriptor}: {reason}"
     positions = summary.get("open_positions_count", hold_count)
     try:
         positions_for_valuation = _authority_open_position_rows(summary)
@@ -721,7 +720,7 @@ def _header_lines(summary, hold_count):
 
 
 def _current_cycle_buy_signals(before_id=None, minutes=15):
-    """Return BUY/BUY Small signal rows written after the scan high-water mark."""
+    """Return classifiable current-cycle advisory rows after the high-water mark."""
     db_path = getattr(atlas_db, "DB_PATH", "/Users/yasser/scripts/atlas.db")
     try:
         con = sqlite3.connect(db_path)
@@ -729,26 +728,18 @@ def _current_cycle_buy_signals(before_id=None, minutes=15):
         if before_id:
             where_clause = """
             WHERE id > ?
-              AND signal LIKE '%BUY%'
-              AND (
-                COALESCE(score, '') LIKE '4/%'
-                OR COALESCE(score, '') LIKE '3/%'
-              )
+              AND COALESCE(signal, '') <> ''
             """
             params = (int(before_id),)
         else:
             where_clause = """
             WHERE timestamp >= datetime('now', ?)
-              AND signal LIKE '%BUY%'
-              AND (
-                COALESCE(score, '') LIKE '4/%'
-                OR COALESCE(score, '') LIKE '3/%'
-              )
+              AND COALESCE(signal, '') <> ''
             """
             params = (f"-{int(minutes)} minutes",)
         rows = con.execute(
             f"""
-            SELECT ticker, score, signal, entry_price, stop_loss, rvol, warnings, timestamp
+            SELECT *
             FROM signals
             {where_clause}
             ORDER BY
@@ -1069,6 +1060,9 @@ def _enrich_signal_row(row, high_map=None, live_prices=None, indicator_map=None)
     _ind_from_row = row.get("indicator_info")
     indicator = _ind_from_map or _ind_from_payload or _ind_from_row or {}
     indicator = _normalize_indicator_payload(indicator)
+    for key in ("rsi", "momentum_weak", "macd_histogram", "macd_hist"):
+        if key in row and row.get(key) not in (None, ""):
+            indicator[key] = row.get(key)
     row["indicator_info"] = indicator  # always write back, even if empty
     return row
 
@@ -1231,21 +1225,83 @@ def _top_pick_rsi_momentum_suppressed(row, sig):
     return "MOMENTUM WEAK" in warning_text.upper() and float(sig.rsi) > 70.0
 
 
-def _canonical_top_pick_signals(before_scan_signal_id=None, high=None, summary=None, buy_now_tickers=None):
+def _advisory_now(summary):
+    value = (summary or {}).get("advisory_as_of")
+    try:
+        return datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else datetime.datetime.now(datetime.timezone.utc)
+    except Exception:
+        return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _report_gates(row, sig, now):
+    """Construct report gates only from renderer-known facts; no DB schema field."""
+    ts = _parse_signal_timestamp(row.get("timestamp") or row.get("signal_timestamp"))
+    now_naive = now.astimezone().replace(tzinfo=None) if now.tzinfo else now
+    age = (now_naive - ts).total_seconds() / 60.0 if ts else None
+    rvol = getattr(sig, "rvol", None) if sig else _rvol_value(row)
+    trigger = sig.trigger_price if sig else _num(row.get("trigger_price") or row.get("entry_price"), 0)
+    current = sig.current_price if sig else _num(row.get("current_price") or row.get("price"), 0)
+    # If no price pair is available, do not invent a failed level. Existing
+    # renderer eligibility remains authoritative; when both values exist, gate it.
+    eligible = True if not (trigger and current) else bool(trigger * 0.97 <= current <= trigger * 1.08)
+    return {
+        "current_vs_trigger_eligible": eligible,
+        "data_timestamp_valid": age is not None and 0 <= age <= BUY_NOW_MAX_SIGNAL_AGE_MINUTES,
+        "rvol_eligible": rvol is not None and rvol >= RVOL_DISPLAY_THRESHOLD,
+        "too_hot_false": bool(sig) and not sig.is_too_hot,
+    }
+
+
+def _current_cycle_advisory_decisions(before_scan_signal_id=None, high=None, summary=None):
+    """Single immutable-cycle collection used by both TOP PICKS and WAIT."""
     summary = summary if isinstance(summary, dict) else {}
     high_map = _high_by_ticker(high)
-    if buy_now_tickers is None:
-        buy_now_tickers = _buy_now_tickers(before_scan_signal_id, high=high, summary=summary)
-    buy_now_tickers = {str(t or "").upper() for t in (buy_now_tickers or set()) if str(t or "").strip()}
-    blocked = _open_tickers(summary) | _waiting_pullback_tickers() | buy_now_tickers
-    signals = []
-    rows = [row for row in _current_cycle_buy_signals(before_scan_signal_id) if _row_ticker(row) not in blocked]
+    rows = list(_current_cycle_buy_signals(before_scan_signal_id))
     indicator_map = _indicator_info_map([_row_ticker(row) for row in rows], summary=summary)
-    for row in rows:
+    now = _advisory_now(summary)
+    decisions = []
+    for raw in rows:
+        raw_fields = {key: raw.get(key) for key in ("signal", "score", "pillars", "timestamp")}
+        row = {**dict(raw), **high_map.get(_row_ticker(raw), {}), **raw_fields}
+        # Persisted signals encode Relative Strength as human text, commonly
+        # "YES (...)" or "NO (...)". Translate that sourced fact into an
+        # explicit report-level gate while preserving the raw field verbatim.
+        rs_text = str(row.get("relative_strength") or "").strip().upper()
+        if "relative_strength_pass" not in row and rs_text:
+            if rs_text.startswith("YES"):
+                row["relative_strength_pass"] = True
+            elif rs_text.startswith("NO"):
+                row["relative_strength_pass"] = False
         row = _enrich_signal_row(row, high_map=high_map, indicator_map=indicator_map)
         sig = _signal_from_row(row, high_map)
-        if sig and not sig.is_too_hot and not _top_pick_rsi_momentum_suppressed(row, sig) and not (sig.trigger_price and sig.current_price and sig.current_price < sig.trigger_price * 0.97):
-            signals.append(sig)
+        if sig:
+            row.update({"rvol": getattr(sig, "rvol", None), "rsi": sig.rsi,
+                        "momentum_weak": sig.momentum_weak})
+        row["mandatory_report_gates"] = _report_gates(row, sig, now)
+        row.setdefault("data_source", row.get("source") or "current-cycle signal")
+        decisions.append((_advise_intraday(row, now=now), row, sig))
+    return tuple(decisions)
+
+
+def _current_cycle_advisory_routing(before_scan_signal_id=None, high=None, summary=None,
+                                    buy_now_tickers=None, decisions=None):
+    """Build the sole report routing authority from one enriched cycle snapshot."""
+    summary = summary if isinstance(summary, dict) else {}
+    decisions = decisions if decisions is not None else _current_cycle_advisory_decisions(
+        before_scan_signal_id, high, summary)
+    rows = [row for _decision, row, _sig in decisions]
+    return build_advisory_routing(
+        rows, now=_advisory_now(summary), buy_now_tickers=buy_now_tickers or (),
+        open_tickers=_open_tickers(summary), pending_tickers=_waiting_pullback_tickers(),
+    )
+
+
+def _canonical_top_pick_signals(before_scan_signal_id=None, high=None, summary=None, buy_now_tickers=None, decisions=None):
+    summary = summary if isinstance(summary, dict) else {}
+    decisions = decisions if decisions is not None else _current_cycle_advisory_decisions(before_scan_signal_id, high, summary)
+    excluded = _open_tickers(summary) | _waiting_pullback_tickers()
+    signals = [sig for decision, row, sig in decisions
+               if sig and decision.top_pick and decision.ticker not in excluded]
     return sorted({s.ticker: s for s in signals}.values(), key=lambda sig: (-_pillar_num(sig.pillar_score), sig.ticker))[:5]
 
 def _signal_sort_key(row):
@@ -1349,26 +1405,39 @@ def _action_buy_line(sig, summary=None):
     )
 
 
-def _actions_lines(buys, sells, summary=None, before_scan_signal_id=None, high=None, buy_now_tickers=None):
-    top_picks = _canonical_top_pick_signals(before_scan_signal_id, high=high, summary=summary, buy_now_tickers=buy_now_tickers)
-    lines = ["", f"━━━ 🔥 TOP PICKS ({len(top_picks)}) ━━━", ""]
-    if top_picks:
-        for i, sig in enumerate(top_picks, 1):
-            label = _ticker_label(sig.ticker, {"ticker": sig.ticker})
-            lines += [
-                f"{i}. {label}",
-                f"   💵 Entry {_price(sig.trigger_price)}",
-                f"   👀 Now {_price(sig.current_price)} ({_fmt_pct(((sig.current_price - sig.trigger_price) / sig.trigger_price * 100.0) if sig.trigger_price else 0.0, signed=True, decimals=0)})",
-                _rvol_line(sig),
-                f"   {sig.pillar_score}",
-                f"   📉 RSI {sig.rsi:.0f}" if sig.rsi is not None else "   📉 RSI N/A",
-                f"   📈 MACD+ · {_num(sig.macd_hist):.1f}" if sig.macd_hist is not None else "   📈 MACD+ · N/A",
-                "   ✅ Fundamentals" if sig.fundamentals_ok else "   ⚠️ Momentum Weak · No Earnings" if (sig.momentum_weak or sig.no_earnings) else "   —",
-                "",
-            ]
-    else:
-        lines.append("none")
-        lines.append("")
+def _decision_card_lines(decision):
+    raw = decision.raw
+    return [
+        decision.ticker,
+        f"   TFE CLASSIFICATION: {raw.get('signal')} · score {raw.get('score')} · pillars {raw.get('pillars')} · timestamp {raw.get('timestamp')}",
+        f"   ACTION NOW: {decision.action_now}",
+        "   WHY: " + "; ".join(decision.why),
+        "   BLOCKERS: " + ("; ".join(decision.blockers) if decision.blockers else "none"),
+        f"   DATA FRESHNESS: {decision.freshness}",
+        "",
+    ]
+
+
+def _actions_lines(buys, sells, summary=None, before_scan_signal_id=None, high=None, buy_now_tickers=None, decisions=None, routing=None):
+    routing = routing or _current_cycle_advisory_routing(before_scan_signal_id, high, summary, buy_now_tickers, decisions)
+    picks = routing.top_picks
+    lines = ["", f"━━━ 🔥 TOP PICKS ({len(picks)}) ━━━", ""]
+    if not picks:
+        return lines + ["none", ""]
+    for decision in picks:
+        lines += _decision_card_lines(decision)
+    return lines
+
+
+def _advisory_action_lines(before_scan_signal_id=None, high=None, summary=None, decisions=None, routing=None):
+    """Render qualified WAIT from the same canonical route used by TOP PICKS."""
+    routing = routing or _current_cycle_advisory_routing(before_scan_signal_id, high, summary, None, decisions)
+    waits = routing.qualified_wait
+    lines = ["", f"━━━ TECHNICALLY QUALIFIED — WAIT ({len(waits)}) ━━━", ""]
+    if not waits:
+        return lines + ["none", ""]
+    for decision in waits:
+        lines += _decision_card_lines(decision)
     return lines
 
 
@@ -1645,6 +1714,15 @@ def _holding_lines(summary):
     summary = summary if isinstance(summary, dict) else {}
     positions = _authority_open_position_rows(summary)
     return holding_block(positions, summary or {})
+
+
+def _profit_protection_lines(summary):
+    """Render deterministic advisory-only profit protection cards after HOLDING."""
+    summary = summary if isinstance(summary, dict) else {}
+    positions = _authority_open_position_rows(summary)
+    def _label(ticker):
+        return _ticker_label(ticker, {"ticker": ticker})
+    return render_profit_protection_cards(positions, ticker_label=_label)
 
 
 def _pending_broker_confirmation_lines(summary=None):
@@ -1938,21 +2016,21 @@ def _watch_sort_value(item):
 def _intraday_diagnostic_lines(summary, before_scan_signal_id=None, high=None, buy_now_tickers=None):
     lines = []
     summary = summary if isinstance(summary, dict) else {}
-    buy_rows = list(_current_cycle_buy_signals(before_scan_signal_id) or [])
+    routing = summary.get("advisory_routing_diagnostics") or {}
+    excluded = routing.get("exclusion_reasons") or {}
+    blocked = [f"{ticker} ({reason})" for ticker, reason in sorted(excluded.items())]
+    if routing:
+        counts = routing.get("counts") or {}
+        equation = (
+            f"Current BUY-family {routing.get('current_buy_family_count', 0)} = "
+            f"BUY NOW {counts.get('buy_now', 0)} + TOP PICKS {counts.get('top_picks', 0)} + "
+            f"QUALIFIED WAIT {counts.get('qualified_wait', 0)} + EXCLUDED {counts.get('explicitly_excluded', 0)}"
+        )
+        if not routing.get("equation_holds"):
+            raise AssertionError("current-cycle BUY-family diagnostic equation failed")
+    else:
+        equation = None
     open_tickers = _open_tickers(summary)
-    waiting_tickers = _waiting_pullback_tickers()
-    blocked = []
-    for row in buy_rows:
-        ticker = _row_ticker(row)
-        if not ticker or ticker in (buy_now_tickers or set()):
-            continue
-        reason = None
-        if ticker in open_tickers:
-            reason = "open-position"
-        elif ticker in waiting_tickers:
-            reason = "WAITING"
-        if reason:
-            blocked.append(f"{ticker} {row.get('score') or ''} ({reason})")
     watch_2 = [str(t).upper() for t in (summary.get("watch_2", []) or []) if str(t or "").strip()]
     detail_watch = []
     for item in summary.get("high_candidates", []) or []:
@@ -1961,13 +2039,16 @@ def _intraday_diagnostic_lines(summary, before_scan_signal_id=None, high=None, b
             if ticker:
                 detail_watch.append(ticker)
     rendered_pool = [t for t in dict.fromkeys(watch_2 + sorted(set(detail_watch))) if t not in open_tickers]
-    omitted = rendered_pool[15:]
-    if blocked:
-        lines += ["", "━━━ 🧪 REPORT DIAGNOSTICS ━━━", f"BUY Small blocked: {', '.join(blocked[:6])}" + (f" +{len(blocked)-6} more" if len(blocked) > 6 else "")]
+    cap = max(1, int(summary.get("watching_cap", 15) or 15))
+    omitted = rendered_pool[cap:]
+    if routing:
+        lines += ["", "━━━ 🧪 REPORT DIAGNOSTICS ━━━", equation]
+        if blocked:
+            lines.append(f"Explicitly excluded: {', '.join(blocked[:6])}" + (f" +{len(blocked)-6} more" if len(blocked) > 6 else ""))
     if omitted:
         if not lines:
             lines += ["", "━━━ 🧪 REPORT DIAGNOSTICS ━━━"]
-        lines.append(f"WATCH omitted by top-15 cap: {', '.join(omitted[:8])}" + (f" +{len(omitted)-8} more" if len(omitted) > 8 else ""))
+        lines.append(f"WATCH omitted by {cap}-item cap: {', '.join(omitted)}")
     return lines
 
 
@@ -1983,7 +2064,7 @@ def _watch_lines(summary):
     watch_rows = []
     for ticker in watch_2 + sorted(detail_by_ticker):
         watch_rows.append(detail_by_ticker.get(ticker, {"ticker": ticker, "action": "WATCH"}))
-    return watch_list_block({"watch_2": watch_2, "high_candidates": watch_rows}, open_tickers=_open_tickers(summary))
+    return watch_list_block({"watch_2": watch_2, "high_candidates": watch_rows}, open_tickers=_open_tickers(summary), cap=summary.get("watching_cap", 15))
 
 def _news_lines(summary):
     candidate_tickers = {str(x.get("ticker", "")).upper() for x in summary.get("high_candidates", []) or []}
@@ -2014,24 +2095,34 @@ def _build_report(summary):
     pending_count = len(atlas_db.get_pending_fill_trades())
 
     before_scan_signal_id = summary.get("_before_scan_signal_id")
+    advisory_decisions = _current_cycle_advisory_decisions(before_scan_signal_id, high=high, summary=summary)
     buy_now_tickers = _buy_now_tickers(before_scan_signal_id, high=high, summary=summary)
+    advisory_routing = _current_cycle_advisory_routing(
+        before_scan_signal_id, high=high, summary=summary,
+        buy_now_tickers=buy_now_tickers, decisions=advisory_decisions)
+    summary["advisory_routing_diagnostics"] = advisory_routing.diagnostics()
+    # Current-cycle WATCH belongs only to the watch path; preserve existing watch inputs.
+    summary["watch_2"] = list(dict.fromkeys(
+        [str(t).upper() for t in (summary.get("watch_2") or [])] +
+        [decision.ticker for decision in advisory_routing.watch]))
     lines = _header_lines(summary, hold_count)
-    lines += _perme_engine_packet_lines(summary)
     lines += _sell_now_lines(summary)
     lines += _position_risk_alert_lines(summary)
     lines += _review_now_lines(summary)
     lines += _macro_watch_lines(summary)
     lines += _holding_lines(summary)
+    lines += _profit_protection_lines(summary)
     lines += _pending_broker_confirmation_lines(summary)
     lines += _buy_now_lines(summary, before_scan_signal_id, high=high)
-    lines += _actions_lines(buys, sells, summary, before_scan_signal_id, high=high, buy_now_tickers=buy_now_tickers)
+    lines += _actions_lines(buys, sells, summary, before_scan_signal_id, high=high, buy_now_tickers=buy_now_tickers, decisions=advisory_decisions, routing=advisory_routing)
+    lines += _advisory_action_lines(before_scan_signal_id, high=high, summary=summary, decisions=advisory_decisions, routing=advisory_routing)
     lines += _waiting_lines(high, suppress_tickers=buy_now_tickers, summary=summary)
     lines += _gap_breakout_lines(summary)
     lines += _intraday_breakout_lines(summary)
     lines += _gates_lines(high)
     lines += _watch_lines(summary)
     lines += _intraday_diagnostic_lines(summary, before_scan_signal_id=before_scan_signal_id, high=high, buy_now_tickers=buy_now_tickers)
-    return "\n".join(lines)
+    return _naturalize_report("\n".join(lines))
 
 
 def _pending_price_positive(value):
@@ -2443,7 +2534,7 @@ def _run_intraday_locked(now, force=False, dry_run=False):
     buys = summary.get("buys", []) or []
     sells = summary.get("sells", []) or []
     if buys or sells:
-        print(f"Result: ACTION - {len(buys)} BUY(S), {len(sells)} SELL(S). Review report.")
+        print(f"Result: ACTION - {len(buys)} BUY(S), {len(sells)} SELL(S). See Vault.")
     else:
         print("Result: DO NOTHING. No new buys, no exits this cycle.")
 

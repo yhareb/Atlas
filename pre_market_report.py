@@ -604,22 +604,26 @@ def _armed_watchlist_symbols():
 
 
 def get_wavef_fda_warnings():
+    """Report-only FDA warnings via selective FDA helper/cache.
+
+    Uses atlas_fda_calendar normalized rows. Does not import protected engine
+    FDA loaders and does not affect scoring, BUY/AVOID, or candidate decisions.
+    """
     try:
-        from atlas_engine import _load_fda_calendar_window
-        payload = _load_fda_calendar_window() or {}
+        import atlas_fda_calendar
+        cache = atlas_fda_calendar.load_or_refresh_fda_cache(days=60)
     except Exception:
         return []
     today = current_et_market_date(); end = today + timedelta(days=5)
     out=[]
-    for row in payload.get("rows") or []:
+    for row in cache.get("rows") or []:
         d = _fda_event_date(row)
         if not d or d < today or d > end:
             continue
-        drug = row.get("drug") or {}
-        drug_name = drug.get("name") if isinstance(drug, dict) else None
+        drug_name = row.get("drug")
         event_type = row.get("event_type") or row.get("status") or row.get("outcome") or "FDA event"
-        for ticker in _fda_tickers(row) or [""]:
-            out.append({"ticker": ticker, "event_type": event_type, "event_date": d.isoformat(), "drug_name": drug_name})
+        ticker = str(row.get("ticker") or "").upper().strip()
+        out.append({"ticker": ticker, "event_type": event_type, "event_date": d.isoformat(), "drug_name": drug_name})
     return out
 
 

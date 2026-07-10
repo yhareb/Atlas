@@ -10,10 +10,31 @@ import re
 from typing import Any, Iterable
 
 try:
-    from atlas_report_authority import SOURCE_DB, SOURCE_TFE, SOURCE_PROVIDER, SOURCE_CACHE, SOURCE_FALLBACK, SOURCE_RENDER_CALC, normalize_price_source
+    from atlas_report_authority import normalize_price_source as _authority_normalize_price_source
 except Exception:
-    SOURCE_DB="[DB]"; SOURCE_TFE="[TFE]"; SOURCE_PROVIDER="[PROVIDER]"; SOURCE_CACHE="[CACHE]"; SOURCE_FALLBACK="[FALLBACK]"; SOURCE_RENDER_CALC="[RENDER-CALC]"
-    def normalize_price_source(source, *, value=None, fallback_value=None): return source or (SOURCE_FALLBACK if value == fallback_value else SOURCE_PROVIDER)
+    def _authority_normalize_price_source(source, *, value=None, fallback_value=None):
+        return source or ("[FALLBACK]" if value == fallback_value else "[PROVIDER]")
+
+# Shared human renderers translate authority classes at their own boundary.  The
+# underlying authority module keeps its diagnostic labels for non-human consumers.
+_HUMAN_SOURCE_LABELS = {
+    "[DB]": "Recorded", "DB": "Recorded",
+    "[TFE]": "TFE", "TFE": "TFE",
+    "[PROVIDER]": "Market data", "PROVIDER": "Market data",
+    "[CACHE]": "Cached market data", "CACHE": "Cached market data",
+    "[FALLBACK]": "Reference", "FALLBACK": "Reference",
+    "[RENDER-CALC]": "Calculated", "RENDER-CALC": "Calculated",
+}
+
+def _human_source_label(source: Any) -> str:
+    text = str(source or "").strip()
+    return _HUMAN_SOURCE_LABELS.get(text.upper(), text or "Market data")
+
+def normalize_price_source(source, *, value=None, fallback_value=None):
+    raw = _authority_normalize_price_source(source, value=value, fallback_value=fallback_value)
+    return _human_source_label(raw)
+
+SOURCE_DB="Recorded"; SOURCE_TFE="TFE"; SOURCE_PROVIDER="Market data"; SOURCE_CACHE="Cached market data"; SOURCE_FALLBACK="Reference"; SOURCE_RENDER_CALC="Calculated"
 
 RVOL_DISPLAY_THRESHOLD = 1.5
 
@@ -272,7 +293,7 @@ def holding_block(positions: Iterable[Any] | None, summary: dict[str, Any] | Non
         lines += portfolio_footer(total_invested, current_value)
     return lines
 
-def watch_list_block(watch_data: Any, open_tickers: Iterable[str] | None = None) -> list[str]:
+def watch_list_block(watch_data: Any, open_tickers: Iterable[str] | None = None, *, cap: int = 15) -> list[str]:
     """Canonical WATCHING block with open-position exclusion, no DB calls."""
     if isinstance(watch_data, dict):
         watch_2 = [str(t).upper() for t in (watch_data.get("watch_2", []) or [])]
@@ -302,13 +323,20 @@ def watch_list_block(watch_data: Any, open_tickers: Iterable[str] | None = None)
         item = detail_by_ticker.get(ticker, {"ticker": ticker})
         rows.append((_watch_sort_value(item), _ticker_label(ticker, item)))
     rows.sort(key=lambda x: x[0], reverse=True)
-    lines = ["", f"━━━ 👀 WATCHING ({len(rows)}) ━━━"]
+    total = len(rows)
+    cap = max(1, int(cap or 15))
+    shown = rows[:cap]
+    omitted = total - len(shown)
+    lines = ["", f"━━━ 👀 WATCHING ({len(shown)} shown of {total}) ━━━"]
     if not rows:
         lines.append("none")
         return lines
     lines.append("")
-    for i, (_, label) in enumerate(rows, 1):
+    for i, (_, label) in enumerate(shown, 1):
         lines.append(f"{i}. {label}")
+    if omitted:
+        omitted_names = [label for _, label in rows[cap:]]
+        lines.append(f"… {omitted} omitted by {cap}-item cap: {', '.join(omitted_names)}")
     return lines
 
 
@@ -343,7 +371,7 @@ def pullback_block(pullback_data: Iterable[Any] | None) -> list[str]:
             f"   {_signal_pillar_text(row)}",
             f"   📉 RSI {_num(rsi):.0f}" if rsi is not None else "   📉 RSI N/A",
             f"   📈 MACD+ · {_num(macd_hist):.1f}" if macd_hist is not None else "   📈 MACD+ · N/A",
-            "   ✅ Fundamentals" if fundamentals_ok else "   ⚠️ Momentum Weak · No Earnings" if (momentum_weak or no_earnings) else "   —",
+            "   ✅ Fundamentals" if fundamentals_ok else "   ⚠️ Momentum Weak" if momentum_weak else "   No earnings catalyst reported by source" if no_earnings else "   Earnings information missing",
             "",
         ]
     return lines
