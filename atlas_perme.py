@@ -19,7 +19,7 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -27,6 +27,7 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 from atlas_provider_guard import eodhd_get_json  # noqa: E402
+from atlas_time import is_trading_day  # noqa: E402
 import atlas_db  # noqa: E402
 from atlas_report_authority import portfolio_context_tickers  # noqa: E402
 from atlas_rag_flags import parse_flags  # noqa: E402
@@ -165,12 +166,47 @@ def _now_et() -> datetime:
     return datetime.now(ET)
 
 
+# NYSE early-close days are valid trading sessions for Perme report eligibility.
+# The shared Atlas full-holiday helper remains the primary gate; this exception
+# prevents early-close sessions from being treated as full market holidays.
+NYSE_EARLY_CLOSE_SESSION_DAYS_2026 = {
+    date(2026, 7, 2),
+    date(2026, 11, 27),
+    date(2026, 12, 24),
+}
+
+
+def _is_nyse_session_day(day: date) -> bool:
+    if day in NYSE_EARLY_CLOSE_SESSION_DAYS_2026:
+        return day.weekday() < 5
+    return bool(is_trading_day(day))
+
+
+def _non_trading_day_reason(now_et: datetime) -> str | None:
+    day = now_et.astimezone(ET).date() if now_et.tzinfo else now_et.date()
+    if day.weekday() >= 5:
+        return "WEEKEND"
+    if not _is_nyse_session_day(day):
+        return "NYSE_HOLIDAY"
+    return None
+
+
+def _perme_skip_non_trading_day_line(now_et: datetime, reason: str) -> str:
+    day = now_et.astimezone(ET).date() if now_et.tzinfo else now_et.date()
+    return f"PERME_SKIP_NON_TRADING_DAY date={day.isoformat()} reason={reason}"
+
+
+def render_closed_day_diagnostic(now_et: datetime, reason: str) -> str:
+    day = now_et.astimezone(ET).date() if now_et.tzinfo else now_et.date()
+    return (
+        f"Perme diagnostic only — market is closed on {day.isoformat()} "
+        f"({reason}). No provider calls, Hermes invocation, RAG lookup, "
+        "outbox write, macro-state write, or Telegram send was performed."
+    )
+
+
 def _routine_from_time(now_et: datetime) -> str:
     hm = now_et.strftime("%H:%M")
-    if now_et.weekday() == 5:  # Saturday
-        return "weekend_afternoon" if hm >= "15:00" else "weekend"
-    if now_et.weekday() == 6:  # Sunday
-        return "sunday_evening" if hm >= "18:00" else "weekend"
     if hm < "09:30":
         return "pre_market"
     if "09:30" <= hm <= "16:00":
@@ -936,6 +972,30 @@ def _scan_line(icon: str, text: str) -> str:
     return f"{icon} {text}"
 
 
+def _dedupe_upcoming_earnings(text: str) -> str:
+    paragraphs = str(text or "").split("\n\n")
+    seen = False
+    kept: list[str] = []
+    for paragraph in paragraphs:
+        if re.search(r"\bUpcoming earnings\b", paragraph, re.I):
+            if seen:
+                continue
+            seen = True
+        kept.append(paragraph)
+    return "\n\n".join(kept)
+
+
+def _closed_market_output_for_context(context: dict[str, Any] | None, now_et: datetime) -> str | None:
+    if not isinstance(context, dict):
+        return None
+    reason = context.get("non_trading_day_reason") or context.get("market_closed_reason")
+    if not reason:
+        reason = _non_trading_day_reason(now_et) if context.get("force_market_closed_diagnostic") else None
+    if reason:
+        return render_closed_day_diagnostic(now_et, str(reason))
+    return None
+
+
 def _perme_macro_prose(briefing: str, context: dict[str, Any] | None, now_et: datetime, flags: list[str]) -> str:
     """Bloomberg/CNN market-desk style prose. Headline+tone, what moved, why it
     matters, portfolio relevance, next catalyst, Perme read — as natural, fluent,
@@ -958,11 +1018,11 @@ def _perme_macro_prose(briefing: str, context: dict[str, Any] | None, now_et: da
     seen_abbrevs: set[str] = set()
 
     if regime == "RISK-OFF":
-        headline = "Markets are leaning cautious today."
+        headline = "Markets are leaning cautious."
     elif regime == "RISK-ON":
-        headline = "Markets are leaning constructive today."
+        headline = "Markets are leaning constructive."
     else:
-        headline = "Markets are mixed today, with no clear direction yet."
+        headline = "Markets are mixed, with no clear direction yet."
 
     driver_clean = _prep(driver, seen_abbrevs)
     tape_clean = _prep(tape, seen_abbrevs)
@@ -983,14 +1043,14 @@ def _perme_macro_prose(briefing: str, context: dict[str, Any] | None, now_et: da
     if geopolitical:
         why_paragraph = _rewrite_why_it_matters(_prep(geopolitical, seen_abbrevs))
     else:
-        why_paragraph = "No single headline is driving today's tape; the moves reflect ordinary day-to-day positioning rather than a specific news trigger."
+        why_paragraph = "No single headline is driving the tape; the moves reflect ordinary day-to-day positioning rather than a specific news trigger."
 
     portfolio_paragraph = _rewrite_portfolio_relevance(_prep(portfolio, seen_abbrevs))
 
     catalyst_paragraph = _rewrite_next_catalyst(_prep(catalyst, seen_abbrevs))
     perme_read_paragraph = _rewrite_tape_tone(_prep(perme_view, seen_abbrevs))
     if not perme_read_paragraph:
-        perme_read_paragraph = "No strong read either way today — this is background market context, not a trading decision."
+        perme_read_paragraph = "No strong read either way — this is background market context, not a trading decision."
 
     paragraphs = [p for p in (tone_paragraph, moved_paragraph, why_paragraph, portfolio_paragraph, catalyst_paragraph, perme_read_paragraph) if p]
     expanded = [_capitalize_first(_deslash(re.sub(r",\s*,", ",", _expand_first_mentions(p, seen_abbrevs)))) for p in paragraphs]
@@ -1439,7 +1499,7 @@ def _rewrite_why_it_matters(text: str) -> str:
         sectors_raw = [s.strip() for s in match.group(2).split(",")]
         movers_sentence = _mover_sentence(movers_raw)
         sectors_natural = _humanize_list(sectors_raw, _SECTOR_PHRASE_MAP, cap=2)
-        return f"Geopolitical headlines are behind today's move — {movers_sentence} — with {sectors_natural} feeling it most directly."
+        return f"Geopolitical headlines are setting the market context — {movers_sentence} — with {sectors_natural} feeling it most directly."
     return _deslash(text.replace(" / ", " and "))
 
 
@@ -1462,18 +1522,18 @@ def _rewrite_portfolio_relevance(text: str) -> str:
         sector_list = [s.strip() for s in sectors_raw.split(",") if s.strip()][:2]
         adjective = " and ".join(dict.fromkeys(_sector_adjective(s) for s in sector_list)) if sector_list else "sector"
         verb = "is" if "," not in tickers else "are"
-        return f"In the portfolio, {tickers} {verb} exposed to today's {adjective} move — nothing that calls for action on its own, but worth watching."
+        return f"In the portfolio, {tickers} {verb} linked to the {adjective} backdrop — nothing that calls for action on its own, but worth watching."
     match = re.match(r"^watch (.+?)\.?$", text, re.I)
     if match:
         tickers = match.group(1).strip()
         verb = "is" if "," not in tickers else "are"
-        return f"In the portfolio, {tickers} {verb} in view today — nothing urgent there, just one to keep on the radar."
+        return f"In the portfolio, {tickers} {verb} in view for this backdrop — nothing urgent there, just one to keep on the radar."
     match = re.match(r"^sector context:\s*(.+?)\.?$", text, re.I)
     if match:
         sectors = match.group(1).strip()
-        return f"None of the open positions are named directly today, but {sectors.lower()} is the group to watch."
+        return f"None of the open positions are named directly, but {sectors.lower()} is the group to watch."
     if text.lower().startswith("no direct portfolio ticker flag"):
-        return "Nothing in today's flow points at the open positions directly, so treat this as background rather than a signal about any specific holding."
+        return "Nothing in this flow points at the open positions directly, so treat this as background rather than a signal about any specific holding."
     return text
 
 
@@ -1526,9 +1586,12 @@ def _prep(text: str, seen: set[str]) -> str:
 
 
 def format_telegram_brief(briefing: str, routine: str, now_et: datetime, context: dict[str, Any] | None = None) -> str:
+    closed = _closed_market_output_for_context(context, now_et)
+    if closed:
+        return closed
     flags_text = "\n".join(_clean_section_line(line) for line in _markdown_section(briefing, "FLAGS"))
     flags = parse_flags(flags_text)
-    return _perme_macro_prose(briefing, context, now_et, flags)
+    return _dedupe_upcoming_earnings(_perme_macro_prose(briefing, context, now_et, flags))
 
 
 def _first_sentence(text: str, limit: int = 120) -> str:
@@ -1701,12 +1764,12 @@ def _telegram_plain_chunks(message: str, limit: int = 3900) -> list[str]:
 
 def deliver_telegram_brief(message: str, dry_run: bool = False) -> None:
     """Send Perme macro brief through the Perme bot to the owner DM route."""
-    owner_chat, bot_token, chat_var, bot_var = _perme_telegram_credentials()
     if dry_run:
         print("[perme] dry-run: Telegram delivery suppressed")
-        print(f"PERME_TELEGRAM_ROUTE_CHAT_ID_VAR={chat_var}")
-        print(f"PERME_TELEGRAM_BOT_TOKEN_VAR={bot_var}")
+        print(f"PERME_TELEGRAM_ROUTE_CHAT_ID_VAR={_owner_dm_chat_id_var()}")
+        print("PERME_TELEGRAM_BOT_TOKEN_VAR=PERME_ENV:TELEGRAM_BOT_TOKEN")
         return
+    owner_chat, bot_token, chat_var, bot_var = _perme_telegram_credentials()
     if not owner_chat or not bot_token:
         print(f"[perme] telegram brief skipped: {chat_var} or {bot_var} unset", file=sys.stderr)
         return
@@ -1838,6 +1901,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mock-data", action="store_true", help="Use deterministic mock API payloads for Gate 1")
     parser.add_argument("--output", default="", help="Optional explicit output path")
     args = parser.parse_args(argv)
+
+    gate_now = _now_et()
+    closed_reason = _non_trading_day_reason(gate_now)
+    if closed_reason:
+        print(_perme_skip_non_trading_day_line(gate_now, closed_reason))
+        return 0
+    if args.routine in WEEKEND_ROUTINES:
+        print(f"PERME_SKIP_RETIRED_ROUTINE routine={args.routine} date={gate_now.date().isoformat()}")
+        return 0
 
     _load_env_file(ATLAS_ENV)
     if args.routine == "macro_event_monitor":

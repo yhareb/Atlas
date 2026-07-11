@@ -28,6 +28,10 @@ from atlas_symbol_meta import ticker_label  # noqa: E402
 from atlas_report_blocks import holding_block  # noqa: E402
 from atlas_report_authority import render_portfolio_visibility_block, normalize_open_position_rows, SOURCE_RENDER_CALC, SOURCE_DB, SOURCE_TFE, SOURCE_BROKER, resolve_price_authority, valuation_excluded_tickers  # noqa: E402
 from atlas_notify import send_telegram, _admin_chat_id as _owner_chat_id  # noqa: E402
+try:
+    from atlas_profit_protection_v2 import render_report_block_from_snapshot as _render_profit_protection_v2_block  # noqa: E402
+except Exception:
+    _render_profit_protection_v2_block = None
 
 if os.environ.get("ATLAS_DB"):
     atlas_db.DB_PATH = os.environ["ATLAS_DB"]
@@ -187,6 +191,18 @@ def _pending_broker_confirmation_lines() -> list[str]:
     return lines
 
 
+def _profit_protection_v2_lines() -> list[str]:
+    """Advisory-only Profit Protection v2 block. Fail-closed: EOD report continues if evidence is missing."""
+    if _render_profit_protection_v2_block is None:
+        return []
+    try:
+        block = _render_profit_protection_v2_block()
+    except Exception as exc:
+        print(f"[eod_positions] profit protection v2 warning: {type(exc).__name__}: {exc}", flush=True)
+        return ["", "PROFIT PROTECTION v2 — ADVISORY ONLY", "DATA REVIEW: unavailable; rest of report continues", ""]
+    return ([""] + block.splitlines() + [""]) if block else []
+
+
 def build_report() -> str:
     market_day = datetime.now(ET_TZ).strftime("%B %-d, %Y")
     trades = _open_trades()
@@ -223,6 +239,7 @@ def build_report() -> str:
         "",
     ]
     lines.extend(render_portfolio_visibility_block(normalize_open_position_rows(rows), atlas_db.get_pending_broker_confirmation_trades()))
+    lines.extend(_profit_protection_v2_lines())
     if rows:
         valued_rows = [r for r in rows if r.get("unrealized_pl_pct") is not None]
         best = max(valued_rows, key=lambda r: r["unrealized_pl_pct"]) if valued_rows else None

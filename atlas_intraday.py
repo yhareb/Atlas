@@ -52,6 +52,10 @@ from atlas_report_blocks import holding_block, pullback_block, watch_list_block
 from atlas_intraday_advisory import (advise as _advise_intraday, build_advisory_routing,
     naturalize as _naturalize_report, regime as _advisory_regime, signal_family)
 from atlas_profit_protection_advisory import render_profit_protection_cards
+try:
+    from atlas_profit_protection_v2 import render_report_block_from_snapshot as _render_profit_protection_v2_block
+except Exception:
+    _render_profit_protection_v2_block = None
 from atlas_report_authority import render_pending_broker_confirmation as _shared_pending_broker_confirmation_block, SOURCE_DB, SOURCE_TFE, SOURCE_BROKER, SOURCE_LEDGER, SOURCE_PROVIDER, SOURCE_CACHE, SOURCE_FALLBACK, SOURCE_RENDER_CALC, resolve_price_authority, valuation_excluded_tickers
 _ALERT_COOLDOWN: dict = {}  # ticker -> {"ts": float, "dist": float} — cooldown state for proactive DM
 
@@ -1725,6 +1729,18 @@ def _profit_protection_lines(summary):
     return render_profit_protection_cards(positions, ticker_label=_label)
 
 
+def _profit_protection_v2_lines(summary=None):
+    """Advisory-only Profit Protection v2 block. Fail-closed: report continues if evidence is missing."""
+    if _render_profit_protection_v2_block is None:
+        return []
+    try:
+        block = _render_profit_protection_v2_block()
+    except Exception as exc:
+        print(f"[intraday] profit protection v2 warning: {type(exc).__name__}: {exc}")
+        return ["", "PROFIT PROTECTION v2 — ADVISORY ONLY", "DATA REVIEW: unavailable; rest of report continues", ""]
+    return ([""] + block.splitlines() + [""]) if block else []
+
+
 def _pending_broker_confirmation_lines(summary=None):
     """P0M-1 READ-ONLY report section. Equivalent pending-state coverage to
     shared authority helper; report-only and no strategy/TFE/DB mutation."""
@@ -2112,6 +2128,7 @@ def _build_report(summary):
     lines += _macro_watch_lines(summary)
     lines += _holding_lines(summary)
     lines += _profit_protection_lines(summary)
+    lines += _profit_protection_v2_lines(summary)
     lines += _pending_broker_confirmation_lines(summary)
     lines += _buy_now_lines(summary, before_scan_signal_id, high=high)
     lines += _actions_lines(buys, sells, summary, before_scan_signal_id, high=high, buy_now_tickers=buy_now_tickers, decisions=advisory_decisions, routing=advisory_routing)
