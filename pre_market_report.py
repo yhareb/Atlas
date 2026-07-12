@@ -1455,3 +1455,15 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
+try:
+    from atlas_quiver_decision_envelope import render_decision_block as _quiver_render_decision_block, apply_quiver_review_overlay as _quiver_apply_overlay
+except Exception:
+    _quiver_render_decision_block = None
+    _quiver_apply_overlay = None
+
+
+def quiver_consumer_decision_block(raw_tfe_result, quiver_context):
+    """Shared consumer shim: render exactly the authoritative Quiver decision envelope."""
+    if not _quiver_apply_overlay or not _quiver_render_decision_block:
+        return "QUIVER DATA UNAVAILABLE"
+    return _quiver_render_decision_block(_quiver_apply_overlay(raw_tfe_result or {}, quiver_context or {}))

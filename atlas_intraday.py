@@ -2704,3 +2704,25 @@ def _run_intraday_locked(now, force=False, dry_run=False):
 
 if __name__ == "__main__":
     run_intraday()
+
+try:
+    from atlas_quiver_decision_envelope import render_decision_block as _quiver_render_decision_block, apply_quiver_review_overlay as _quiver_apply_overlay
+except Exception:
+    _quiver_render_decision_block = None
+    _quiver_apply_overlay = None
+
+
+def quiver_consumer_decision_block(raw_tfe_result, quiver_context):
+    """Shared consumer shim: render exactly the authoritative Quiver decision envelope."""
+    if not _quiver_apply_overlay or not _quiver_render_decision_block:
+        return "QUIVER DATA UNAVAILABLE"
+    return _quiver_render_decision_block(_quiver_apply_overlay(raw_tfe_result or {}, quiver_context or {}))
+
+
+# Daily Holdings Re-Underwriting final release hook (advisory-only, packet consumer).
+def holdings_reunderwrite_warning_block(packet):
+    positions=(packet or {}).get('positions') or []
+    order={'SELL NOW':0,'EXIT REVIEW':1,'TRIM REVIEW':2,'HOLD TIGHT':3}
+    urgent=[p for p in positions if p.get('action') in order]
+    urgent.sort(key=lambda p:(order.get(p.get('action'),99), str(p.get('ticker') or '')))
+    return [f"{p.get('ticker')}: {p.get('action')} — {', '.join(p.get('reason_codes') or [])}" for p in urgent]

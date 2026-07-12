@@ -55,6 +55,20 @@ try:
 except Exception:
     atlas_fda_calendar = None
 try:
+    from atlas_quiver_decision_envelope import (
+        load_packet_read_only as _quiver_load_packet_read_only,
+        context_from_packet as _quiver_context_from_packet,
+        apply_quiver_review_overlay as _quiver_apply_overlay,
+        persist_decision_envelope as _quiver_persist_envelope,
+        render_decision_block as _quiver_render_decision_block,
+    )
+except Exception:
+    _quiver_load_packet_read_only = None
+    _quiver_context_from_packet = None
+    _quiver_apply_overlay = None
+    _quiver_persist_envelope = None
+    _quiver_render_decision_block = None
+try:
     from atlas_audit import log_signal as _atlas_log_signal
 except Exception:
     _atlas_log_signal = None
@@ -84,6 +98,33 @@ def _filter_scan_universe(tickers):
 LINE = "=" * 68
 THIN = "-" * 68
 LAST_RUN_SUMMARY = {}
+
+
+def _attach_quiver_envelope(row, raw_decision, packet, decision_sidecar=None):
+    """Attach deterministic Quiver review envelope without mutating raw TFE fields."""
+    if not (_quiver_context_from_packet and _quiver_apply_overlay):
+        return None
+    ctx = _quiver_context_from_packet(str((row or {}).get("ticker") or (raw_decision or {}).get("ticker") or ""), packet)
+    env = _quiver_apply_overlay(raw_decision or row or {}, ctx)
+    if isinstance(row, dict):
+        row["quiver_decision_envelope"] = env
+        row["quiver_posture"] = env.get("quiver_posture")
+        row["quiver_reason_codes"] = env.get("quiver_reason_codes")
+        row["quiver_freshness"] = env.get("quiver_freshness")
+        row["quiver_review_flag"] = bool(env.get("quiver_review_flag"))
+        row["final_advisory_action"] = env.get("final_advisory_action")
+    if decision_sidecar and _quiver_persist_envelope:
+        try:
+            _quiver_persist_envelope(env, decision_sidecar)
+        except Exception as exc:
+            if isinstance(row, dict):
+                row["quiver_persist_error"] = f"{type(exc).__name__}: {exc}"
+    return env
+
+
+def _quiver_blocks_buy(decision):
+    env = (decision or {}).get("quiver_decision_envelope") if isinstance(decision, dict) else None
+    return bool(env and env.get("quiver_review_flag") and str(env.get("final_advisory_action") or "").upper() in {"WAIT / REVIEW", "REVIEW"})
 
 
 def _timing_log(section, event, start=None, ticker=None, extra=""):
@@ -464,6 +505,14 @@ def run(args):
         macro_sentiment["shadow_only"] = True
     LAST_RUN_SUMMARY["macro_sentiment"] = macro_sentiment
     perme_overlay = _load_perme_threshold_overlay()
+    quiver_packet = None
+    quiver_packet_status = "disabled"
+    quiver_decision_sidecar = os.environ.get("ATLAS_QUIVER_DECISION_SIDECAR")
+    if _quiver_load_packet_read_only:
+        quiver_packet, quiver_packet_status = _quiver_load_packet_read_only(
+            os.environ.get("ATLAS_QUIVER_PACKET", "/Users/yasser/atlas_inbox/quiver_engine_packet_v1.json")
+        )
+    LAST_RUN_SUMMARY["quiver_packet_status"] = quiver_packet_status
     LAST_RUN_SUMMARY["perme_threshold_overlay"] = {
         "active": bool(perme_overlay.get("active")),
         "sentiment": perme_overlay.get("sentiment"),
@@ -922,9 +971,15 @@ def run(args):
         decision.setdefault("earnings_note", decision.get("earnings_note") or ((res.get("earnings_context") or {}).get("earnings_momentum") or {}).get("earnings_momentum_note") or ((res.get("earnings_context") or {}).get("earnings_miss") or {}).get("earnings_miss_note") or ((res.get("earnings_context") or {}).get("note") if (res.get("earnings_context") or {}).get("unknown") else None))
         decision.setdefault("fda_calendar", decision.get("fda_calendar") or res.get("fda_calendar"))
         decision.setdefault("fda_note", decision.get("fda_note") or ((decision.get("fda_calendar") or {}).get("tag") if isinstance(decision.get("fda_calendar"), dict) else None))
+        # Quiver bounded REVIEW overlay: after raw TFE/portfolio decision, before final candidate routing/presentation.
+        raw_quiver_decision = dict(decision)
+        raw_quiver_decision.update({"ticker": tkr.upper(), "raw_tfe_classification": decision.get("action"), "score": score, "pillars": pillars})
+        quiver_env = _attach_quiver_envelope(decision, raw_quiver_decision, quiver_packet, quiver_decision_sidecar)
         act = decision["action"]
+        final_advisory_action = (quiver_env or {}).get("final_advisory_action") or act
+        quiver_blocks_buy = _quiver_blocks_buy(decision)
         _audit_signal_decision(tkr, decision, score, pillars, live, _scan_source(tkr, pending_scan, ema_retry_scan), market_date, run_id)
-        if act == "BUY":
+        if act == "BUY" and not quiver_blocks_buy:
             _attach_live_signal_price(decision, tkr)
         high_candidates.append({
             "ticker": tkr.upper(),
@@ -959,14 +1014,26 @@ def run(args):
             "hysteresis_state": res.get("hysteresis_state"),
             "raw_score": res.get("raw_score"),
             "raw_pillars": res.get("raw_pillars"),
+            "quiver_decision_envelope": decision.get("quiver_decision_envelope"),
+            "quiver_posture": decision.get("quiver_posture"),
+            "quiver_review_flag": decision.get("quiver_review_flag"),
+            "quiver_reason_codes": decision.get("quiver_reason_codes"),
+            "quiver_freshness": decision.get("quiver_freshness"),
+            "final_advisory_action": final_advisory_action,
         })
-        if act == "BUY":
+        if act == "BUY" and not quiver_blocks_buy:
             buys.append(decision)
             pending.append(tkr.upper())
             reserved_cash += decision["cost"]
             print(f"  BUY   {tkr:<6} {decision['shares']} sh @ {decision['entry']} "
                   f"(stop {decision['stop']}, {decision['risk_pct']:.1f}% risk, "
                   f"${decision['cost']:,.0f}) — {decision['reason']}")
+        elif act == "BUY" and quiver_blocks_buy:
+            watch.append(tkr.upper())
+            if _quiver_render_decision_block:
+                print(_quiver_render_decision_block(decision.get("quiver_decision_envelope")))
+            else:
+                print(f"  wait  {tkr:<6} Quiver review flag — final advisory {final_advisory_action}")
         elif act == "WAIT":
             watch.append(tkr.upper())
             prefix = "⏳" if "WAITING FOR PULLBACK" in str(decision.get("reason", "")) else "wait"
