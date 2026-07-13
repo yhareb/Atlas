@@ -5,10 +5,9 @@ from zoneinfo import ZoneInfo
 
 import requests
 from atlas_notify import send_telegram, _admin_chat_id as _owner_chat_id
-try:
-    import atlas_stream
-except Exception:
-    atlas_stream = None
+# atlas_stream imports provider/engine credentials; streaming is currently disabled
+# below, so avoid importing it during render/import smoke.
+atlas_stream = None
 
 try:
     sys.stdout.reconfigure(line_buffering=True)
@@ -52,23 +51,33 @@ from atlas_report_blocks import holding_block, pullback_block, watch_list_block
 from atlas_intraday_advisory import (advise as _advise_intraday, build_advisory_routing,
     naturalize as _naturalize_report, regime as _advisory_regime, signal_family)
 from atlas_profit_protection_advisory import render_profit_protection_cards
+_render_profit_protection_v2_block = None
+
+def _get_profit_protection_v2_renderer():
+    global _render_profit_protection_v2_block
+    if _render_profit_protection_v2_block is None:
+        try:
+            from atlas_profit_protection_v2 import render_report_block_from_snapshot as _renderer
+            _render_profit_protection_v2_block = _renderer
+        except Exception:
+            _render_profit_protection_v2_block = False
+    return _render_profit_protection_v2_block if callable(_render_profit_protection_v2_block) else None
 try:
-    from atlas_profit_protection_v2 import render_report_block_from_snapshot as _render_profit_protection_v2_block
+    from atlas_intraday_holdings_freshness import build_packet as _build_holdings_freshness_packet, render_packet as _render_holdings_freshness_packet
 except Exception:
-    _render_profit_protection_v2_block = None
+    _build_holdings_freshness_packet = None
+    _render_holdings_freshness_packet = None
+try:
+    from atlas_holdings_final_action import load_or_build_merged_packet as _load_or_build_merged_holdings_packet, render_merged_action_block as _render_merged_holdings_action_block
+except Exception:
+    _load_or_build_merged_holdings_packet = None
+    _render_merged_holdings_action_block = None
 from atlas_report_authority import render_pending_broker_confirmation as _shared_pending_broker_confirmation_block, SOURCE_DB, SOURCE_TFE, SOURCE_BROKER, SOURCE_LEDGER, SOURCE_PROVIDER, SOURCE_CACHE, SOURCE_FALLBACK, SOURCE_RENDER_CALC, resolve_price_authority, valuation_excluded_tickers
 _ALERT_COOLDOWN: dict = {}  # ticker -> {"ts": float, "dist": float} — cooldown state for proactive DM
 
 _ENV_PATH = os.path.expanduser("~/.hermes/profiles/atlas/.env")
-if os.path.exists(_ENV_PATH):
-    with open(_ENV_PATH) as _f:
-        for _line in _f:
-            _line = _line.strip()
-            if _line and not _line.startswith("#") and "=" in _line:
-                _k, _v = _line.split("=", 1)
-                if not os.environ.get(_k.strip()):
-                    os.environ[_k.strip()] = _v.strip()
-
+# Credential/env-file loading is intentionally lazy and owned by atlas_notify's
+# real-send path. Importing/rendering intraday must not read profile credentials.
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_ALLOWED_USERS") or os.environ.get("TELEGRAM_HOME_CHANNEL")
 
@@ -680,7 +689,12 @@ def _perme_report_context_lines(summary):
 
 
 def _header_lines(summary, hold_count):
-    now_et = datetime.datetime.now(ZoneInfo("America/New_York")).strftime("%-I:%M %p")
+    try:
+        _asof = summary.get("advisory_as_of") or summary.get("generated_at") or summary.get("report_timestamp")
+        _dt = datetime.datetime.fromisoformat(str(_asof).replace("Z", "+00:00")) if _asof else None
+        now_et = (_dt.astimezone(ZoneInfo("America/New_York")) if _dt else datetime.datetime.now(ZoneInfo("America/New_York"))).strftime("%-I:%M %p")
+    except Exception:
+        now_et = datetime.datetime.now(ZoneInfo("America/New_York")).strftime("%-I:%M %p")
     account = summary.get("account", {}) or {}
     macro = summary.get("macro_context") or {}
     macro_sent = summary.get("macro_sentiment") or {}
@@ -701,13 +715,21 @@ def _header_lines(summary, hold_count):
             macro_note += f" · 🧠 {descriptor}: {reason}"
     positions = summary.get("open_positions_count", hold_count)
     try:
-        positions_for_valuation = _authority_open_position_rows(summary)
-        valid = [p for p in positions_for_valuation if (p.get("price_authority") or {}).get("is_valuation_valid")]
-        excluded = valuation_excluded_tickers(positions_for_valuation)
-        invested = sum(_num(p.get("entry_price") or p.get("price")) * _num(p.get("quantity") or p.get("shares")) for p in valid)
-        current_value = sum(_num((p.get("price_authority") or {}).get("valuation_price")) * _num(p.get("quantity") or p.get("shares")) for p in valid)
+        packet = summary.get("intraday_holdings_freshness_packet") if isinstance(summary, dict) else None
+        if isinstance(packet, dict) and packet.get("packet_version") == "intraday_holdings_action_freshness.v1":
+            packet_rows = packet.get("holdings") or []
+            valid = [p for p in packet_rows if p.get("valuation_included")]
+            excluded = [p.get("ticker") for p in packet_rows if not p.get("valuation_included")]
+            invested = sum(_num(p.get("entry")) * _num(p.get("quantity")) for p in valid)
+            current_value = sum(_num(p.get("valuation_price")) * _num(p.get("quantity")) for p in valid)
+        else:
+            positions_for_valuation = _authority_open_position_rows(summary)
+            valid = [p for p in positions_for_valuation if (p.get("price_authority") or {}).get("is_valuation_valid")]
+            excluded = valuation_excluded_tickers(positions_for_valuation)
+            invested = sum(_num(p.get("entry_price") or p.get("price")) * _num(p.get("quantity") or p.get("shares")) for p in valid)
+            current_value = sum(_num((p.get("price_authority") or {}).get("valuation_price")) * _num(p.get("quantity") or p.get("shares")) for p in valid)
         roi = ((current_value - invested) / invested * 100.0) if invested else 0.0
-        positions_note = " · valuation PARTIAL excl " + ",".join(excluded) if excluded else ""
+        positions_note = " · valuation PARTIAL excl " + ",".join([str(x) for x in excluded if x]) if excluded else ""
     except Exception:
         roi = 0.0
         positions_note = ""
@@ -1250,8 +1272,8 @@ def _report_gates(row, sig, now):
     eligible = True if not (trigger and current) else bool(trigger * 0.97 <= current <= trigger * 1.08)
     return {
         "current_vs_trigger_eligible": eligible,
-        "data_timestamp_valid": age is not None and 0 <= age <= BUY_NOW_MAX_SIGNAL_AGE_MINUTES,
-        "rvol_eligible": rvol is not None and rvol >= RVOL_DISPLAY_THRESHOLD,
+        "market-data timestamp validity": age is not None and 0 <= age <= BUY_NOW_MAX_SIGNAL_AGE_MINUTES,
+        "RVOL eligibility": rvol is not None and rvol >= RVOL_DISPLAY_THRESHOLD,
         "too_hot_false": bool(sig) and not sig.is_too_hot,
     }
 
@@ -1409,15 +1431,45 @@ def _action_buy_line(sig, summary=None):
     )
 
 
+def _translate_blocker(text):
+    raw = str(text or "").strip()
+    low = raw.lower().replace("_", " ").replace("-", " ")
+    compact = "".join(ch for ch in low if ch.isalnum())
+    if all(part in low for part in ("data", "timestamp", "valid")) or ("timestamp" in compact and "valid" in compact):
+        return "market-data timestamp validity failed"
+    if "rvol" in low and ("eligible" in low or "gate" in low):
+        return "RVOL eligibility failed"
+    return raw.replace("Mandatory gate failed:", "mandatory gate failed:")
+
+
 def _decision_card_lines(decision):
     raw = decision.raw
+    signal = raw.get('signal') or 'missing'
+    score = raw.get('score')
+    if score in (None, ''):
+        fallback_value = raw.get('pillars')
+        score = fallback_value
+    score = score or 'N/A'
+    ts = raw.get('timestamp') or 'missing'
+    blockers = [_translate_blocker(x) for x in (decision.blockers or [])]
+    rvol_note = next((w for w in decision.why if str(w).upper().startswith('RVOL ')), None)
+    row_state = "RECENT" if "· fresh" in str(decision.freshness).lower() else "STALE" if "stale" in str(decision.freshness).lower() else "UNKNOWN"
+    market_state = "VALID" if not blockers else "INVALID FOR ACTION"
+    why = []
+    if rvol_note:
+        why.append(str(rvol_note).replace("RVOL", "RVOL"))
+    if blockers:
+        why.append("; ".join(blockers))
+    if not why:
+        why.append("all report-level gates passed")
     return [
         decision.ticker,
-        f"   TFE CLASSIFICATION: {raw.get('signal')} · score {raw.get('score')} · pillars {raw.get('pillars')} · timestamp {raw.get('timestamp')}",
+        f"   TFE CLASSIFICATION: {signal} · Score: {score}",
         f"   ACTION NOW: {decision.action_now}",
-        "   WHY: " + "; ".join(decision.why),
-        "   BLOCKERS: " + ("; ".join(decision.blockers) if decision.blockers else "none"),
-        f"   DATA FRESHNESS: {decision.freshness}",
+        f"   SIGNAL ROW: {row_state} — {decision.freshness}",
+        f"   MARKET DATA: {market_state}" + (" — " + "; ".join(blockers) if blockers else ""),
+        f"   ACTIONABILITY: {'ACTIONABLE' if not blockers and decision.action_now in {'BUY NOW','REVIEW'} else 'WAIT' if blockers else decision.action_now}",
+        "   WHY: " + "; ".join(why),
         "",
     ]
 
@@ -1608,10 +1660,14 @@ def _macro_watch_lines(summary):
 
 
 def _sell_now_lines(summary):
+    packet = (summary or {}).get("intraday_holdings_freshness_packet") or {}
+    if _render_holdings_freshness_packet and packet.get("packet_version") == "intraday_holdings_action_freshness.v1":
+        # Packet renderer emits SELL NOW plus review sections; no shortcut wording.
+        return []
     sells = [r for r in (summary.get("exit_results", []) or []) if str(r.get("action") or "").upper() == "SELL"]
     lines = ["", "━━━ 🔴 SELL NOW ━━━", ""]
     if not sells:
-        lines.append("✅ none — holding all")
+        lines.append("none")
         lines.append("")
         return lines
     for s in sells:
@@ -1716,6 +1772,9 @@ def _authority_open_position_rows(summary=None):
 
 def _holding_lines(summary):
     summary = summary if isinstance(summary, dict) else {}
+    packet = summary.get("intraday_holdings_freshness_packet") or {}
+    if _render_holdings_freshness_packet and packet.get("packet_version") == "intraday_holdings_action_freshness.v1":
+        return _render_holdings_freshness_packet(packet)
     positions = _authority_open_position_rows(summary)
     return holding_block(positions, summary or {})
 
@@ -1731,10 +1790,11 @@ def _profit_protection_lines(summary):
 
 def _profit_protection_v2_lines(summary=None):
     """Advisory-only Profit Protection v2 block. Fail-closed: report continues if evidence is missing."""
-    if _render_profit_protection_v2_block is None:
+    renderer = _get_profit_protection_v2_renderer()
+    if renderer is None:
         return []
     try:
-        block = _render_profit_protection_v2_block()
+        block = renderer()
     except Exception as exc:
         print(f"[intraday] profit protection v2 warning: {type(exc).__name__}: {exc}")
         return ["", "PROFIT PROTECTION v2 — ADVISORY ONLY", "DATA REVIEW: unavailable; rest of report continues", ""]
@@ -2054,13 +2114,26 @@ def _intraday_diagnostic_lines(summary, before_scan_signal_id=None, high=None, b
             ticker = _row_ticker(item)
             if ticker:
                 detail_watch.append(ticker)
-    rendered_pool = [t for t in dict.fromkeys(watch_2 + sorted(set(detail_watch))) if t not in open_tickers]
+    route_watch = [str(t or "").upper() for t in ((routing.get("watch") or []) if isinstance(routing, dict) else [])]
+    full_watch = list(dict.fromkeys(watch_2 + sorted(set(detail_watch)) + route_watch))
+    classified_open = [t for t in full_watch if t in open_tickers]
+    rendered_pool = [t for t in full_watch if t not in open_tickers]
     cap = max(1, int(summary.get("watching_cap", 15) or 15))
+    displayed = rendered_pool[:cap]
     omitted = rendered_pool[cap:]
+    watch_equation_ok = len(full_watch) == len(displayed) + len(omitted) + len(classified_open)
     if routing:
         lines += ["", "━━━ 🧪 REPORT DIAGNOSTICS ━━━", equation]
         if blocked:
             lines.append(f"Explicitly excluded: {', '.join(blocked[:6])}" + (f" +{len(blocked)-6} more" if len(blocked) > 6 else ""))
+        lines.append(
+            f"WATCH total {len(full_watch)} = displayed WATCHING {len(displayed)} + "
+            f"explicit omissions {len(omitted)} + classified exclusions {len(classified_open)}"
+        )
+        if classified_open:
+            lines.append(f"WATCH classified exclusions: OPEN POSITION: {', '.join(classified_open)}")
+        if not watch_equation_ok:
+            raise AssertionError("current-cycle WATCH reconciliation equation failed")
     if omitted:
         if not lines:
             lines += ["", "━━━ 🧪 REPORT DIAGNOSTICS ━━━"]
@@ -2100,6 +2173,23 @@ def _news_lines(summary):
     return lines
 
 
+def _human_cleanup_report(text):
+    replacements = {
+        "Entry Recorded/TFE": "Entry",
+        "Entry Recorded": "Entry",
+        "Stop Recorded/TFE": "Stop",
+        "Stop Recorded": "Stop",
+        "Target Recorded/TFE": "Target",
+        "Target Recorded": "Target",
+        "Calculated (": "(",
+        "Mandatory gate failed:": "mandatory gate failed:",
+    }
+    out = str(text or "")
+    for old, new in replacements.items():
+        out = out.replace(old, new)
+    return out
+
+
 def _build_report(summary):
     summary = summary or {}
     buys = summary.get("buys", []) or []
@@ -2121,14 +2211,24 @@ def _build_report(summary):
     summary["watch_2"] = list(dict.fromkeys(
         [str(t).upper() for t in (summary.get("watch_2") or [])] +
         [decision.ticker for decision in advisory_routing.watch]))
+    if _build_holdings_freshness_packet and _render_holdings_freshness_packet:
+        try:
+            summary["intraday_holdings_freshness_packet"] = _build_holdings_freshness_packet(
+                summary=summary,
+                positions=_authority_open_position_rows(summary),
+                db_path=getattr(atlas_db, "DB_PATH", "/Users/yasser/scripts/atlas.db"),
+            )
+        except Exception as exc:
+            print(f"[intraday] holdings freshness packet warning: {type(exc).__name__}: {exc}")
     lines = _header_lines(summary, hold_count)
     lines += _sell_now_lines(summary)
     lines += _position_risk_alert_lines(summary)
     lines += _review_now_lines(summary)
     lines += _macro_watch_lines(summary)
     lines += _holding_lines(summary)
-    lines += _profit_protection_lines(summary)
-    lines += _profit_protection_v2_lines(summary)
+    if not (summary.get("intraday_holdings_freshness_packet") or {}).get("packet_version") == "intraday_holdings_action_freshness.v1":
+        lines += _profit_protection_lines(summary)
+        lines += _profit_protection_v2_lines(summary)
     lines += _pending_broker_confirmation_lines(summary)
     lines += _buy_now_lines(summary, before_scan_signal_id, high=high)
     lines += _actions_lines(buys, sells, summary, before_scan_signal_id, high=high, buy_now_tickers=buy_now_tickers, decisions=advisory_decisions, routing=advisory_routing)
@@ -2139,7 +2239,7 @@ def _build_report(summary):
     lines += _gates_lines(high)
     lines += _watch_lines(summary)
     lines += _intraday_diagnostic_lines(summary, before_scan_signal_id=before_scan_signal_id, high=high, buy_now_tickers=buy_now_tickers)
-    return _naturalize_report("\n".join(lines))
+    return _human_cleanup_report(_naturalize_report("\n".join(lines)))
 
 
 def _pending_price_positive(value):

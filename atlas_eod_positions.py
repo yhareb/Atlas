@@ -28,10 +28,22 @@ from atlas_symbol_meta import ticker_label  # noqa: E402
 from atlas_report_blocks import holding_block  # noqa: E402
 from atlas_report_authority import render_portfolio_visibility_block, normalize_open_position_rows, SOURCE_RENDER_CALC, SOURCE_DB, SOURCE_TFE, SOURCE_BROKER, resolve_price_authority, valuation_excluded_tickers  # noqa: E402
 from atlas_notify import send_telegram, _admin_chat_id as _owner_chat_id  # noqa: E402
+_render_profit_protection_v2_block = None
+
+def _get_profit_protection_v2_renderer():
+    global _render_profit_protection_v2_block
+    if _render_profit_protection_v2_block is None:
+        try:
+            from atlas_profit_protection_v2 import render_report_block_from_snapshot as _renderer  # noqa: E402
+            _render_profit_protection_v2_block = _renderer
+        except Exception:
+            _render_profit_protection_v2_block = False
+    return _render_profit_protection_v2_block if callable(_render_profit_protection_v2_block) else None
 try:
-    from atlas_profit_protection_v2 import render_report_block_from_snapshot as _render_profit_protection_v2_block  # noqa: E402
+    from atlas_holdings_final_action import load_or_build_merged_packet as _load_or_build_merged_holdings_packet, render_merged_action_block as _render_merged_holdings_action_block  # noqa: E402
 except Exception:
-    _render_profit_protection_v2_block = None
+    _load_or_build_merged_holdings_packet = None
+    _render_merged_holdings_action_block = None
 
 if os.environ.get("ATLAS_DB"):
     atlas_db.DB_PATH = os.environ["ATLAS_DB"]
@@ -39,29 +51,39 @@ if os.environ.get("ATLAS_DB"):
 ET_TZ = ZoneInfo("America/New_York")
 EOD_START_ET = dtime(16, 0)
 MASSIVE_BASE = os.environ.get("MASSIVE_BASE", "https://api.massive.com")
-MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY")
 ENV_PATH = os.path.expanduser("~/.hermes/profiles/atlas/.env")
+_ENV_VALUES = None
+_ENV_LOAD_ERROR = None
 
 
-def _load_env_file() -> None:
-    if not os.path.exists(ENV_PATH):
-        return
+def _load_env_file() -> dict[str, str]:
+    """Lazy provider env loader. Import/render paths must not read credential files."""
+    global _ENV_VALUES, _ENV_LOAD_ERROR
+    if _ENV_VALUES is not None:
+        return _ENV_VALUES
+    values = {}
+    _ENV_LOAD_ERROR = None
     try:
-        with open(ENV_PATH) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                k = k.strip()
-                if k and not os.environ.get(k):
-                    os.environ[k] = v.strip().strip('"').strip("'")
+        if os.path.exists(ENV_PATH):
+            with open(ENV_PATH) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    if k:
+                        values[k] = v.strip().strip('"').strip("'")
+                        os.environ.setdefault(k, values[k])
     except Exception as exc:
-        print(f"[eod_positions] env load warning: {type(exc).__name__}: {exc}", flush=True)
+        _ENV_LOAD_ERROR = type(exc).__name__
+    _ENV_VALUES = values
+    return _ENV_VALUES
 
 
-_load_env_file()
-MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY")
+def _provider_api_key() -> str:
+    values = _load_env_file()
+    return str(values.get("MASSIVE_API_KEY") or values.get("POLYGON_API_KEY") or os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY") or "").strip()
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -137,12 +159,13 @@ def _snapshot_close_price(ticker: str, timeout: float = 8.0) -> float | None:
     mock = _mock_prices()
     if ticker in mock:
         return mock[ticker]
-    if not MASSIVE_API_KEY:
+    api_key = _provider_api_key()
+    if not api_key:
         print(f"[eod_positions] MASSIVE_API_KEY unavailable; {ticker} close fallback to entry", flush=True)
         return None
     url = f"{MASSIVE_BASE.rstrip('/')}/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}"
     try:
-        resp = requests.get(url, params={"apiKey": MASSIVE_API_KEY}, timeout=timeout)
+        resp = requests.get(url, params={"apiKey": api_key}, timeout=timeout)
         if resp.status_code != 200:
             print(f"[eod_positions] {ticker} snapshot HTTP {resp.status_code}", flush=True)
             return None
@@ -191,12 +214,25 @@ def _pending_broker_confirmation_lines() -> list[str]:
     return lines
 
 
+
+def _holdings_final_action_lines() -> list[str]:
+    """Render shared merged Daily+Profit-Protection+stop holding action block."""
+    if _load_or_build_merged_holdings_packet is None or _render_merged_holdings_action_block is None:
+        return ["", "━━━ 🧭 FINAL HOLDING ACTION — SHARED AUTHORITY ━━━", "DATA INCOMPLETE — merged-action module unavailable", ""]
+    try:
+        packet = _load_or_build_merged_holdings_packet()
+        return _render_merged_holdings_action_block(packet)
+    except Exception as exc:
+        print(f"[eod_positions] merged holdings action warning: {type(exc).__name__}: {exc}", flush=True)
+        return ["", "━━━ 🧭 FINAL HOLDING ACTION — SHARED AUTHORITY ━━━", "DATA INCOMPLETE — merged holdings packet unavailable", ""]
+
 def _profit_protection_v2_lines() -> list[str]:
     """Advisory-only Profit Protection v2 block. Fail-closed: EOD report continues if evidence is missing."""
-    if _render_profit_protection_v2_block is None:
+    renderer = _get_profit_protection_v2_renderer()
+    if renderer is None:
         return []
     try:
-        block = _render_profit_protection_v2_block()
+        block = renderer()
     except Exception as exc:
         print(f"[eod_positions] profit protection v2 warning: {type(exc).__name__}: {exc}", flush=True)
         return ["", "PROFIT PROTECTION v2 — ADVISORY ONLY", "DATA REVIEW: unavailable; rest of report continues", ""]
@@ -239,6 +275,7 @@ def build_report() -> str:
         "",
     ]
     lines.extend(render_portfolio_visibility_block(normalize_open_position_rows(rows), atlas_db.get_pending_broker_confirmation_trades()))
+    lines.extend(_holdings_final_action_lines())
     lines.extend(_profit_protection_v2_lines())
     if rows:
         valued_rows = [r for r in rows if r.get("unrealized_pl_pct") is not None]
@@ -298,5 +335,6 @@ def quiver_consumer_decision_block(raw_tfe_result, quiver_context):
 
 # Daily Holdings Re-Underwriting final release hook (advisory-only, packet consumer).
 def holdings_reunderwrite_consumer_block(packet):
-    from atlas_holdings_reunderwrite import render_daily_report
-    return render_daily_report((packet or {}).get('positions') or [])
+    from atlas_holdings_final_action import build_merged_packet, render_merged_action_block
+    merged = packet if (packet or {}).get('packet_version') == 'holdings_merged_action.v1' else build_merged_packet(packet or {})
+    return '\n'.join(render_merged_action_block(merged))

@@ -4,26 +4,51 @@ import time
 import requests
 
 _ENV_PATH = os.path.expanduser("~/.hermes/profiles/atlas/.env")
-_ENV_VALUES = {}
-if os.path.exists(_ENV_PATH):
-    with open(_ENV_PATH) as _f:
-        for _line in _f:
-            _line = _line.strip()
-            if _line and not _line.startswith("#") and "=" in _line:
-                _k, _v = _line.split("=", 1)
-                _k = _k.strip()
-                _v = _v.strip()
-                _ENV_VALUES[_k] = _v
-                os.environ.setdefault(_k, _v)
+_ENV_VALUES = None
+_ENV_LOAD_ERROR = None
 
 # Expected Atlas Telegram destination. TELEGRAM_CHAT_ID_EXPECTED in .env is the source of truth.
 TELEGRAM_CHAT_ID_EXPECTED_DEFAULT = ""
 
 
+def _telegram_disabled():
+    return str(os.environ.get("ATLAS_DISABLE_TELEGRAM") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _telegram_mocked():
+    return str(os.environ.get("ATLAS_MOCK_TELEGRAM") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _load_env_values():
+    """Lazy Atlas .env loader. Never runs at module import; never logs values."""
+    global _ENV_VALUES, _ENV_LOAD_ERROR
+    if _ENV_VALUES is not None:
+        return _ENV_VALUES
+    values = {}
+    _ENV_LOAD_ERROR = None
+    try:
+        if os.path.exists(_ENV_PATH):
+            with open(_ENV_PATH) as _f:
+                for _line in _f:
+                    _line = _line.strip()
+                    if _line and not _line.startswith("#") and "=" in _line:
+                        _k, _v = _line.split("=", 1)
+                        _k = _k.strip()
+                        _v = _v.strip()
+                        values[_k] = _v
+                        os.environ.setdefault(_k, _v)
+    except Exception as exc:
+        _ENV_LOAD_ERROR = type(exc).__name__
+    _ENV_VALUES = values
+    return _ENV_VALUES
+
+
 def _cfg(key, default=None, prefer_env_file=True):
-    """Return config, preferring Atlas .env for Telegram routing to avoid launchd/env drift."""
-    if prefer_env_file and key in _ENV_VALUES and str(_ENV_VALUES.get(key, "")).strip():
-        return str(_ENV_VALUES[key]).strip()
+    """Return config, lazily preferring Atlas .env for real Telegram sends."""
+    if prefer_env_file:
+        env_values = _load_env_values()
+        if key in env_values and str(env_values.get(key, "")).strip():
+            return str(env_values[key]).strip()
     return str(os.environ.get(key, default or "")).strip()
 
 
@@ -159,6 +184,12 @@ def _chunks(message, limit=3800):
 
 def send_telegram(message, label="atlas", parse_mode="Markdown", print_fallback=True, chat_id=None, message_thread_id=None, route=None, report_type=None):
     """Robust non-fatal Telegram sender with central route contract support."""
+    if _telegram_disabled() or _telegram_mocked():
+        mode = "ATLAS_MOCK_TELEGRAM" if _telegram_mocked() else "ATLAS_DISABLE_TELEGRAM"
+        print(f"[{label}] telegram skipped: {mode} set")
+        if print_fallback:
+            print(message)
+        return True
     token = _bot_token()
     if route is not None:
         resolved = resolve_report_route(route=route, report_type=report_type or label)
@@ -172,7 +203,13 @@ def send_telegram(message, label="atlas", parse_mode="Markdown", print_fallback=
         chat = str(chat_id).strip() if chat_id not in (None, "") else _chat_id()
         print(f"[atlas_notify] routing: route=legacy chat_id_arg_set={chat_id not in (None, '')} resolved_chat_set={bool(chat)} thread_set={message_thread_id is not None}", file=sys.stderr)
     if not token or not chat:
-        print(f"[{label}] telegram skipped: TELEGRAM_BOT_TOKEN or chat id unset")
+        missing = []
+        if not token:
+            missing.append("TELEGRAM_BOT_TOKEN")
+        if not chat:
+            missing.append("TELEGRAM_CHAT_ID/TELEGRAM_ADMIN_CHAT_ID")
+        load_note = f" env_load={_ENV_LOAD_ERROR}" if _ENV_LOAD_ERROR else ""
+        print(f"[{label}] telegram failed: SEND_CREDENTIALS_UNAVAILABLE missing={','.join(missing)}{load_note}")
         if print_fallback:
             print(message)
         return False

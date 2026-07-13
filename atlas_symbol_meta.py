@@ -15,16 +15,37 @@ SCRIPTS_DIR = "/Users/yasser/scripts"
 DB_PATH = f"{SCRIPTS_DIR}/atlas.db"
 ENV_PATH = os.path.expanduser("~/.hermes/profiles/atlas/.env")
 MASSIVE_BASE = "https://api.massive.com"
+_ENV_VALUES = None
+_ENV_LOAD_ERROR = None
 
-if os.path.exists(ENV_PATH):
-    with open(ENV_PATH) as _f:
-        for _line in _f:
-            _line = _line.strip()
-            if _line and not _line.startswith("#") and "=" in _line:
-                _k, _v = _line.split("=", 1)
-                os.environ.setdefault(_k.strip(), _v.strip())
 
-MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY")
+def _load_env_values():
+    """Lazy env loader for optional provider metadata; never runs at import."""
+    global _ENV_VALUES, _ENV_LOAD_ERROR
+    if _ENV_VALUES is not None:
+        return _ENV_VALUES
+    values = {}
+    _ENV_LOAD_ERROR = None
+    try:
+        if os.path.exists(ENV_PATH):
+            with open(ENV_PATH) as _f:
+                for _line in _f:
+                    _line = _line.strip()
+                    if _line and not _line.startswith("#") and "=" in _line:
+                        _k, _v = _line.split("=", 1)
+                        _k = _k.strip()
+                        _v = _v.strip()
+                        values[_k] = _v
+                        os.environ.setdefault(_k, _v)
+    except Exception as exc:
+        _ENV_LOAD_ERROR = type(exc).__name__
+    _ENV_VALUES = values
+    return _ENV_VALUES
+
+
+def _cfg(key, default=None):
+    values = _load_env_values()
+    return str(values.get(key) or os.environ.get(key) or default or "").strip()
 
 # Explicit operational override: Prof. verified MU quotes are being delivered 10x
 # by the provider feed (~$1,219 vs real ~$122). Keep this narrow; do not infer
@@ -170,12 +191,13 @@ def _company_name_from_db(ticker):
 @lru_cache(maxsize=512)
 def _company_name_from_massive(ticker):
     ticker = (ticker or "").upper()
-    if not ticker or not MASSIVE_API_KEY:
+    api_key = _cfg("MASSIVE_API_KEY")
+    if not ticker or not api_key:
         return None
     try:
         r = requests.get(
             f"{MASSIVE_BASE}/v3/reference/tickers/{ticker}",
-            params={"apiKey": MASSIVE_API_KEY},
+            params={"apiKey": api_key},
             headers={"Accept": "application/json"},
             timeout=5,
         )
