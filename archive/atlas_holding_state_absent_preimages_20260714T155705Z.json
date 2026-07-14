@@ -1,0 +1,115 @@
+{
+  "preimages": [
+    {
+      "exists": false,
+      "gid": null,
+      "group": null,
+      "mode": null,
+      "owner": null,
+      "path": "/Users/yasser/scripts/atlas_calendar_evidence_ingest.py",
+      "sha256": null,
+      "uid": null
+    },
+    {
+      "exists": false,
+      "gid": null,
+      "group": null,
+      "mode": null,
+      "owner": null,
+      "path": "/Users/yasser/scripts/atlas_calendar_overrides.py",
+      "sha256": null,
+      "uid": null
+    },
+    {
+      "exists": false,
+      "gid": null,
+      "group": null,
+      "mode": null,
+      "owner": null,
+      "path": "/Users/yasser/scripts/atlas_holding_state_adapters.py",
+      "sha256": null,
+      "uid": null
+    },
+    {
+      "exists": false,
+      "gid": null,
+      "group": null,
+      "mode": null,
+      "owner": null,
+      "path": "/Users/yasser/scripts/atlas_holding_state_adapters_schema.py",
+      "sha256": null,
+      "uid": null
+    },
+    {
+      "exists": false,
+      "gid": null,
+      "group": null,
+      "mode": null,
+      "owner": null,
+      "path": "/Users/yasser/scripts/atlas_holding_state_authority.py",
+      "sha256": null,
+      "uid": null
+    },
+    {
+      "exists": false,
+      "gid": null,
+      "group": null,
+      "mode": null,
+      "owner": null,
+      "path": "/Users/yasser/scripts/atlas_holding_state_feature_gate.py",
+      "sha256": null,
+      "uid": null
+    },
+    {
+      "exists": false,
+      "gid": null,
+      "group": null,
+      "mode": null,
+      "owner": null,
+      "path": "/Users/yasser/scripts/atlas_holding_state_schema.py",
+      "sha256": null,
+      "uid": null
+    },
+    {
+      "exists": false,
+      "gid": null,
+      "group": null,
+      "mode": null,
+      "owner": null,
+      "path": "/Users/yasser/scripts/atlas_holding_state_semantic_oracle.py",
+      "sha256": null,
+      "uid": null
+    },
+    {
+      "exists": false,
+      "gid": null,
+      "group": null,
+      "mode": null,
+      "owner": null,
+      "path": "/Users/yasser/scripts/atlas_holding_state_shadow_consumers.py",
+      "sha256": null,
+      "uid": null
+    },
+    {
+      "exists": false,
+      "gid": null,
+      "group": null,
+      "mode": null,
+      "owner": null,
+      "path": "/Users/yasser/scripts/atlas_nyse_calendar.py",
+      "sha256": null,
+      "uid": null
+    },
+    {
+      "exists": false,
+      "gid": null,
+      "group": null,
+      "mode": null,
+      "owner": null,
+      "path": "/Users/yasser/scripts/atlas_provider_quotes.py",
+      "sha256": null,
+      "uid": null
+    }
+  ],
+  "tag": "20260714T155705Z"
+}

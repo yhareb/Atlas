@@ -125,14 +125,8 @@ def render_open_positions(open_rows: Iterable[dict] | None) -> list[str]:
         lines += [
             f"   🚦 Stop {SOURCE_DB}/{SOURCE_TFE} {_price(stop)}",
             f"   🎯 Target {SOURCE_DB}/{SOURCE_TFE} {_price(target)}",
+            "",
         ]
-        if row.get("final_action"):
-            lines.append(f"   🧭 Final Action [HOLDINGS_MERGED_ACTION]: {row.get('final_action')}")
-        if row.get("stop_status"):
-            lines.append(f"   🛑 Stop Status [LIFECYCLE]: {row.get('stop_status')}")
-        if isinstance(pa, dict) and (pa.get("timestamp") or pa.get("session")):
-            lines.append(f"   🕐 Quote [PROVIDER]: {pa.get('timestamp') or 'timestamp unavailable'} · {pa.get('session') or 'session unknown'}")
-        lines.append("")
     return lines
 
 

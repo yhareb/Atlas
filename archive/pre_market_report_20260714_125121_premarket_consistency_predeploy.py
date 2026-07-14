@@ -21,11 +21,6 @@ from atlas_symbol_meta import normalize_price, normalize_snapshot_fields, ticker
 from atlas_report_blocks import holding_block, pullback_block, watch_list_block
 from atlas_report_authority import render_portfolio_visibility_block, provider_or_fallback_price, resolve_price_authority, SOURCE_PROVIDER, SOURCE_FALLBACK, SOURCE_CACHE, SOURCE_RENDER_CALC
 from atlas_time import current_et_market_date, is_trading_day, current_et_market_date_str, previous_et_trading_date_str
-try:
-    from atlas_holdings_final_action import load_or_build_merged_packet as _load_or_build_merged_holdings_packet, packet_by_ticker as _merged_packet_by_ticker
-except Exception:
-    _load_or_build_merged_holdings_packet = None
-    _merged_packet_by_ticker = None
 from atlas_engine import _llm_judge_catalyst
 
 _env_path = os.path.expanduser("~/.hermes/profiles/atlas/.env")
@@ -519,39 +514,14 @@ def get_wavef_screener_names(limit=20):
     return out
 
 
-def _earnings_session_label(row, now_et=None):
-    raw = str((row or {}).get("time") or "").strip()
-    if not raw:
-        return "timing unknown"
-    upper = raw.upper()
-    if upper in {"BMO", "BEFORE MARKET OPEN", "BEFORE_OPEN"}:
-        return "before market"
-    if upper in {"AMC", "AFTER MARKET CLOSE", "AFTER_CLOSE"}:
-        return "after market"
-    try:
-        parts = [int(x) for x in raw.split(":")[:2]]
-        event_time = time(parts[0], parts[1])
-    except Exception:
-        return "timing unknown"
-    if event_time < time(9, 30):
-        return "before market"
-    if event_time <= time(16, 0):
-        return "during market"
-    return "after market"
-
-
 def get_wavef_earnings(limit=8):
     today=current_et_market_date_str(); data=massive_get("/benzinga/v1/earnings", {"date.gte":today,"date.lte":today,"limit":limit}) or {}
-    lines=[]; seen=set()
+    lines=[]
     for row in data.get("results") or []:
-        t=(row.get("ticker") or "").upper(); eps=row.get("eps_surprise_percent"); rev=row.get("revenue_surprise_percent"); bits=[]
-        if not t or t in seen:
-            continue
+        t=row.get("ticker"); eps=row.get("eps_surprise_percent"); rev=row.get("revenue_surprise_percent"); bits=[]
         if eps is not None: bits.append(f"EPS {float(eps)*100:+.0f}%")
         if rev is not None: bits.append(f"Rev {float(rev)*100:+.0f}%")
-        if t and bits:
-            seen.add(t)
-            lines.append(f"  • {t} ({_earnings_session_label(row)}) — {' / '.join(bits)}")
+        if t and bits: lines.append(f"  • {t} — {' / '.join(bits)}")
     return lines
 
 
@@ -583,38 +553,18 @@ def get_wavef_analyst_actions(limit=8):
     return lines
 
 
-def _macro_event_family(name):
-    text = re.sub(r"[^a-z0-9 ]+", " ", str(name or "").lower())
-    text = re.sub(r"\s+", " ", text).strip()
-    if text in {"cpi", "inflation rate", "cpi s a", "consumer price index"}:
-        return "CPI"
-    if text in {"core cpi", "core inflation rate", "core consumer price index"}:
-        return "Core CPI"
-    return str(name or "Event").strip() or "Event"
-
-
-def _deduped_macro_events(rows):
-    seen = set()
-    events = []
-    for row in rows if isinstance(rows, list) else []:
-        typ = row.get("type") or row.get("event") or row.get("name") or "Event"
+def get_wavef_macro():
+    today=current_et_market_date_str(); data=eodhd_get("/economic-events", {"from":today,"to":today,"country":"US"}) or []
+    events=[]
+    for row in data if isinstance(data, list) else []:
+        typ=row.get("type") or "Event"
         when_et = _parse_event_datetime_et(row.get("date"))
         if when_et is None or not _is_briefing_hours_et(when_et):
             continue
-        family = _macro_event_family(typ)
-        key = (when_et.strftime("%Y-%m-%d %H:%M"), family.lower())
-        if key in seen:
-            continue
-        seen.add(key)
-        flag = "⚠️" if any(w in family.lower() for w in ("fed", "fomc", "cpi", "consumer price index")) else "•"
-        events.append((when_et, family, f"  {flag} {when_et.strftime('%H:%M ET')} — {family}"))
-    events.sort(key=lambda item: (item[0], item[1]))
-    return events
-
-
-def get_wavef_macro():
-    today=current_et_market_date_str(); data=eodhd_get("/economic-events", {"from":today,"to":today,"country":"US"}) or []
-    return [line for _when_et, _family, line in _deduped_macro_events(data)[:12]]
+        flag="⚠️" if any(w in typ.lower() for w in ("fed","fomc","cpi","consumer price index")) else "•"
+        events.append((when_et, f"  {flag} {when_et.strftime('%H:%M ET')} — {typ}"))
+    events.sort(key=lambda item: item[0])
+    return [line for _when_et, line in events[:12]]
 
 
 def _fda_event_date(row):
@@ -786,34 +736,6 @@ def _yahoo_vix_quote():
         return None
 
 
-def _provider_ts_to_et(value):
-    if value in (None, ""):
-        return None
-    try:
-        iv = int(value)
-        if iv > 10**15:
-            ts = iv / 1_000_000_000
-        elif iv > 10**11:
-            ts = iv / 1000
-        else:
-            ts = iv
-        return datetime.fromtimestamp(ts, timezone.utc).astimezone(ZoneInfo("America/New_York"))
-    except Exception:
-        return None
-
-
-def _quote_session_label(dt_et):
-    if dt_et is None:
-        return "UNKNOWN"
-    if time(4, 0) <= dt_et.time() < time(9, 30):
-        return "PRE_MARKET"
-    if time(9, 30) <= dt_et.time() <= time(16, 0):
-        return "REGULAR"
-    if time(16, 0) < dt_et.time() <= time(20, 0):
-        return "AFTER_MARKET"
-    return "OUT_OF_SESSION"
-
-
 def _snapshot_quote(sym):
     sym = (sym or "").upper()
     if sym in {"VIX", "I:VIX"}:
@@ -840,20 +762,15 @@ def _snapshot_quote(sym):
     day = t.get("day") or {}
     prev = t.get("prevDay") or {}
     last_trade = t.get("lastTrade") or {}
-    day_price = _to_float(day.get("c"))
-    trade_price = _to_float(last_trade.get("p"))
-    prev_price = _to_float(prev.get("c"))
-    price = day_price or trade_price or prev_price
-    price_source = "[PROVIDER]" if (day_price or trade_price) else "[FALLBACK]"
-    ts_raw = day.get("t") if day_price else last_trade.get("t") if trade_price else prev.get("t")
-    ts_et = _provider_ts_to_et(ts_raw)
+    price = _to_float(day.get("c")) or _to_float(last_trade.get("p")) or _to_float(prev.get("c"))
+    price_source = "[PROVIDER]" if (_to_float(day.get("c")) or _to_float(last_trade.get("p"))) else "[FALLBACK]"
     prev_close = _to_float(prev.get("c"))
     pct = _to_float(t.get("todaysChangePerc"))
     if pct is None and price and prev_close:
         pct = ((price / prev_close) - 1.0) * 100.0
     volume = _to_float(day.get("v")) or _to_float(t.get("volume"))
     prev_volume = _to_float(prev.get("v"))
-    return {"ticker": sym, "price": price, "prev_close": prev_close, "pct": pct, "volume": volume, "prev_volume": prev_volume, "source": price_source, "timestamp": ts_et.isoformat() if ts_et else None, "session": _quote_session_label(ts_et)}
+    return {"ticker": sym, "price": price, "prev_close": prev_close, "pct": pct, "volume": volume, "prev_volume": prev_volume, "source": price_source}
 
 
 def _sentiment_value(ticker):
@@ -889,70 +806,15 @@ def _macro_relevant_note(ticker, macro_lines):
     return None
 
 
-_PREMARKET_REPORT_ACTION_PRECEDENCE = {"SELL NOW": 0, "EXIT REVIEW": 1, "TRIM REVIEW": 2, "HOLD TIGHT": 3, "HOLD": 4, "DATA INCOMPLETE": 5}
-
-
-def _canonical_report_action(action):
-    text = str(action or "DATA INCOMPLETE").upper().replace("_", " ").strip()
-    if text in _PREMARKET_REPORT_ACTION_PRECEDENCE:
-        return text
-    if "SELL" in text:
-        return "SELL NOW"
-    if "EXIT" in text or "STOP BREACHED" in text or "URGENT STOP" in text:
-        return "EXIT REVIEW"
-    if "TRIM" in text:
-        return "TRIM REVIEW"
-    if "HOLD TIGHT" in text or "WATCH CLOSELY" in text:
-        return "HOLD TIGHT"
-    if text == "HOLD":
-        return "HOLD"
-    return "DATA INCOMPLETE"
-
-
-def _strongest_report_action(*actions):
-    vals = [_canonical_report_action(a) for a in actions if a is not None]
-    return min(vals or ["DATA INCOMPLETE"], key=lambda x: _PREMARKET_REPORT_ACTION_PRECEDENCE[x])
-
-
-def _premarket_stop_overlay(pa, stop):
-    try:
-        price = float(pa.get("valuation_price") if pa.get("valuation_price") not in (None, "") else pa.get("display_price"))
-        stop_value = float(stop)
-    except Exception:
-        return None, "UNKNOWN — NO ACTIONABLE PRICE"
-    if not pa.get("is_valuation_valid") or price is None:
-        return None, "UNKNOWN — NO ACTIONABLE PRICE"
-    session = str(pa.get("session") or "UNKNOWN").upper()
-    if price <= stop_value:
-        if session == "REGULAR":
-            return "SELL NOW", "STOP BREACHED — REGULAR SESSION"
-        return "EXIT REVIEW", f"STOP BREACHED — {session}"
-    if price <= stop_value * 1.015:
-        return "HOLD TIGHT", "NEAR STOP"
-    return None, "ABOVE STOP"
-
-
 def _open_position_lines(macro_lines):
     rows = atlas_db.get_open_positions()
-    merged_by_ticker = {}
-    if _load_or_build_merged_holdings_packet and _merged_packet_by_ticker:
-        try:
-            merged_by_ticker = _merged_packet_by_ticker(_load_or_build_merged_holdings_packet())
-        except Exception as exc:
-            print(f"[pre-market] merged holdings action unavailable: {type(exc).__name__}: {exc}")
-            merged_by_ticker = {}
     positions = []
     for row in rows:
         ticker = str(row.get("ticker") or "?").upper()
         shares = _to_float(row.get("quantity"), 0) or 0
         entry = _to_float(row.get("price"))
         quote = _snapshot_quote(ticker) or {}
-        pa = resolve_price_authority(ticker, entry, provider_price=quote.get("price"), provider_source=quote.get("source"), provider_timestamp=quote.get("timestamp"), cached_price=row.get("current_price") or row.get("last_price"), cached_timestamp=row.get("last_price_at"))
-        if quote.get("session"):
-            pa["session"] = quote.get("session")
-        merged = dict(merged_by_ticker.get(ticker) or {})
-        stop_overlay_action, stop_overlay_status = _premarket_stop_overlay(pa, row.get("stop_loss"))
-        final_action = _strongest_report_action(merged.get("final_action"), stop_overlay_action)
+        pa = resolve_price_authority(ticker, entry, provider_price=quote.get("price"), provider_source=quote.get("source"), cached_price=row.get("current_price") or row.get("last_price"), cached_timestamp=row.get("last_price_at"))
         positions.append({
             "ticker": ticker,
             "entry_price": entry,
@@ -962,11 +824,6 @@ def _open_position_lines(macro_lines):
             "stop_loss": row.get("stop_loss"),
             "target_price": row.get("target_price"),
             "quantity": shares,
-            "final_action": final_action,
-            "daily_action": merged.get("daily_action"),
-            "profit_protection_action": merged.get("profit_protection_action"),
-            "stop_status": stop_overlay_status if stop_overlay_action else (merged.get("stop_status") or "NOT BREACHED"),
-            "broker_status": merged.get("broker_status") or "NOT CONFIRMED",
         })
     pending = atlas_db.get_pending_broker_confirmation_trades()
     return render_portfolio_visibility_block(positions, pending)
@@ -1392,7 +1249,7 @@ def generate_wavef_pre_market_brief(send=False, market_day=None):
 
     scouting = []
     if earnings:
-        scouting.append("Earnings: " + _first_compact(earnings))
+        scouting.append("Earnings tonight: " + _first_compact(earnings))
     if analysts:
         scouting.append("Analyst actions: " + _first_compact(analysts))
     if insiders:

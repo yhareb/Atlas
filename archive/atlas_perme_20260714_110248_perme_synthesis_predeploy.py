@@ -712,72 +712,30 @@ def _held_earnings_events(context: dict[str, Any] | None, now_et: datetime) -> l
     return events
 
 
-def _event_session_date(row: dict[str, Any]) -> str | None:
-    raw = str(row.get("date") or row.get("datetime") or row.get("time") or "").strip()
-    match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", raw)
-    return match.group(1) if match else None
-
-
-def _event_matches_report_focus(row: dict[str, Any], focus_text: str) -> bool:
-    """Keep CPI/PPI events separated when the report is focused on one of them."""
-    focus = str(focus_text or "").upper()
-    name = _event_name(row).upper()
-    focus_cpi = "CPI" in focus or "CONSUMER PRICE" in focus
-    focus_ppi = "PPI" in focus or "PRODUCER PRICE" in focus
-    if focus_cpi and not focus_ppi and ("PPI" in name or "PRODUCER PRICE" in name):
-        return False
-    if focus_ppi and not focus_cpi and ("CPI" in name or "CONSUMER PRICE" in name):
-        return False
-    return True
-
-
-def _main_event_to_watch(context: dict[str, Any] | None, now_et: datetime, focus_text: str = "") -> tuple[str, str] | None:
+def _main_event_to_watch(context: dict[str, Any] | None, now_et: datetime) -> tuple[str, str] | None:
     # Main watch item should come from the economic calendar. Held earnings are
-    # rendered separately in the position-aware earnings paragraph. Only same-date
-    # HIGH/MEDIUM events can appear in a market-session report; CPI/PPI are not
-    # cross-filled from adjacent days or opposite inflation releases.
-    high_events: list[tuple[str, str, str]] = []
-    medium_events: list[tuple[str, str, str]] = []
+    # rendered separately in the position-aware earnings paragraph.
+    high_events: list[tuple[str, str]] = []
+    medium_events: list[tuple[str, str]] = []
     rows = ((context or {}).get("eodhd_economic_calendar") or []) if isinstance(context, dict) else []
-    report_date = now_et.date().isoformat()
-    seen: set[tuple[str, str]] = set()
     for row in rows:
         if not isinstance(row, dict):
-            continue
-        event_date = _event_session_date(row)
-        if event_date and event_date != report_date:
-            continue
-        if not _event_matches_report_focus(row, focus_text):
             continue
         relevance = _event_relevance(row)
         if relevance not in {"HIGH", "MEDIUM"}:
             continue
-        name = _event_name(row)
-        when = _format_event_time(row, now_et)
-        key = (name.upper(), when)
-        if key in seen:
-            continue
-        seen.add(key)
-        event = (name, when, name.upper())
+        event = (_event_name(row), _format_event_time(row, now_et))
         if relevance == "HIGH":
             high_events.append(event)
         else:
             medium_events.append(event)
-    focus = str(focus_text or "").upper()
-    def _score(item: tuple[str, str, str]) -> int:
-        name_upper = item[2]
-        if ("CPI" in focus or "CONSUMER PRICE" in focus) and ("CPI" in name_upper or "CONSUMER PRICE" in name_upper):
-            return 0
-        if ("PPI" in focus or "PRODUCER PRICE" in focus) and ("PPI" in name_upper or "PRODUCER PRICE" in name_upper):
-            return 0
-        return 1
-    events = sorted(high_events, key=_score) or sorted(medium_events, key=_score)
-    return (events[0][0], events[0][1]) if events else None
+    events = high_events or medium_events
+    return events[0] if events else None
 
 
-def _first_macro_event(context: dict[str, Any] | None, now_et: datetime, focus_text: str = "") -> tuple[str, str] | None:
-    """Return the highest-priority same-session event; ignore low/stale calendar noise."""
-    return _main_event_to_watch(context, now_et, focus_text)
+def _first_macro_event(context: dict[str, Any] | None, now_et: datetime) -> tuple[str, str] | None:
+    """Return the highest-priority main event; ignore low-relevance calendar noise."""
+    return _main_event_to_watch(context, now_et)
 
 
 def _has_only_low_macro_events(context: dict[str, Any] | None) -> bool:
@@ -843,17 +801,8 @@ def _earnings_sentence(context: dict[str, Any] | None) -> str | None:
     return None
 
 
-def _repair_punctuation_spacing(text: str) -> str:
-    """Deterministically repair sentence-boundary joins such as
-    '335.12.Meanwhile' without changing decimal points like '335.12'."""
-    repaired = re.sub(r"(?<=[.!?])(?=[A-Z])", " ", str(text or ""))
-    repaired = re.sub(r"\s+([,.;:!?])", r"\1", repaired)
-    repaired = re.sub(r"\s{2,}", " ", repaired)
-    return repaired.strip()
-
-
 def _clean_market_phrase(text: str, limit: int = 180) -> str:
-    cleaned = _repair_punctuation_spacing(" ".join(str(text or "").replace("**", "").split()))
+    cleaned = " ".join(str(text or "").replace("**", "").split())
     cleaned = re.sub(r"\bRSI\s+(?:at\s+)?([0-9]+(?:\.[0-9]+)?)\b", r"RSI \1", cleaned, flags=re.I)
     if len(cleaned) > limit:
         cleaned = cleaned[:limit].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
@@ -952,31 +901,21 @@ def _geopolitical_market_impact(evidence: list[str], flags: list[str]) -> str | 
     return f"Political/geopolitical shock is market-relevant because it moved {market}. Sectors affected: {sector_text}. TFE should watch confirmation in price, volatility, rates, and sector breadth — context only, no trade instruction."
 
 
-def _portfolio_impact_from_flags(flags: list[str], context: dict[str, Any] | None = None) -> str:
+def _portfolio_impact_from_flags(flags: list[str]) -> str:
     tickers = []
-    earnings_tickers = []
     sectors = []
     for flag in flags:
         item = str(flag or "").strip()
         upper = item.upper()
-        if upper.startswith("EARNINGS_RISK:"):
-            ticker = item.split(":", 1)[1].strip().upper()
-            tickers.append(ticker)
-            earnings_tickers.append(ticker)
-        elif upper.startswith("TICKER_NOTE:"):
+        if upper.startswith(("TICKER_NOTE:", "EARNINGS_RISK:")):
             tickers.append(item.split(":", 1)[1].strip().upper())
         elif upper.startswith(("SECTOR_NOTE:", "SECTOR_OVERBOUGHT:")):
             sectors.append(item.split(":", 1)[1].strip().upper())
-    tickers = list(dict.fromkeys(t for t in tickers if t))[:6]
-    earnings_tickers = list(dict.fromkeys(t for t in earnings_tickers if t))[:6]
-    sectors = list(dict.fromkeys(s for s in sectors if s))[:4]
-    if earnings_tickers:
-        return "watch " + ", ".join(earnings_tickers) + "; earnings exposure: bank results can gap the individual holdings and reset financial-sector risk."
     parts = []
     if tickers:
-        parts.append("watch " + ", ".join(tickers))
+        parts.append("watch " + ", ".join(list(dict.fromkeys(tickers))[:6]))
     if sectors:
-        parts.append("sector context: " + ", ".join(sectors))
+        parts.append("sector context: " + ", ".join(list(dict.fromkeys(sectors))[:4]))
     if parts:
         return "; ".join(parts) + ". Context only — no execution instruction."
     return "No direct portfolio ticker flag in this brief. Context only — no execution instruction."
@@ -995,8 +934,7 @@ def _perme_view_from_regime(briefing: str, flags: list[str]) -> str:
 
 
 def _next_catalyst_from_brief(context: dict[str, Any] | None, now_et: datetime, evidence: list[str], risks: list[str]) -> str:
-    focus_text = " ".join(evidence + risks)
-    event = _first_macro_event(context, now_et, focus_text)
+    event = _first_macro_event(context, now_et)
     if event:
         name, when = event
         return f"{name} at {when}. Translate the release into rates, liquidity, and sector impact."
@@ -1058,32 +996,6 @@ def _closed_market_output_for_context(context: dict[str, Any] | None, now_et: da
     return None
 
 
-def _dominant_catalyst_items(context: dict[str, Any] | None, now_et: datetime, evidence: list[str], risks: list[str], flags: list[str]) -> list[str]:
-    text = " ".join(evidence + risks + flags).upper()
-    items: list[str] = []
-    event = _first_macro_event(context, now_et, text)
-    if event:
-        items.append(event[0])
-    if "FED" in text or "FOMC" in text:
-        items.append("Fed speakers/policy risk")
-    if any(term in text for term in ("IRAN", "HORMUZ", "MIDDLE EAST", "WAR", "CEASEFIRE")):
-        items.append("US-Iran/Hormuz stress")
-    earnings = [str(f).split(":", 1)[1].strip().upper() for f in flags if str(f).upper().startswith("EARNINGS_RISK:")]
-    if earnings:
-        items.append("bank earnings: " + ", ".join(list(dict.fromkeys(earnings))[:4]))
-    return list(dict.fromkeys(i for i in items if i))
-
-
-def _dominant_catalyst_paragraph(context: dict[str, Any] | None, now_et: datetime, evidence: list[str], risks: list[str], flags: list[str]) -> str:
-    items = _dominant_catalyst_items(context, now_et, evidence, risks, flags)
-    if not items:
-        return "No single headline is driving the tape; the moves reflect ordinary day-to-day positioning rather than a specific news trigger."
-    if len(items) == 1:
-        return f"The dominant catalyst is {items[0]}; the practical risk is headline-driven volatility rather than ordinary positioning."
-    listed = ", ".join(items[:-1]) + " and " + items[-1]
-    return f"This is not a quiet tape: {listed} are the main catalysts, so the practical risk is headline-driven volatility and fast sector repricing."
-
-
 def _perme_macro_prose(briefing: str, context: dict[str, Any] | None, now_et: datetime, flags: list[str]) -> str:
     """Bloomberg/CNN market-desk style prose. Headline+tone, what moved, why it
     matters, portfolio relevance, next catalyst, Perme read — as natural, fluent,
@@ -1098,7 +1010,7 @@ def _perme_macro_prose(briefing: str, context: dict[str, Any] | None, now_et: da
     driver = _driver_from_evidence(evidence, risks)
     tape = _market_tape_from_evidence(evidence)
     rotation = _rotation_from_evidence(evidence, flags)
-    portfolio = _portfolio_impact_from_flags(flags, context)
+    portfolio = _portfolio_impact_from_flags(flags)
     perme_view = _perme_view_from_regime(briefing, flags)
     catalyst = _next_catalyst_from_brief(context, now_et, evidence, risks)
     geopolitical = _geopolitical_market_impact(evidence, flags)
@@ -1131,7 +1043,7 @@ def _perme_macro_prose(briefing: str, context: dict[str, Any] | None, now_et: da
     if geopolitical:
         why_paragraph = _rewrite_why_it_matters(_prep(geopolitical, seen_abbrevs))
     else:
-        why_paragraph = _dominant_catalyst_paragraph(context, now_et, evidence, risks, flags)
+        why_paragraph = "No single headline is driving the tape; the moves reflect ordinary day-to-day positioning rather than a specific news trigger."
 
     portfolio_paragraph = _rewrite_portfolio_relevance(_prep(portfolio, seen_abbrevs))
 
@@ -1139,10 +1051,9 @@ def _perme_macro_prose(briefing: str, context: dict[str, Any] | None, now_et: da
     perme_read_paragraph = _rewrite_tape_tone(_prep(perme_view, seen_abbrevs))
     if not perme_read_paragraph:
         perme_read_paragraph = "No strong read either way — this is background market context, not a trading decision."
-    final_implication = _plain_english_implication(regime, _dominant_catalyst_items(context, now_et, evidence, risks, flags))
 
-    paragraphs = [p for p in (tone_paragraph, moved_paragraph, why_paragraph, portfolio_paragraph, catalyst_paragraph, perme_read_paragraph, final_implication) if p]
-    expanded = [_repair_punctuation_spacing(_capitalize_first(_deslash(re.sub(r",\s*,", ",", _expand_first_mentions(p, seen_abbrevs))))) for p in paragraphs]
+    paragraphs = [p for p in (tone_paragraph, moved_paragraph, why_paragraph, portfolio_paragraph, catalyst_paragraph, perme_read_paragraph) if p]
+    expanded = [_capitalize_first(_deslash(re.sub(r",\s*,", ",", _expand_first_mentions(p, seen_abbrevs)))) for p in paragraphs]
     expanded = [p if p.endswith((".", "!", "?")) else p + "." for p in expanded]
     return "\n\n".join(expanded)
 
@@ -1258,11 +1169,7 @@ def _expand_first_mentions(text: str, seen: set[str]) -> str:
             return token
         if key in _DEFINITE_ARTICLE_TOKENS:
             return f"{explanation}, the {token},"
-        if key in {"CPI", "PPI"}:
-            prefix = text[max(0, match.start() - 5):match.start()].lower()
-            if prefix.endswith("core ") or prefix.endswith("headline "):
-                return f"{token}, {explanation},"
-        return f"{token}, {explanation},"
+        return f"{explanation}, or {token},"
 
     return _ABBREV_RE.sub(_replace, text)
 
@@ -1609,12 +1516,6 @@ def _rewrite_portfolio_relevance(text: str) -> str:
             word = word[:-1]
         return word + "-led"
 
-    match = re.match(r"^watch (.+?);\s*earnings exposure:\s*(.+?)\.?$", text, re.I)
-    if match:
-        tickers, risk = match.group(1).strip(), match.group(2).strip()
-        verb = "is" if "," not in tickers else "are"
-        return f"In the portfolio, {tickers} {verb} the actual bank-earnings exposure today; {risk.lower()}"
-
     match = re.match(r"^watch (.+?);\s*sector context:\s*(.+?)\.?$", text, re.I)
     if match:
         tickers, sectors_raw = match.group(1).strip(), match.group(2).strip()
@@ -1650,17 +1551,6 @@ def _rewrite_next_catalyst(text: str) -> str:
     if text.lower().startswith("no major scheduled catalyst isolated"):
         return "Nothing major is scheduled right now — keep an eye on fresh headlines for anything that changes the picture."
     return text
-
-
-def _plain_english_implication(regime: str, catalysts: list[str]) -> str:
-    if catalysts:
-        catalyst_text = ", ".join(catalysts[:3])
-        return f"Plain-English implication: treat this as a catalyst-risk session led by {catalyst_text}; wait for price confirmation instead of reacting to the headline alone."
-    if regime == "RISK-OFF":
-        return "Plain-English implication: risk is tilted to the downside, so patience matters more than chasing early moves."
-    if regime == "RISK-ON":
-        return "Plain-English implication: the tape is supportive, but the setup still needs live confirmation before it matters for Atlas."
-    return "Plain-English implication: there is no dominant catalyst, so this is background context unless a fresh headline changes the tape."
 
 
 def _rewrite_tape_tone(text: str) -> str:
