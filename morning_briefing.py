@@ -10,18 +10,24 @@ import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+# Load staging dispatch before production dependencies can alter sys.path/module cache.
+from atlas_holding_state_consumer_projection import select_leaf as _atlas_select_leaf
 from atlas_notify import send_telegram
 from atlas_time import current_et_market_date, previous_et_trading_date_str
 
-sys.path.insert(0, "/Users/yasser/scripts")
+_atlas_staging_package_dir = os.path.dirname(os.path.abspath(__file__))
+if _atlas_staging_package_dir not in sys.path:
+    sys.path.insert(0, _atlas_staging_package_dir)
+if "/Users/yasser/scripts" not in sys.path:
+    sys.path.append("/Users/yasser/scripts")
 import atlas_db
 import atlas_portfolio as port
 from atlas_symbol_meta import ticker_label
 from atlas_report_blocks import holding_block, pullback_block, watch_list_block
 from atlas_report_authority import render_portfolio_visibility_block, normalize_open_position_rows, pending_exposure_compact_lines
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_BOT_TOKEN = "STAGING_DISABLED"
+TELEGRAM_CHAT_ID = "STAGING_DISABLED"
 ET = ZoneInfo("America/New_York")
 
 
@@ -87,11 +93,15 @@ def _latest_handoff(market_day):
     return atlas_db.get_handoff(today) or atlas_db.get_handoff(previous) or {}
 
 
-def _holding_lines():
+def _legacy_holding_lines():
     rows = atlas_db.get_open_positions()
     pending = atlas_db.get_pending_broker_confirmation_trades()
     positions = normalize_open_position_rows(rows, price_lookup=lambda ticker: _latest_price(ticker, fallback=None))
     return render_portfolio_visibility_block(positions, pending)
+
+def _holding_lines():
+    return _atlas_select_leaf("PRE_MARKET_HOLDINGS", _legacy_holding_lines,
+                              reference="morning_briefing._holding_lines")
 
 def _pending_stop_target(row):
     trigger = _num(row.get("trigger_price"))
@@ -164,6 +174,8 @@ def generate_morning_briefing(send=True):
     if send:
         send_telegram_message(message)
     return message
+
+
 
 
 if __name__ == "__main__":

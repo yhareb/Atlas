@@ -239,7 +239,7 @@ def _profit_protection_v2_lines() -> list[str]:
     return ([""] + block.splitlines() + [""]) if block else []
 
 
-def build_report() -> str:
+def build_report(quiver_fixture=None) -> str:
     market_day = datetime.now(ET_TZ).strftime("%B %-d, %Y")
     trades = _open_trades()
     cash = _cash_balance()
@@ -274,9 +274,10 @@ def build_report() -> str:
         f"💰 Equity {SOURCE_RENDER_CALC} {_money(equity)} · Cash [LEDGER] {_money(cash)} · {len(rows)} positions · ROI {SOURCE_RENDER_CALC} {_fmt_pct(roi)}" + (f" · Valuation PARTIAL excl {','.join(excluded)}" if excluded else ""),
         "",
     ]
-    lines.extend(render_portfolio_visibility_block(normalize_open_position_rows(rows), atlas_db.get_pending_broker_confirmation_trades()))
-    lines.extend(_holdings_final_action_lines())
-    lines.extend(_profit_protection_v2_lines())
+    lines.extend(_atlas_select_leaf("EOD_POSTMARKET_HOLDINGS", lambda:
+        render_portfolio_visibility_block(normalize_open_position_rows(rows), atlas_db.get_pending_broker_confirmation_trades())
+        + _holdings_final_action_lines() + _profit_protection_v2_lines(),
+        reference="atlas_eod_positions.holding_leaf"))
     if rows:
         valued_rows = [r for r in rows if r.get("unrealized_pl_pct") is not None]
         best = max(valued_rows, key=lambda r: r["unrealized_pl_pct"]) if valued_rows else None
@@ -292,6 +293,13 @@ def build_report() -> str:
         worst_line,
         f"Cash [LEDGER]: {_money(cash)}",
     ]
+    if quiver_fixture is not None:
+        raw, context = quiver_fixture
+        lines += _atlas_select_leaf(
+            "EOD_POSTMARKET_HOLDINGS",
+            lambda: quiver_consumer_decision_block(raw, context).splitlines(),
+            reference="atlas_eod_positions.quiver_consumer_decision_block",
+        )
     return "\n".join(lines)
 
 def main(argv: list[str] | None = None) -> int:
@@ -315,6 +323,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[eod_positions] telegram report success={sent}")
     return 0 if sent else 1
 
+
+
+from atlas_holding_state_consumer_projection import select_leaf as _atlas_select_leaf
 
 if __name__ == "__main__":
     raise SystemExit(main())

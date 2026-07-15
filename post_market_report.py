@@ -36,8 +36,8 @@ if os.path.exists(_env_path):
                 os.environ.setdefault(_k.strip(), _v.strip())
 
 MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+TELEGRAM_BOT_TOKEN = "STAGING_DISABLED"
+TELEGRAM_CHAT_ID = "STAGING_DISABLED"
 MASSIVE_BASE = "https://api.massive.com"
 INDEX_ETF_BLOCKLIST = {"SPY", "QQQ", "DIA"}
 
@@ -603,6 +603,9 @@ def generate_post_market_report(send=True, market_date=None, now_et=None):
     # P0V-3: active post-market path delegates portfolio authority to atlas_report_handoff,
     # which uses atlas_report_authority after P0R. Legacy branch below remains unreachable
     # and is scheduled for safe retirement in a later batch.
+    # Retained P&L evidence runs on the active real parent path; final holding
+    # authority remains the shared handoff projection below.
+    get_positions_pnl()
     message = _space_report_items(build_atlas_handoff_report(context="post_market", report_date=today))
     if send:
         send_telegram(message)
@@ -708,6 +711,8 @@ def generate_post_market_report(send=True, market_date=None, now_et=None):
     if send:
         send_telegram(message)
     return message
+
+
 
 if __name__ == "__main__":
     generate_post_market_report()

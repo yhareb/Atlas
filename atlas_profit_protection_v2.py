@@ -509,7 +509,15 @@ def evaluate_current_open_from_snapshot(snapshot_path: str | None = None, db_pat
 
 
 def render_report_block_from_snapshot(snapshot_path: str | None = None, db_path: str = "/Users/yasser/scripts/atlas.db") -> str:
-    results = evaluate_current_open_from_snapshot(snapshot_path, db_path=db_path)
-    if not results:
-        return ""
-    return render_human_block(results)
+    """Render the PP report leaf; evaluation remains an unconditional producer."""
+    from atlas_holding_state_consumer_projection import select_leaf
+    def legacy_leaf() -> str:
+        results = evaluate_current_open_from_snapshot(snapshot_path, db_path=db_path)
+        return render_human_block(results) if results else ""
+    return select_leaf(
+        "DAILY_PP_HOLDING_SECTIONS",
+        legacy_leaf,
+        reference="atlas_profit_protection_v2.render_report_block_from_snapshot",
+        projector=lambda projection: "\n".join(projection.lines),
+    )
+

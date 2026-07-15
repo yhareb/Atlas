@@ -107,7 +107,7 @@ def _append_entry_gap(lines):
         lines.append("")
 
 
-def _open_position_lines():
+def _legacy_open_position_lines():
     rows = atlas_db.get_open_positions()
     positions = []
     for row in rows:
@@ -132,6 +132,11 @@ def _open_position_lines():
     if lines and lines[0] == "":
         lines = lines[1:]
     return lines, len(rows) + len(pending)
+
+def _open_position_lines():
+    return _atlas_select_leaf("PRE_MARKET_HOLDINGS", _legacy_open_position_lines,
+        reference="atlas_report_handoff._open_position_lines",
+        projector=lambda p:(list(p.lines), len(p.lines)))
 
 def _position_note(ticker):
     notes = {
@@ -231,7 +236,7 @@ def _break_lines():
         "",
         "   ❌ Atlas silent on Telegram — run: hermes -p atlas gateway restart",
         "",
-        "   ⛔ AtlasOps must NOT touch Telegram .env — correct chat ID ends 9320",
+        "   ⛔ AtlasOps must NOT touch Telegram .env — correct chat ID ends [REDACTED]",
         "",
     ]
 
@@ -330,6 +335,9 @@ def build_atlas_handoff_report(context=None, report_date=None):
     print(f"[handoff timing] assemble={_time.perf_counter() - stage:.2f}s total={_time.perf_counter() - started:.2f}s")
     return "\n".join(lines)
 
+
+
+from atlas_holding_state_consumer_projection import select_leaf as _atlas_select_leaf
 
 if __name__ == "__main__":
     print(build_atlas_handoff_report())

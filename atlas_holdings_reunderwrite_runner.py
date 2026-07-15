@@ -16,7 +16,7 @@ except Exception:
     _pp_evaluate_current_open = None
 
 ET=ZoneInfo('America/New_York')
-DEFAULT_LOCK='/Users/yasser/Library/Application Support/Atlas/holdings_reunderwrite/run/daily_holdings_reunderwrite.lock'
+DEFAULT_LOCK=os.environ.get('ATLAS_HOLDINGS_REUNDERWRITE_LOCK','/Users/yasser/Library/Application Support/Atlas/holdings_reunderwrite/run/daily_holdings_reunderwrite.lock')
 DEFAULT_ROOT='/Users/yasser/Library/Application Support/Atlas/holdings_reunderwrite'
 DEFAULT_OUT='/Users/yasser/atlas_inbox/holdings_reunderwrite'
 DEFAULT_SIDECAR=DEFAULT_ROOT+'/db/holdings_reunderwrite.sqlite'
@@ -284,4 +284,5 @@ def main(argv=None):
             (out/'holdings_reunderwrite_health.json').write_text(json.dumps(health,indent=2,sort_keys=True)+'\n')
             log('PASS '+json.dumps(health,sort_keys=True)); return 0
     finally: signal.alarm(0)
+
 if __name__=='__main__': raise SystemExit(main())

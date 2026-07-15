@@ -436,7 +436,7 @@ def build_prompt(context: dict[str, Any]) -> str:
         "Use only these FLAGS when justified: RISK-OFF, FED_DAY, FOMC_DAY, CPI_DAY, EARNINGS_RISK: <TICKER>, "
         "TICKER_NOTE: <TICKER>, SECTOR_OVERBOUGHT: <SECTOR>, SECTOR_NOTE: <SECTOR>. "
         "If no flags apply, write None. under ## FLAGS. Do not mention buy/sell/stop/target. "
-        "If any HIGH-impact event is listed in the raw data (e.g., NFP, CPI), you MUST explicitly label it a 'MASSIVE CATALYST' in the RISK FACTORS section and warn about extreme volatility and liquidity drain.\n\n"
+        "If any HIGH-impact event is listed in the raw data (e.g., NFP, CPI), label it a 'HIGH-IMPACT CATALYST' in the RISK FACTORS section and warn about extreme volatility and liquidity drain. Never use provider names such as Massive as intensity adjectives.\n\n"
         "REQUIRED_TEMPLATE:\n" + template + "\n"
         "RAW_DATA_JSON:\n"
         + json.dumps(context, indent=2, sort_keys=True, default=str)
@@ -486,7 +486,7 @@ def _clean_section_line(line: str) -> str:
     cleaned = line.strip()
     while cleaned.startswith(("-", "*", "•")):
         cleaned = cleaned[1:].strip()
-    return cleaned
+    return _sanitize_provider_label_leakage(cleaned)
 
 
 def _first_section_line(text: str, heading: str, default: str = "Unknown") -> str:
@@ -568,6 +568,108 @@ SECTOR_HOLDING_TICKERS = {
     "MATERIALS": set(),
     "UTILITIES": set(),
 }
+
+
+# Semantic guardrails for human-facing Perme prose. These are report-rendering
+# constraints only; they do not alter Atlas strategy, providers, schedules, DB,
+# broker state, or engine packets. The classifier is generated from reusable
+# sector membership sets; no ticker-specific control flow is permitted.
+ISSUER_SECTOR_MEMBERS = {
+    **{sector: frozenset(tickers) for sector, tickers in SECTOR_HOLDING_TICKERS.items()},
+    "HEALTHCARE": frozenset(set(SECTOR_HOLDING_TICKERS.get("HEALTHCARE", set())) | {"UNH"}),
+}
+
+FINANCIAL_SECTOR = "FINANCIALS"
+HEALTHCARE_SECTORS = {"HEALTHCARE", "PHARMACEUTICALS", "MEDTECH"}
+SEMI_SECTORS = {"SEMI", "TECH"}
+
+
+def _sanitize_provider_label_leakage(text: str) -> str:
+    # Massive is a market-data provider name in Atlas; it must never read as a
+    # severity adjective in Professor-facing prose.
+    return re.sub(r"\bMASSIVE\s+CATALYST\b", "high-impact catalyst", str(text or ""), flags=re.I)
+
+
+def _ticker_sector(ticker: str, metadata: dict[str, Any] | None = None) -> str | None:
+    """Classify from normalized issuer metadata, then the reusable sector registry.
+
+    Conflicting normalized metadata fails closed. There is deliberately no
+    ticker-specific branch in this classifier.
+    """
+    ticker = str(ticker or "").upper().strip()
+    if not ticker:
+        return None
+    metadata = metadata or {}
+    normalized = set()
+    for key in ("sector", "industry", "gic_sector", "gic_industry", "sic_description"):
+        value = str(metadata.get(key) or "").upper()
+        if any(term in value for term in ("HEALTH", "PHARMA", "MEDTECH", "MEDICAL")):
+            normalized.add("HEALTHCARE")
+        if any(term in value for term in ("FINANC", "BANK", "CAPITAL MARKETS")):
+            normalized.add("FINANCIALS")
+        if any(term in value for term in ("SEMICONDUCTOR", "CHIP")):
+            normalized.add("SEMI")
+        if any(term in value for term in ("TECHNOLOGY", "SOFTWARE", "HARDWARE")):
+            normalized.add("TECH")
+    if len(normalized) == 1:
+        return next(iter(normalized))
+    if len(normalized) > 1 and not normalized <= SEMI_SECTORS:
+        return None
+    if normalized <= SEMI_SECTORS and normalized:
+        return "SEMI" if "SEMI" in normalized else "TECH"
+    matches = [sector for sector, tickers in ISSUER_SECTOR_MEMBERS.items() if ticker in tickers]
+    return matches[0] if len(set(matches)) == 1 else None
+
+
+def _sector_label_for_ticker(ticker: str) -> str:
+    sector = _ticker_sector(ticker)
+    if sector == "HEALTHCARE":
+        return "healthcare / pharmaceuticals / MedTech"
+    if sector == "FINANCIALS":
+        return "financials / banking"
+    if sector == "SEMI":
+        return "semiconductors"
+    if sector:
+        return sector.lower().replace("_", " ")
+    return "DATA INCOMPLETE"
+
+
+def _is_valid_bank_issuer(ticker: str) -> bool:
+    return _ticker_sector(ticker) == FINANCIAL_SECTOR
+
+
+def _authoritative_holding_set(context: dict[str, Any] | None = None) -> set[str]:
+    if isinstance(context, dict):
+        for key in ("authoritative_open_holdings", "open_holdings", "current_open_holdings"):
+            raw = context.get(key)
+            if raw:
+                return {str(x).upper() for x in raw if str(x or "").strip()}
+    return _open_holding_tickers()
+
+
+def _bank_holdings(context: dict[str, Any] | None = None) -> list[str]:
+    return sorted(t for t in _authoritative_holding_set(context) if _is_valid_bank_issuer(t))
+
+
+def _semi_pressure_support(evidence: list[str], flags: list[str]) -> tuple[bool, bool, list[str]]:
+    """Require direction words/numbers on the same evidence line as a named semi source."""
+    names_re = re.compile(r"\b(?:SMH|SOXX|ASML|INTC|NVDA|AMD|TSM|MU|AMAT|LRCX|KLAC|QCOM|AVGO|MRVL|ARM|SYNA)\b", re.I)
+    sector_re = re.compile(r"\b(?:SEMICONDUCTOR|SEMIS?|CHIP(?:-SECTOR)?|PHLX SEMICONDUCTOR)\b", re.I)
+    negative_re = re.compile(r"\b(?:UNDER PRESSURE|PRESSURED|WEAK|WEAKNESS|DOWN|LOWER|SELLOFF|SELL-OFF|DE-RATING|DERATING|BELOW SUPPORT)\b|\b(?:SMH|SOXX)\b[^\n.;]*-\d", re.I)
+    positive_re = re.compile(r"\b(?:REBOUND|STRENGTH|HIGHER|GAINED|UP|EXTENDS?|CAPACITY EXPANSION|READINESS PROGRESS|AI CUSTOMER DEMAND|OUTPERFORMANCE)\b|\b(?:SMH|SOXX)\b[^\n.;]*\+\d", re.I)
+    named: set[str] = set()
+    negative = False
+    positive = False
+    for line in evidence:
+        if not (names_re.search(line) or sector_re.search(line)):
+            continue
+        named.update(x.upper() for x in names_re.findall(line))
+        negative = negative or bool(negative_re.search(line))
+        positive = positive or bool(positive_re.search(line))
+    if negative and positive:
+        return False, True, sorted(named)
+    return negative, False, sorted(named)
+
 
 
 def _open_holding_tickers() -> set[str]:
@@ -878,10 +980,12 @@ def _first_matching_line(lines: list[str], terms: tuple[str, ...]) -> str | None
 
 
 def _market_tape_from_evidence(evidence: list[str]) -> str:
-    tape = _first_matching_line(evidence, ("SMH", "XLK", "NASDAQ", "S&P", "SPY", "DOW", "XLE", "XLF"))
-    if not tape:
-        return "Tape detail is limited; treat the brief as context until live market data confirms direction."
-    return _clean_market_phrase(tape, 210)
+    # Unlike _first_matching_line(), this must not fall back to the first company
+    # earnings sentence; a market-tape paragraph needs named index/sector evidence.
+    for line in evidence:
+        if any(term in line.upper() for term in ("SMH", "SOXX", "XLK", "NASDAQ", "S&P", "SPY", "DOW", "XLE", "XLF", "QQQ")):
+            return _clean_market_phrase(line, 210)
+    return ""
 
 
 def _driver_from_evidence(evidence: list[str], risks: list[str]) -> str:
@@ -904,13 +1008,21 @@ def _rotation_from_evidence(evidence: list[str], flags: list[str]) -> str:
         winners.append("gold/safety")
     if "DOLLAR" in text or "USD" in text:
         winners.append("dollar defensives")
-    if "FINANCIALS" in text:
+    if "FINANCIALS" in text or "XLF" in text:
         stretched.append("financials")
-    if "HEALTHCARE" in text:
+    if "HEALTHCARE" in text or "XLV" in text:
         stretched.append("healthcare")
-    if "SMH" in text or "SEMI" in text or "SEMICONDUCTOR" in text or "CHIP" in text or "TAIWAN" in text or "EXPORT RESTRICTION" in text:
+    semi_pressure, semi_conflict, semi_names = _semi_pressure_support(evidence, flags)
+    if semi_conflict:
+        return "Semiconductor evidence is mixed, so no directional sector conclusion is warranted."
+    if semi_pressure:
         losers.append("semiconductors")
-    if "XLK" in text or "TECH" in text or "NASDAQ" in text or "FUTURES" in text:
+    elif (semi_names or any(term in text for term in ("SEMI", "SEMICONDUCTOR", "CHIP"))) and not any(term in text for term in ("GAINED", "REBOUND", "STRENGTH", "HIGHER", "OUTPERFORMANCE", "CAPACITY EXPANSION", "READINESS PROGRESS")):
+        return "Available evidence is not strong enough to make a directional semiconductor-sector call."
+    # Tech/growth pressure also needs a named sector/index signal, not a generic flag.
+    tech_named = any(term in text for term in ("XLK", "NASDAQ", "QQQ"))
+    tech_negative = any(term in text for term in ("UNDER PRESSURE", "WEAK", "WEAKNESS", "DOWN", "LOWER", "FUTURES DOWN")) or bool(re.search(r"\b(?:XLK|QQQ)\b[^\n.;]*-\d", text))
+    if tech_named and tech_negative:
         losers.append("tech/growth")
     if winners or stretched or losers:
         clauses = []
@@ -921,11 +1033,13 @@ def _rotation_from_evidence(evidence: list[str], flags: list[str]) -> str:
         if losers:
             clauses.append(f"{', '.join(losers)} came under pressure")
         return "; ".join(clauses).capitalize() + "."
-    return "Rotation signal is not strong enough to call; do not force a sector narrative."
+    return "Available evidence is not strong enough to make a directional sector call."
+
 
 def _geopolitical_market_impact(evidence: list[str], flags: list[str]) -> str | None:
     text = " ".join(evidence + flags).upper()
-    if not any(term in text for term in ("TRUMP", "TARIFF", "SANCTION", "CEASEFIRE", "WAR", "IRAN", "MIDDLE EAST", "HORMUZ", "CHINA", "TAIWAN", "EXPORT RESTRICTION", "FEDWATCH", "RATE-HIKE", "RATE HIKE", "ELECTION", "POLICY")):
+    # Monetary-policy language alone is not geopolitical evidence.
+    if not any(term in text for term in ("TRUMP", "TARIFF", "SANCTION", "CEASEFIRE", "WAR", "IRAN", "MIDDLE EAST", "HORMUZ", "CHINA", "TAIWAN", "EXPORT RESTRICTION", "ELECTION")):
         return None
     moved = []
     if "NASDAQ" in text or "FUTURES" in text:
@@ -952,34 +1066,71 @@ def _geopolitical_market_impact(evidence: list[str], flags: list[str]) -> str | 
     return f"Political/geopolitical shock is market-relevant because it moved {market}. Sectors affected: {sector_text}. TFE should watch confirmation in price, volatility, rates, and sector breadth — context only, no trade instruction."
 
 
+def _natural_join(items: list[str]) -> str:
+    items = list(dict.fromkeys(str(x).strip() for x in items if str(x).strip()))
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return ", ".join(items[:-1]) + ", and " + items[-1]
+
+
 def _portfolio_impact_from_flags(flags: list[str], context: dict[str, Any] | None = None) -> str:
-    tickers = []
-    earnings_tickers = []
-    sectors = []
+    raw_tickers: list[str] = []
+    earnings_tickers: list[str] = []
+    sectors: list[str] = []
     for flag in flags:
         item = str(flag or "").strip()
         upper = item.upper()
         if upper.startswith("EARNINGS_RISK:"):
             ticker = item.split(":", 1)[1].strip().upper()
-            tickers.append(ticker)
+            raw_tickers.append(ticker)
             earnings_tickers.append(ticker)
         elif upper.startswith("TICKER_NOTE:"):
-            tickers.append(item.split(":", 1)[1].strip().upper())
+            raw_tickers.append(item.split(":", 1)[1].strip().upper())
         elif upper.startswith(("SECTOR_NOTE:", "SECTOR_OVERBOUGHT:")):
             sectors.append(item.split(":", 1)[1].strip().upper())
-    tickers = list(dict.fromkeys(t for t in tickers if t))[:6]
-    earnings_tickers = list(dict.fromkeys(t for t in earnings_tickers if t))[:6]
+    holdings = _authoritative_holding_set(context)
+    authority_state = str((context or {}).get("holding_authority_state") or "VALID").upper()
+    if authority_state not in {"VALID", "FRESH"}:
+        return "Portfolio relevance is DATA INCOMPLETE because the current holding set is unavailable or stale."
+    current_bank_holdings = _bank_holdings(context)
+    raw_tickers = list(dict.fromkeys(t for t in raw_tickers if t))[:8]
+    earnings_tickers = list(dict.fromkeys(t for t in earnings_tickers if t))[:8]
     sectors = list(dict.fromkeys(s for s in sectors if s))[:4]
-    if earnings_tickers:
-        return "watch " + ", ".join(earnings_tickers) + "; earnings exposure: bank results can gap the individual holdings and reset financial-sector risk."
-    parts = []
-    if tickers:
-        parts.append("watch " + ", ".join(tickers))
-    if sectors:
-        parts.append("sector context: " + ", ".join(sectors))
-    if parts:
-        return "; ".join(parts) + ". Context only — no execution instruction."
-    return "No direct portfolio ticker flag in this brief. Context only — no execution instruction."
+    sentences: list[str] = []
+    held_earnings = [t for t in earnings_tickers if t in holdings]
+    nonheld_earnings = [t for t in earnings_tickers if t not in holdings]
+    unknown_earnings = [t for t in earnings_tickers if _ticker_sector(t) is None]
+    held_financial = [t for t in held_earnings if _is_valid_bank_issuer(t)]
+    held_nonfinancial = [t for t in held_earnings if t not in held_financial]
+    if held_financial:
+        sentences.append(f"{_natural_join(held_financial)} {'is' if len(held_financial) == 1 else 'are'} the portfolio's bank-earnings exposure.")
+    elif current_bank_holdings and earnings_tickers:
+        bank_subject = _natural_join(current_bank_holdings)
+        sentences.append(f"{bank_subject} {'remains' if len(current_bank_holdings) == 1 else 'remain'} the portfolio's bank exposure.")
+    if held_nonfinancial:
+        descriptions = [f"{t} is a current {_sector_label_for_ticker(t)} holding reporting earnings" for t in held_nonfinancial]
+        sentences.append(_capitalize_first(_natural_join(descriptions)) + ".")
+    known_nonheld = [t for t in nonheld_earnings if t not in unknown_earnings]
+    if known_nonheld:
+        descriptions = [f"{t} is {_sector_label_for_ticker(t)} and is not a current portfolio holding" for t in known_nonheld]
+        sentences.append(_capitalize_first(_natural_join(descriptions)) + ".")
+    if unknown_earnings:
+        sentences.append(f"Issuer classification is DATA INCOMPLETE for {_natural_join(unknown_earnings)}, so no sector or portfolio exposure is inferred.")
+    held_notes = [t for t in raw_tickers if t in holdings and t not in earnings_tickers]
+    if held_notes:
+        sentences.append(f"Current portfolio context also includes {_natural_join(held_notes)}.")
+    unknown_sectors = [s for s in sectors if s not in SECTOR_HOLDING_TICKERS]
+    if unknown_sectors:
+        sentences.append(f"Sector classification is DATA INCOMPLETE for {_natural_join(unknown_sectors)}.")
+    if sentences:
+        return " ".join(sentences)
+    if not holdings:
+        return "No current open holdings are available for portfolio commentary."
+    return "Nothing in this report points directly to a current open holding."
 
 
 def _perme_view_from_regime(briefing: str, flags: list[str]) -> str:
@@ -1070,7 +1221,12 @@ def _dominant_catalyst_items(context: dict[str, Any] | None, now_et: datetime, e
         items.append("US-Iran/Hormuz stress")
     earnings = [str(f).split(":", 1)[1].strip().upper() for f in flags if str(f).upper().startswith("EARNINGS_RISK:")]
     if earnings:
-        items.append("bank earnings: " + ", ".join(list(dict.fromkeys(earnings))[:4]))
+        bank = [t for t in earnings if _is_valid_bank_issuer(t)]
+        non_bank = [t for t in earnings if not _is_valid_bank_issuer(t)]
+        if bank:
+            items.append("bank earnings: " + ", ".join(list(dict.fromkeys(bank))[:4]))
+        if non_bank:
+            items.append("earnings: " + ", ".join(f"{t} ({_sector_label_for_ticker(t)})" for t in list(dict.fromkeys(non_bank))[:4]))
     return list(dict.fromkeys(i for i in items if i))
 
 
@@ -1127,6 +1283,11 @@ def _perme_macro_prose(briefing: str, context: dict[str, Any] | None, now_et: da
         else:
             moved_paragraph = _reconcile_moved(tape_clean, rotation_clean)
         moved_paragraph = _rewrite_rsi_reading(moved_paragraph, seen_abbrevs)
+    if not tape_clean and rotation_clean in {
+        "Available evidence is not strong enough to make a directional sector call.",
+        "Available evidence is not strong enough to make a directional semiconductor-sector call.",
+    }:
+        moved_paragraph = rotation_clean
 
     if geopolitical:
         why_paragraph = _rewrite_why_it_matters(_prep(geopolitical, seen_abbrevs))
@@ -1144,7 +1305,19 @@ def _perme_macro_prose(briefing: str, context: dict[str, Any] | None, now_et: da
     paragraphs = [p for p in (tone_paragraph, moved_paragraph, why_paragraph, portfolio_paragraph, catalyst_paragraph, perme_read_paragraph, final_implication) if p]
     expanded = [_repair_punctuation_spacing(_capitalize_first(_deslash(re.sub(r",\s*,", ",", _expand_first_mentions(p, seen_abbrevs))))) for p in paragraphs]
     expanded = [p if p.endswith((".", "!", "?")) else p + "." for p in expanded]
-    return "\n\n".join(expanded)
+    deduped: list[str] = []
+    seen_clauses: set[str] = set()
+    for paragraph in expanded:
+        clauses = [c.strip() for c in re.split(r"(?<=[.!?])\s+", paragraph) if c.strip()]
+        kept = []
+        for clause in clauses:
+            key = re.sub(r"\W+", " ", clause.lower()).strip()
+            if key and key not in seen_clauses:
+                kept.append(clause)
+                seen_clauses.add(key)
+        if kept:
+            deduped.append(" ".join(kept))
+    return "\n\n".join(deduped)
 
 
 # ---------------------------------------------------------------------------
@@ -1432,7 +1605,15 @@ def _reconcile_moved(tape: str, rotation: str) -> str:
         kept_clauses.append(clause)
 
     rotation_kept = _humanize_rotation("; ".join(kept_clauses))
-    return " ".join(p for p in (tape, rotation_kept) if p)
+    parts = []
+    for part in (tape, rotation_kept):
+        part = str(part or "").strip()
+        if not part:
+            continue
+        if parts and parts[-1] and not parts[-1].endswith((".", "!", "?")):
+            parts[-1] += "."
+        parts.append(part)
+    return " ".join(parts)
 
 
 def _fed_hint_from(*texts: str) -> str:
@@ -1597,8 +1778,9 @@ def _rewrite_why_it_matters(text: str) -> str:
 
 
 def _rewrite_portfolio_relevance(text: str) -> str:
-    """Replace 'watch TICKER; sector context: SECTOR' with clean portfolio prose:
-    'In the portfolio, TICKER is exposed to today's SECTOR-led move — ...'."""
+    """Replace legacy portfolio prose without allowing non-holdings into portfolio membership."""
+    if any(marker in text.lower() for marker in ("non-portfolio", "watch-list ticker context only", "current portfolio bank exposure", "not bank exposure", "data incomplete")):
+        return text
     def _sector_adjective(raw: str) -> str:
         key = raw.strip().lower()
         for canonical, aliases in _SECTOR_ALIASES.items():

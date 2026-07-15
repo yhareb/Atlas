@@ -78,8 +78,8 @@ _ALERT_COOLDOWN: dict = {}  # ticker -> {"ts": float, "dist": float} — cooldow
 _ENV_PATH = os.path.expanduser("~/.hermes/profiles/atlas/.env")
 # Credential/env-file loading is intentionally lazy and owned by atlas_notify's
 # real-send path. Importing/rendering intraday must not read profile credentials.
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_ALLOWED_USERS") or os.environ.get("TELEGRAM_HOME_CHANNEL")
+TELEGRAM_BOT_TOKEN = "STAGING_DISABLED"
+TELEGRAM_CHAT_ID = "STAGING_DISABLED"
 
 def _env_int(name):
     try:
@@ -722,12 +722,16 @@ def _header_lines(summary, hold_count):
             excluded = [p.get("ticker") for p in packet_rows if not p.get("valuation_included")]
             invested = sum(_num(p.get("entry")) * _num(p.get("quantity")) for p in valid)
             current_value = sum(_num(p.get("valuation_price")) * _num(p.get("quantity")) for p in valid)
-        else:
+        elif _atlas_mode() != "canonical":
             positions_for_valuation = _authority_open_position_rows(summary)
             valid = [p for p in positions_for_valuation if (p.get("price_authority") or {}).get("is_valuation_valid")]
             excluded = valuation_excluded_tickers(positions_for_valuation)
             invested = sum(_num(p.get("entry_price") or p.get("price")) * _num(p.get("quantity") or p.get("shares")) for p in valid)
             current_value = sum(_num((p.get("price_authority") or {}).get("valuation_price")) * _num(p.get("quantity") or p.get("shares")) for p in valid)
+        else:
+            # Canonical valuation is represented by the typed holding projection;
+            # never eagerly evaluate the legacy row authority for header decoration.
+            valid, excluded, invested, current_value = [], [], 0.0, 0.0
         roi = ((current_value - invested) / invested * 100.0) if invested else 0.0
         positions_note = " · valuation PARTIAL excl " + ",".join([str(x) for x in excluded if x]) if excluded else ""
     except Exception:
@@ -1770,13 +1774,17 @@ def _authority_open_position_rows(summary=None):
         out.append(item)
     return out
 
-def _holding_lines(summary):
+def _legacy_holding_lines(summary):
     summary = summary if isinstance(summary, dict) else {}
     packet = summary.get("intraday_holdings_freshness_packet") or {}
     if _render_holdings_freshness_packet and packet.get("packet_version") == "intraday_holdings_action_freshness.v1":
         return _render_holdings_freshness_packet(packet)
     positions = _authority_open_position_rows(summary)
     return holding_block(positions, summary or {})
+
+def _holding_lines(summary):
+    return _atlas_select_leaf("INTRADAY_HOLDINGS", lambda:_legacy_holding_lines(summary),
+                              reference="atlas_intraday._holding_lines")
 
 
 def _profit_protection_lines(summary):
@@ -2211,7 +2219,7 @@ def _build_report(summary):
     summary["watch_2"] = list(dict.fromkeys(
         [str(t).upper() for t in (summary.get("watch_2") or [])] +
         [decision.ticker for decision in advisory_routing.watch]))
-    if _build_holdings_freshness_packet and _render_holdings_freshness_packet:
+    if _atlas_mode() != "canonical" and _build_holdings_freshness_packet and _render_holdings_freshness_packet:
         try:
             summary["intraday_holdings_freshness_packet"] = _build_holdings_freshness_packet(
                 summary=summary,
@@ -2222,11 +2230,13 @@ def _build_report(summary):
             print(f"[intraday] holdings freshness packet warning: {type(exc).__name__}: {exc}")
     lines = _header_lines(summary, hold_count)
     lines += _sell_now_lines(summary)
-    lines += _position_risk_alert_lines(summary)
-    lines += _review_now_lines(summary)
-    lines += _macro_watch_lines(summary)
+    if _atlas_mode() != "canonical":
+        # Canonical receives the complete risk/holding section from projection.
+        lines += _position_risk_alert_lines(summary)
+        lines += _review_now_lines(summary)
+        lines += _macro_watch_lines(summary)
     lines += _holding_lines(summary)
-    if not (summary.get("intraday_holdings_freshness_packet") or {}).get("packet_version") == "intraday_holdings_action_freshness.v1":
+    if _atlas_mode() != "canonical" and not (summary.get("intraday_holdings_freshness_packet") or {}).get("packet_version") == "intraday_holdings_action_freshness.v1":
         lines += _profit_protection_lines(summary)
         lines += _profit_protection_v2_lines(summary)
     lines += _pending_broker_confirmation_lines(summary)
@@ -2239,6 +2249,13 @@ def _build_report(summary):
     lines += _gates_lines(high)
     lines += _watch_lines(summary)
     lines += _intraday_diagnostic_lines(summary, before_scan_signal_id=before_scan_signal_id, high=high, buy_now_tickers=buy_now_tickers)
+    if summary.get("_quiver_fixture") is not None:
+        raw, context = summary["_quiver_fixture"]
+        lines += _atlas_select_leaf(
+            "INTRADAY_HOLDINGS",
+            lambda: quiver_consumer_decision_block(raw, context).splitlines(),
+            reference="atlas_intraday.quiver_consumer_decision_block",
+        )
     return _human_cleanup_report(_naturalize_report("\n".join(lines)))
 
 
@@ -2801,6 +2818,10 @@ def _run_intraday_locked(now, force=False, dry_run=False):
         except Exception as e:
             print(f"[intraday] forced dry-run temp DB cleanup warning: {e}")
 
+
+
+from atlas_holding_state_consumer_projection import select_leaf as _atlas_select_leaf
+from atlas_holding_state_feature_gate import mode as _atlas_mode
 
 if __name__ == "__main__":
     run_intraday()

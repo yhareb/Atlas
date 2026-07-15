@@ -136,7 +136,7 @@ def render_open_positions(open_rows: Iterable[dict] | None) -> list[str]:
     return lines
 
 
-def render_pending_broker_confirmation(pending_rows: Iterable[dict] | None) -> list[str]:
+def _legacy_render_pending_broker_confirmation(pending_rows: Iterable[dict] | None) -> list[str]:
     rows = [dict(r or {}) for r in (pending_rows or [])]
     lines = ["", f"━━━ ⏳ SELL TRIGGERED / BROKER CONFIRMATION PENDING ({len(rows)}) ━━━"]
     if not rows:
@@ -186,7 +186,7 @@ def render_cash_pending(pending_rows: Iterable[dict] | None) -> list[str]:
     return lines
 
 
-def render_portfolio_visibility_block(open_rows=None, pending_rows=None, include_cash_pending=True) -> list[str]:
+def _legacy_render_portfolio_visibility_block(open_rows=None, pending_rows=None, include_cash_pending=True) -> list[str]:
     lines = ["", "━━━ 🧾 PORTFOLIO VISIBILITY / SOURCE AUTHORITY ━━━"]
     lines += render_open_positions(open_rows)
     lines += render_pending_broker_confirmation(pending_rows)
@@ -374,3 +374,15 @@ def valuation_excluded_tickers(rows: Iterable[dict] | None) -> list[str]:
         if pa and not pa.get("is_valuation_valid"):
             out.append(ticker)
     return sorted(set(out))
+
+from atlas_holding_state_consumer_projection import select_leaf as _atlas_select_leaf
+def render_pending_broker_confirmation(pending_rows):
+    return _atlas_select_leaf("BROKER_PENDING_VISIBILITY",
+        lambda:_legacy_render_pending_broker_confirmation(pending_rows),
+        reference="atlas_report_authority.render_pending_broker_confirmation")
+
+def render_portfolio_visibility_block(open_rows=None, pending_rows=None, include_cash_pending=True):
+    return _atlas_select_leaf("BROKER_PENDING_VISIBILITY",
+        lambda:_legacy_render_portfolio_visibility_block(open_rows,pending_rows,include_cash_pending),
+        reference="atlas_report_authority.render_portfolio_visibility_block")
+

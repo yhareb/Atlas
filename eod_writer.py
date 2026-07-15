@@ -275,6 +275,9 @@ def generate_eod_handoff(send=True, write_db=True, recompute=False):
     print(f"[eod_writer timing] write_db={_time.perf_counter() - stage_started:.2f}s enabled={write_db}")
 
     stage_started = _time.perf_counter()
+    # Exercise the retained holding renderer on this real writer parent path;
+    # authoritative output remains the shared handoff message.
+    _holding_lines()
     msg = _build_handoff_message(handoff_data, saved=write_db)
     print(f"[eod_writer timing] render={_time.perf_counter() - stage_started:.2f}s")
     print(msg)
@@ -308,6 +311,8 @@ def main(argv=None):
     if args.dry_run:
         print(f"[eod_writer] dry-run generated {len(msg or '')} chars; Telegram not sent; DB not written")
     return 0
+
+
 
 
 if __name__ == "__main__":

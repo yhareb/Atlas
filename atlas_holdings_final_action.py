@@ -204,7 +204,7 @@ def build_merged_packet(daily_packet: Mapping[str, Any] | None, *, profit_protec
         positions.append(merge_position(pos, daily_valid=ok, daily_freshness=freshness, profit_protection=(profit_protection_by_ticker or {}).get(ticker), stop_status=(stop_status_by_ticker or {}).get(ticker), broker_status=(broker_status_by_ticker or {}).get(ticker)))
     packet = {
         "packet_version": PACKET_VERSION,
-        "created_at": _utcnow(),
+        "created_at": ((now or dt.datetime.utcnow()).replace(microsecond=0).isoformat() + ("Z" if (now or dt.datetime.utcnow()).tzinfo is None else "")),
         "daily_packet_path": DEFAULT_HOLDINGS_PACKET,
         "daily_packet_freshness": freshness,
         "daily_packet_digest": (daily_packet or {}).get("packet_digest") or (daily_packet or {}).get("input_digest"),
@@ -282,3 +282,5 @@ __all__ = [
     "build_merged_packet", "load_or_build_merged_packet", "render_merged_action_block", "render_ticker_answer",
     "strongest_action", "validate_daily_packet",
 ]
+
+

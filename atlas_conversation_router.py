@@ -371,7 +371,10 @@ class ConversationRouter:
         fields=requested_fields(prompt)
         fresh_run=False; source=""
         if route == HOLDINGS_PACKET_REQUIRED:
-            ans, struct, freshness = render_holdings(ticker, holdings_packet, fields, now=now, policy=self.policy)
+            ans, struct, freshness = _atlas_select_leaf("CONVERSATION_HOLDINGS",
+                lambda:render_holdings(ticker, holdings_packet, fields, now=now, policy=self.policy),
+                reference="atlas_conversation_router.RouteResult.holding_leaf",
+                projector=lambda p:("\n".join(p.lines),p.structured,str((p.structured.get('receipt') or {}).get('usability') or 'DATA_INCOMPLETE')))
             return RouteResult(route,ticker,"holdings packet",freeze_mapping(holdings_packet or {}),freeze_mapping(struct),ans,freshness,reasons,False,time.perf_counter()-started)
         if route == PERME_PACKET_REQUIRED:
             ans, struct, freshness = render_perme(ticker, perme_packet, now=now)
@@ -389,7 +392,11 @@ class ConversationRouter:
             else:
                 source="fresh immutable TFE/signal packet"
             if route == QUIVER_PACKET_REQUIRED:
-                ans, struct, freshness = render_quiver(ticker, snapshot, quiver_packet)
+                ans, struct, freshness = _atlas_select_leaf(
+                    "CONVERSATION_HOLDINGS",
+                    lambda:render_quiver(ticker, snapshot, quiver_packet),
+                    reference="atlas_conversation_router.render_quiver",
+                    projector=lambda p:("\n".join(p.lines),p.structured,str((p.structured.get('receipt') or {}).get('usability') or 'DATA_INCOMPLETE')))
                 return RouteResult(route,ticker,"Quiver packet + TFE packet",snapshot,freeze_mapping(struct),ans,freshness,reasons,fresh_run,time.perf_counter()-started)
             ans, struct = render_tfe(snapshot, fields, fda_context=fda_context)
             return RouteResult(route,ticker,source,snapshot,freeze_mapping(struct),ans,"FRESH",reasons,fresh_run,time.perf_counter()-started)
@@ -397,6 +404,10 @@ class ConversationRouter:
 
 
 def holdings_reunderwrite_conversation_answer(ticker: str, packet: Mapping[str, Any] | None, *, now: datetime | None = None, ttl_seconds: int = 36*3600, expected_session: str | None = None) -> dict[str, Any]:
+    if _atlas_mode() == 'canonical':
+        projection = _atlas_select_leaf("CONVERSATION_HOLDINGS", lambda:None,
+            reference="atlas_conversation_router.dict_holding_leaf", projector=lambda p:p)
+        return dict(projection.structured)
     t=str(ticker or "").upper()
     merged = packet if (packet or {}).get("packet_version") == "holdings_merged_action.v1" else build_merged_packet(packet, now=now, ttl_seconds=ttl_seconds, expected_session=expected_session)
     _text, struct, freshness = render_ticker_answer(t, merged)
@@ -417,6 +428,10 @@ def main() -> int:
     res=router.route(args.question,args.ticker,envelope=env)
     print(res.rendered_answer)
     return 0
+
+
+from atlas_holding_state_consumer_projection import select_leaf as _atlas_select_leaf
+from atlas_holding_state_feature_gate import mode as _atlas_mode
 
 if __name__ == "__main__":
     raise SystemExit(main())

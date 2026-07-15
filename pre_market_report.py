@@ -39,8 +39,8 @@ if os.path.exists(_env_path):
 
 MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY")
 BENZINGA_API_KEY = os.environ.get("BENZINGA_API_KEY")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+TELEGRAM_BOT_TOKEN = "STAGING_DISABLED"
+TELEGRAM_CHAT_ID = "STAGING_DISABLED"
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 MASSIVE_BASE = "https://api.massive.com"
 INDEX_ETF_BLOCKLIST = {"SPY", "QQQ", "DIA"}
@@ -932,7 +932,7 @@ def _premarket_stop_overlay(pa, stop):
     return None, "ABOVE STOP"
 
 
-def _open_position_lines(macro_lines):
+def _legacy_open_position_lines(macro_lines):
     rows = atlas_db.get_open_positions()
     merged_by_ticker = {}
     if _load_or_build_merged_holdings_packet and _merged_packet_by_ticker:
@@ -970,6 +970,11 @@ def _open_position_lines(macro_lines):
         })
     pending = atlas_db.get_pending_broker_confirmation_trades()
     return render_portfolio_visibility_block(positions, pending)
+
+def _open_position_lines(macro_lines):
+    return _atlas_select_leaf("PRE_MARKET_HOLDINGS",
+        lambda:_legacy_open_position_lines(macro_lines),
+        reference="pre_market_report._open_position_lines")
 
 def _overnight_headlines(limit=5):
     return [re.sub(r"^\s*•\s*", "", str(x)).strip() for x in get_benzinga_headlines()[:limit] if str(x).strip()]
@@ -1468,7 +1473,7 @@ def _write_premarket_run_marker(market_date, sent=True):
         pass
 
 
-def generate_pre_market_report(send=True):
+def generate_pre_market_report(send=True, quiver_fixture=None):
     now_et = datetime.now(ZoneInfo("America/New_York"))
     today = _current_premarket_day(now_et)
     if today is None:
@@ -1477,6 +1482,14 @@ def generate_pre_market_report(send=True):
     message = generate_wavef_pre_market_brief(send=False, market_day=today)
     if not message:
         return None
+    if quiver_fixture is not None:
+        raw, context = quiver_fixture
+        message += "\n" + _atlas_select_leaf(
+            "PRE_MARKET_HOLDINGS",
+            lambda: quiver_consumer_decision_block(raw, context),
+            reference="pre_market_report.quiver_consumer_decision_block",
+            projector=lambda projection: "\n".join(projection.lines),
+        )
     # `generate_wavef_pre_market_brief()` already computes and renders early movers.
     # Do not run that scan a second time here; it was the dominant timeout source.
     if send:
@@ -1595,6 +1608,9 @@ def main(argv=None):
     finally:
         _release_premarket_lock()
 
+
+
+from atlas_holding_state_consumer_projection import select_leaf as _atlas_select_leaf
 
 if __name__ == "__main__":
     raise SystemExit(main())
