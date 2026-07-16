@@ -873,7 +873,7 @@ def _days_open(entry_at):
     return (datetime.now(timezone.utc) - dt).days
 
 
-def evaluate_exit(lot, dry_run=True, regime=None, macro_context_v1=None):
+def evaluate_exit(lot, dry_run=True, regime=None):
     """Decide whether an open lot should be closed today.
 
     Uses the persisted decision stop as the hard stop. Trailing/regime rules may
@@ -946,7 +946,7 @@ def evaluate_exit(lot, dry_run=True, regime=None, macro_context_v1=None):
         trail_note = f"regime risk-OFF -> stop tightened to breakeven ({regime_detail})"
 
     # ── Macro-stress full re-analysis ─────────────────────────────────────────
-    perme_ctx = macro_context_v1 if macro_context_v1 is not None else _load_perme_context()
+    perme_ctx = _load_perme_context()
     perme_sentiment = str((perme_ctx or {}).get("sentiment") or "NEUTRAL").upper()
     perme_ticker_notes = [str(t).upper() for t in ((perme_ctx or {}).get("ticker_notes") or [])]
     perme_suppressed_sectors = [str(s).upper() for s in ((perme_ctx or {}).get("suppressed_sectors") or [])]
@@ -1132,12 +1132,12 @@ def _compute_rvol(aggs, lookback=20):
     return round(current_vol / avg_vol, 2) if avg_vol > 0 else None
 
 
-def run_exits(dry_run=True, macro_context_v1=None):
+def run_exits(dry_run=True):
     """Evaluate every open lot for an exit. Returns list of decisions."""
     results = []
     regime = check_regime()
     for lot in _open_positions():
-        results.append(evaluate_exit(lot, dry_run=dry_run, regime=regime, macro_context_v1=macro_context_v1))
+        results.append(evaluate_exit(lot, dry_run=dry_run, regime=regime))
     return results
 
 

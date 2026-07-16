@@ -238,10 +238,8 @@ def completeness(entry, metrics, ctx, dims):
     ext=sum(1 for k in ['perme_regime','quiver_posture','catalyst_state'] if ctx.get(k))
     return round((have+dim_have+entry_ok+ext)/(len(fields)+len(dims)+2+3),3)
 
-def evaluate_holding(trade, bars=None, spy_bars=None, sector_bars=None, context=None, prior_action=None, as_of=None, macro_context_v1=None):
+def evaluate_holding(trade, bars=None, spy_bars=None, sector_bars=None, context=None, prior_action=None, as_of=None):
     context=context or {}
-    if macro_context_v1 is not None:
-        context=dict(context); context.update(macro_context_v1)
     conn=context.get('_conn')
     entry=load_entry_baseline(trade, conn)
     metrics=metrics_from_bars(trade, bars or [], spy_bars, sector_bars) if bars else fallback_metrics_from_trade(trade)

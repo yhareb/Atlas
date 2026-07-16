@@ -1,0 +1,476 @@
+{
+  "archives": {
+    "enforcement_candidate_source_only.tar.gz": "4de56dc51030de9e51d839bd90131a5c6d7c1c347aee848a2e4321bf6ab0604a",
+    "shadow_observer_source_only.tar.gz": "b1c419feb62fae413eed03e3f600b99ef70c0e22c8628fbed8f0311bc5381f7e"
+  },
+  "enforcement": "DISABLED",
+  "enforcement_bundle_role": "frozen_not_deployed",
+  "enforcement_files": [
+    {
+      "bytes": 7906,
+      "path": "src/atlas_account.py",
+      "sha256": "e4ce90eab5c987a03bb4082161a69208f060f8c7932d9c5d8a5b32d35a0fa043"
+    },
+    {
+      "bytes": 13444,
+      "path": "src/atlas_api_audit.py",
+      "sha256": "9f3047ffa30f055e00d59b5818e1730743302652d983da110812e2ca65b74242"
+    },
+    {
+      "bytes": 11313,
+      "path": "src/atlas_audit.py",
+      "sha256": "1747da159a966aae969b2d3b23541e2818438139bfb3b7a83dde6f5920744ccb"
+    },
+    {
+      "bytes": 11231,
+      "path": "src/atlas_audit_report.py",
+      "sha256": "a27475460464b2bd83bea404336b01bac93d4cec55a41b5e0616a5cf20fa976a"
+    },
+    {
+      "bytes": 3896,
+      "path": "src/atlas_backup.py",
+      "sha256": "2e68a54f97112f803938be7425381161f906bd1c9fd5faeee7db6a96e2146f79"
+    },
+    {
+      "bytes": 14046,
+      "path": "src/atlas_broker_ingest.py",
+      "sha256": "f3a9c42a529dc4ceae29d25e1ba063b3ac53e1620c121c5fff82a9c391535d56"
+    },
+    {
+      "bytes": 2654,
+      "path": "src/atlas_calendar_evidence_ingest.py",
+      "sha256": "8783d00964a5ce1db62126ec2a0541b72015e776e462f8a3814712bdfcab6c70"
+    },
+    {
+      "bytes": 9947,
+      "path": "src/atlas_calendar_overrides.py",
+      "sha256": "b916008eb38af1cb9d7a3da8f706f4b3fd6f501414a30b0c43bb2769390ca48f"
+    },
+    {
+      "bytes": 12590,
+      "path": "src/atlas_conversation_db_snapshot.py",
+      "sha256": "56e045c43deff87d118f72a2b9856312617a44f79de3cb85cbd567dae986ea02"
+    },
+    {
+      "bytes": 28042,
+      "path": "src/atlas_conversation_router.py",
+      "sha256": "3fe4630545ecf765e090270c21f6f19f90246dbfe20878a5851c3498622d463a"
+    },
+    {
+      "bytes": 7365,
+      "path": "src/atlas_conversation_schemas.py",
+      "sha256": "1c6315b029fbbe15a52cb1b115e8142f80ca2f1e947fe738101a16a56c38328c"
+    },
+    {
+      "bytes": 21921,
+      "path": "src/atlas_corporate_actions.py",
+      "sha256": "22e9c07d8e82c9581a16728faf1144babe13b129ddbc3b13b6909c1b57a8e2f8"
+    },
+    {
+      "bytes": 5609,
+      "path": "src/atlas_corporate_actions_ingest.py",
+      "sha256": "649b34b0a06ef1197206413a67f783743bf0b37bd2f942ec6e56fbcafdeaa50e"
+    },
+    {
+      "bytes": 1217,
+      "path": "src/atlas_corporate_actions_reports.py",
+      "sha256": "5fe83d95007312499ed881b60c53424121dbd0d96faae24ece397b52d52a53d2"
+    },
+    {
+      "bytes": 3567,
+      "path": "src/atlas_daily.py",
+      "sha256": "e2a41a6fe338da6d75650fba99f04f30eaffcc139772e26b25c4e042547d9b41"
+    },
+    {
+      "bytes": 76759,
+      "path": "src/atlas_db.py",
+      "sha256": "8ae022d2d0c0b8cbfe0320661cc48529b00aa33ab665a583f2d36bf5dbedf3f1"
+    },
+    {
+      "bytes": 12367,
+      "path": "src/atlas_docling_bridge.py",
+      "sha256": "2d72911d2d433360b0c7a5c57141dd2b2fd15efd9685c7f9fe8b3d789b6848e2"
+    },
+    {
+      "bytes": 85034,
+      "path": "src/atlas_engine.py",
+      "sha256": "6dfaf8c845b1f92fd34c5cf0832769d5bfde11ce353b772289880461891013d0"
+    },
+    {
+      "bytes": 15873,
+      "path": "src/atlas_eod_positions.py",
+      "sha256": "4686818edd7a83d4619f091525d7b34191409c6f319f6e6d421de89ae5d928d2"
+    },
+    {
+      "bytes": 15365,
+      "path": "src/atlas_fda_calendar.py",
+      "sha256": "1621c6fd0a99a78e1bb295c8dc41b4ce74d24bd21a96c114e1fe4c6c89cffb50"
+    },
+    {
+      "bytes": 24204,
+      "path": "src/atlas_holding_state_adapters.py",
+      "sha256": "fc800d8ba43782569cbb2ea59c87cc04849c0ef9d9d3b42fed203ced8b046f68"
+    },
+    {
+      "bytes": 3084,
+      "path": "src/atlas_holding_state_adapters_schema.py",
+      "sha256": "6b3e85051a7992c843ac5d39766b35bcb8d7ada4fdb269ea475e294f51414d27"
+    },
+    {
+      "bytes": 35801,
+      "path": "src/atlas_holding_state_authority.py",
+      "sha256": "6eaf22c16a477a1c0c6dffb53e7fa5b6d810676cc80bc48d55779725efb2c01b"
+    },
+    {
+      "bytes": 18352,
+      "path": "src/atlas_holding_state_consumer_projection.py",
+      "sha256": "e764762b2b95fa5264c6b2c389a99529c3d2bd5a3129e0c74d0ddddf2b403414"
+    },
+    {
+      "bytes": 3110,
+      "path": "src/atlas_holding_state_feature_gate.py",
+      "sha256": "c4ad6af6666383ca6bfbc3356d6678442244844775b320044ab0735d5d6df687"
+    },
+    {
+      "bytes": 29359,
+      "path": "src/atlas_holding_state_packet_builder.py",
+      "sha256": "f7c0b74e6db5d471c79b6e5bea6e4193462c001f3ca5983c4aeac8d3cefa4eae"
+    },
+    {
+      "bytes": 10444,
+      "path": "src/atlas_holding_state_schema.py",
+      "sha256": "e519edc916c961ec830b0cb344175116e1a88e3691dd88708ebddc525f3b0069"
+    },
+    {
+      "bytes": 6070,
+      "path": "src/atlas_holding_state_semantic_oracle.py",
+      "sha256": "579cb9ed3c50a878115bee9a1cf71aeb7816c23be593e43b5c1e44269d950c12"
+    },
+    {
+      "bytes": 7735,
+      "path": "src/atlas_holding_state_shadow_consumers.py",
+      "sha256": "5beeac93b55d7f4edaec3dcb5b7c087f5c30ea8ced91db3f1626ebdf38aa1ede"
+    },
+    {
+      "bytes": 24001,
+      "path": "src/atlas_holding_state_truth_maintenance.py",
+      "sha256": "53f9678f23772b6fe9a6642734700f65634c4b2dd7d0c75a3ea88f520c4249d2"
+    },
+    {
+      "bytes": 10678,
+      "path": "src/atlas_holdings_entry_time_reconcile.py",
+      "sha256": "6c71604bcab7a730b5ee5482b6cade1a124ecc30894294fb47ae031bccabd5e4"
+    },
+    {
+      "bytes": 14322,
+      "path": "src/atlas_holdings_final_action.py",
+      "sha256": "b1e876905b6bc131fe9c3db2408fb105d12e00f9c5210f430266a9501a3f30d9"
+    },
+    {
+      "bytes": 27877,
+      "path": "src/atlas_holdings_reunderwrite.py",
+      "sha256": "c196c3e6ba7c6635469744fc2a49a35c62a50318ebe5700b6d8055117959885c"
+    },
+    {
+      "bytes": 7743,
+      "path": "src/atlas_holdings_reunderwrite_acquire.py",
+      "sha256": "447be24368ecf65ff874dfb6fdd5aecd8bb560ab88aff9c4fb6d36465dd6c57e"
+    },
+    {
+      "bytes": 18947,
+      "path": "src/atlas_holdings_reunderwrite_runner.py",
+      "sha256": "2b8f6bd9e5f6481deeb2f791a11a290fa009a882c07c1371914fc29480d2dc67"
+    },
+    {
+      "bytes": 12077,
+      "path": "src/atlas_ingest.py",
+      "sha256": "7670d373c0b90cc31a1a71f5ab54dcd633472b08eac1ae94ff2d647dcba226b2"
+    },
+    {
+      "bytes": 123038,
+      "path": "src/atlas_intraday.py",
+      "sha256": "b46c7fe3b7fda74337ed7f4c024b9c345d6a233f369412d4d6e58e0ecd08a0a1"
+    },
+    {
+      "bytes": 16416,
+      "path": "src/atlas_intraday_advisory.py",
+      "sha256": "27a9230513daf4bca5c98a75bb97b1093bef34719cebb67192d39c78d2695ad6"
+    },
+    {
+      "bytes": 43677,
+      "path": "src/atlas_intraday_holdings_freshness.py",
+      "sha256": "099f516a26e3cd631adacbb129160d4de28c85c6313d28e13d04518cd1fc789b"
+    },
+    {
+      "bytes": 10638,
+      "path": "src/atlas_macro_context_v1.py",
+      "sha256": "8a412af94a730dab14b547ded31c37de342845a91939113e939551b71b5ab4b9"
+    },
+    {
+      "bytes": 26267,
+      "path": "src/atlas_macro_postmarket.py",
+      "sha256": "0ec35e26f11a73d8d6ef0daf7cd1b8d8d044bb53ebd89cc092e4b7aa781bbdba"
+    },
+    {
+      "bytes": 42201,
+      "path": "src/atlas_macro_premarket.py",
+      "sha256": "c8ab2c023c3ca2317148c0b586fe6e97a88b4e702944ef7a87c93aab172c1e9b"
+    },
+    {
+      "bytes": 63962,
+      "path": "src/atlas_manage.py",
+      "sha256": "26adaf9f3e5f4ea647579b313dbf6fe617c9961c2ad3759d64e938220b98ab9a"
+    },
+    {
+      "bytes": 11358,
+      "path": "src/atlas_notify.py",
+      "sha256": "74e6e434f91d8cc24f30c2ae2f483bcc093d81174143976c40e5250a6fa27773"
+    },
+    {
+      "bytes": 8599,
+      "path": "src/atlas_nyse_calendar.py",
+      "sha256": "95ae9025464b7a33262ab8002cd151988b8e566dc901706e4b98a7f8cc4d8217"
+    },
+    {
+      "bytes": 8098,
+      "path": "src/atlas_overnight_gap.py",
+      "sha256": "71583af68521a91e71d626a2b0a2bc7998323ec2f652528df2c85ce1b5deea33"
+    },
+    {
+      "bytes": 99919,
+      "path": "src/atlas_perme.py",
+      "sha256": "348408bf64738ef6f96bbbbccbe9f37263f7406afe919c45921230c82628e2cb"
+    },
+    {
+      "bytes": 7616,
+      "path": "src/atlas_perme_engine_packet.py",
+      "sha256": "22e21300fe63bafad66409518dc8b4fb35fac6d2833fda03690caeae3172d751"
+    },
+    {
+      "bytes": 94393,
+      "path": "src/atlas_portfolio.py",
+      "sha256": "6d21571a5faf7b6f5e7fe31da2ca78fec4749b99884e8b2e53a6f8e3b0aa1347"
+    },
+    {
+      "bytes": 10324,
+      "path": "src/atlas_position_evidence_acquire.py",
+      "sha256": "2be80e09d003ae951768ad36e2ef71db323b35d592af52d889cbb882d64a77f1"
+    },
+    {
+      "bytes": 13499,
+      "path": "src/atlas_position_evidence_bake.py",
+      "sha256": "abd000eb298fe97c25263b2c417292500d6879adc790606f1547702439cd4b1f"
+    },
+    {
+      "bytes": 2390,
+      "path": "src/atlas_position_evidence_health.py",
+      "sha256": "a3764540e147a7b61e0e02e956556dc6da4857c8cd5a0859565bdf086864f465"
+    },
+    {
+      "bytes": 2563,
+      "path": "src/atlas_position_evidence_launchd.py",
+      "sha256": "b1d74df46ebb7790544b03f6ed2bd81b769ed107c5d0aac203581b4217f70547"
+    },
+    {
+      "bytes": 5403,
+      "path": "src/atlas_position_evidence_orchestrator.py",
+      "sha256": "7a94742eca0c0e8a78f0feefae51964890d8cc6e3adc16337d19d6d99677f4ae"
+    },
+    {
+      "bytes": 16531,
+      "path": "src/atlas_premarket_gaps.py",
+      "sha256": "03af5cdfe2a0c8fb10734a4ffb464c0f41cd8af92988a83e9c9f1ddf7bf31e12"
+    },
+    {
+      "bytes": 10382,
+      "path": "src/atlas_preopen_check.py",
+      "sha256": "5674e8183a280f08d763b3381850da22ecb77dc5d0e40d7f27c388853572ac85"
+    },
+    {
+      "bytes": 4590,
+      "path": "src/atlas_profile_conversation_entry.py",
+      "sha256": "3df23105113648e5eea3274c14bead3cd854489b7995f0b36646d89fb1ff1cb0"
+    },
+    {
+      "bytes": 5902,
+      "path": "src/atlas_profit_protection_advisory.py",
+      "sha256": "9047413e43e2ce294e4d1b7f9c974df8fe42a20c44d281e1596be197066c967d"
+    },
+    {
+      "bytes": 22248,
+      "path": "src/atlas_profit_protection_apply.py",
+      "sha256": "6c3770cb7054a7923742cded1cb6c6827952ac5ebd3e0e42586b561e24096527"
+    },
+    {
+      "bytes": 24265,
+      "path": "src/atlas_profit_protection_v2.py",
+      "sha256": "14deec71baf37be919ead6123da5696208f3756ad46299cb5a260e1573dd043e"
+    },
+    {
+      "bytes": 8143,
+      "path": "src/atlas_provider_guard.py",
+      "sha256": "105d47cb32ecc12eb88d1236fbb358c7a4d80c07e46083bff1de8465162740a2"
+    },
+    {
+      "bytes": 10159,
+      "path": "src/atlas_provider_quotes.py",
+      "sha256": "2a54f4d5c0cf1bbdabb61c299bc225a7a6046f4ba632982bfed0924558551173"
+    },
+    {
+      "bytes": 7182,
+      "path": "src/atlas_quiver_bridge.py",
+      "sha256": "acd167960b2b2b55058b989b80b6fd959e4d3e8be875ddcdc525982ea9cca3b6"
+    },
+    {
+      "bytes": 12404,
+      "path": "src/atlas_quiver_decision_envelope.py",
+      "sha256": "69d71860f69d5274068197d87d955e5c351b70f2d4705d0250eff3321a05eb86"
+    },
+    {
+      "bytes": 12925,
+      "path": "src/atlas_quiver_dual_output_runner.py",
+      "sha256": "73f49010a6c981276d8c8dd30cf4e23cb9cd509c86f121f65cfccd93e7a612ff"
+    },
+    {
+      "bytes": 12294,
+      "path": "src/atlas_quiver_engine_packet.py",
+      "sha256": "e896bbe890e4727e2ab10c0e7507f7987f93e83dc779e39d12572ecba508ffa8"
+    },
+    {
+      "bytes": 6591,
+      "path": "src/atlas_quiver_pulse.py",
+      "sha256": "bb0ceaf036dcb7cbbec59e52a4d140ac5d0c698792b09a07c4d09b3b79d5e80b"
+    },
+    {
+      "bytes": 33607,
+      "path": "src/atlas_quiver_sidecar.py",
+      "sha256": "b249140f1a078bb28cf5abc937f2bf8b8608b83edfed39a7cbe54d2c7094aaf4"
+    },
+    {
+      "bytes": 546,
+      "path": "src/atlas_quiver_sidecar_health.py",
+      "sha256": "5d0b1afb78c779057292cd3f2fe9dd18310e301181ec01d6988cdb59b575c93e"
+    },
+    {
+      "bytes": 3646,
+      "path": "src/atlas_rag.py",
+      "sha256": "69da474ccd4b020ac89779293788764cc8ff44b2bbd69f6a0e432d558356d70a"
+    },
+    {
+      "bytes": 5256,
+      "path": "src/atlas_rag_flags.py",
+      "sha256": "45df7ef9888ca68098b7dd71a7953d6a7189e820f69a42e883a851d88d43ed2f"
+    },
+    {
+      "bytes": 7419,
+      "path": "src/atlas_rag_indexer.py",
+      "sha256": "e0c32fcadd4a2521a8de60ebad3319da27e4be5e72068c9ccf1d09348fdaac53"
+    },
+    {
+      "bytes": 15342,
+      "path": "src/atlas_report_authority.py",
+      "sha256": "801bd885f79b2e320bc10e7c48fe4c8ff3a2e5e7d9c7860349fc30db59b2b3bf"
+    },
+    {
+      "bytes": 17014,
+      "path": "src/atlas_report_blocks.py",
+      "sha256": "c19c84ab13f823838d7c4e1993685675a05a7d13db8a65ae04df9627c7c3564e"
+    },
+    {
+      "bytes": 11757,
+      "path": "src/atlas_report_handoff.py",
+      "sha256": "14126c1cfdc77a32ec239f0979e0466d3601894e067ede45bbcfd8a57a33e689"
+    },
+    {
+      "bytes": 1453,
+      "path": "src/atlas_schemas.py",
+      "sha256": "1be6a5b62609fbb811439c2114a7422d88c3f5ea838705f9c447c89f55a6f9f2"
+    },
+    {
+      "bytes": 11562,
+      "path": "src/atlas_single_ticker_tfe_runner.py",
+      "sha256": "cfd4fe467942c3485da22b2378a24e61f57ddec2e064521ab38e2f9a903ff254"
+    },
+    {
+      "bytes": 9664,
+      "path": "src/atlas_stream.py",
+      "sha256": "fe3fbb28b21f1864115b435487c5fee01574f08e05abc1547f9b39ebaee73212"
+    },
+    {
+      "bytes": 8822,
+      "path": "src/atlas_symbol_meta.py",
+      "sha256": "a17a1c85b0208bb683bd85fe1eae90eeb0cd5450aa9e66f703eb9b29971fc763"
+    },
+    {
+      "bytes": 2139,
+      "path": "src/atlas_time.py",
+      "sha256": "e47c7b08704d651e5e1a91525c07402baa9d5e4204c6f6ea99b67ff04837a803"
+    },
+    {
+      "bytes": 12030,
+      "path": "src/eod_writer.py",
+      "sha256": "57b71f2ae713bff88bfd1dd3da106b07c8236677a76010be464fa1df70e531de"
+    },
+    {
+      "bytes": 26406,
+      "path": "src/market_scout.py",
+      "sha256": "a7242a9a128674eead7adeef036d5b6d4461925a17d2d012084f769a78fb75d8"
+    },
+    {
+      "bytes": 6391,
+      "path": "src/morning_briefing.py",
+      "sha256": "f2be1431df7a5f6b04959248da19b4ecfcd442f56a6532beaf8b7b383a9e5f71"
+    },
+    {
+      "bytes": 29313,
+      "path": "src/post_market_report.py",
+      "sha256": "b78414b468fa331c5380372612564c7e928bb7101a8725e6ae377d7ee048e1e6"
+    },
+    {
+      "bytes": 68153,
+      "path": "src/pre_market_report.py",
+      "sha256": "bfe23d29deadd13fd38bbf2f18d83da1ba46687dbb1e77ca498f31e588b15038"
+    },
+    {
+      "bytes": 3935,
+      "path": "tests/run_full_manage_cycles.py",
+      "sha256": "002db127b10b2847c5e12e2dfd888c77ba3ec42e1e10bf3f17d9fdfd570cd434"
+    }
+  ],
+  "observer_files": [
+    {
+      "bytes": 1199,
+      "path": "README.md",
+      "sha256": "f51e59317a84276d3efdb84c0330676e8f9b64eebf19ee09f221ea45fdc10941"
+    },
+    {
+      "bytes": 686,
+      "path": "ROLLBACK.md",
+      "sha256": "63d3e3e29da9d099a5bb4adcae8131795d344eccc3dc8be706ba9fecd8f107e5"
+    },
+    {
+      "bytes": 607,
+      "path": "bin/run_shadow_observer.sh",
+      "sha256": "e0a9afc2cd6b8a9fbdbee5a835f4f3adac9e6ed49cb5aaf40786cc973460eddd"
+    },
+    {
+      "bytes": 1622,
+      "path": "launchd/com.atlas.corporate-actions-shadow.plist",
+      "sha256": "85e18cc16642c848fdc60785db389919d23184b2ee578acf6cb55a60675a375d"
+    },
+    {
+      "bytes": 5013,
+      "path": "src/corporate_actions_shadow_acceptance.py",
+      "sha256": "e42ef16a2c3182da71ae6dc7496fc51f4118a52342da859da8e35ac64ec2fbf2"
+    },
+    {
+      "bytes": 14954,
+      "path": "src/corporate_actions_shadow_observer.py",
+      "sha256": "b49d8284182f2ee70a7a44fe979147c34877684f18a7799c185f5500126524b1"
+    }
+  ],
+  "schema": "atlas_ca_shadow_release_v1",
+  "source_only": true,
+  "status": "SHADOW_RELEASE_CANDIDATE",
+  "unit_count": 1
+}

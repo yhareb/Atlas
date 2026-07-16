@@ -63,15 +63,10 @@ def _get_profit_protection_v2_renderer():
             _render_profit_protection_v2_block = False
     return _render_profit_protection_v2_block if callable(_render_profit_protection_v2_block) else None
 try:
-    from atlas_intraday_holdings_freshness import (
-        build_packet as _build_holdings_freshness_packet,
-        render_packet as _render_holdings_freshness_packet,
-        proactive_action_rows as _reconciled_proactive_action_rows,
-    )
+    from atlas_intraday_holdings_freshness import build_packet as _build_holdings_freshness_packet, render_packet as _render_holdings_freshness_packet
 except Exception:
     _build_holdings_freshness_packet = None
     _render_holdings_freshness_packet = None
-    _reconciled_proactive_action_rows = None
 try:
     from atlas_holdings_final_action import load_or_build_merged_packet as _load_or_build_merged_holdings_packet, render_merged_action_block as _render_merged_holdings_action_block
 except Exception:
@@ -2753,25 +2748,63 @@ def _run_intraday_locked(now, force=False, dry_run=False):
                 message_thread_id=None,
             )
             print(f"[intraday] telegram report success={ok}")
-            # Single Action Authority: proactive execution alerts consume the exact
-            # reconciled holdings objects already rendered above. Raw run_exits rows
-            # remain evidence inputs and cannot independently create owner actions.
-            packet = summary.get("intraday_holdings_freshness_packet") or {}
-            alerts = _reconciled_proactive_action_rows(packet) if _reconciled_proactive_action_rows else []
+            # Proactive DM for urgent position alerts
+            alerts = [r for r in (summary.get("exit_results") or []) if str(r.get("action") or "").upper() in ("ALERT", "SELL")]
             if alerts:
-                dm_lines = ["🚨 POSITION ALERT — validated current-cycle action\n"]
-                for alert in alerts:
-                    dm_lines.append(f"{alert['action']}  {alert['ticker']}: {alert.get('why') or ''}")
-                dm_msg = "\n".join(dm_lines)
+                import time as _time
+                _now = _time.time()
                 try:
-                    owner_chat_id = _owner_chat_id()
-                    if owner_chat_id:
-                        ok_dm = send_telegram(dm_msg, chat_id=owner_chat_id)
-                        print(f"[intraday] proactive DM sent success={ok_dm}")
-                except Exception as _e:
-                    print(f"[intraday] proactive DM error: {_e}")
-            elif any(str(r.get("action") or "").upper() == "SELL" for r in (summary.get("exit_results") or [])):
-                print("[intraday] raw SELL evidence suppressed: reconciled authority emitted no execution instruction")
+                    open_tickers = {str(p.get("ticker") or "").upper() for p in (atlas_db.get_open_positions() or [])}
+                except Exception:
+                    open_tickers = None  # unknown — do not incorrectly exclude if lookup fails
+                dm_parts = []
+                for a in alerts:
+                    ticker = a.get("ticker", "?")
+                    action_str = str(a.get("action", "?")).upper()
+                    # Re-check ALERT rows are still OPEN before proactive DM send (closes race
+                    # where a later stop-hit SELL in the same cycle already closed the ticker).
+                    # SELL rows are exempt: run_exits() closes the position as part of producing
+                    # this exact SELL row, so it is expected to be absent from get_open_positions().
+                    if action_str != "SELL" and open_tickers is not None and str(ticker).upper() not in open_tickers:
+                        print(f"[intraday] proactive DM skip {ticker}: no longer OPEN")
+                        continue
+                    # Generic macro-caution ALERT rows are MACRO WATCH — report-only, no DM.
+                    severity = classify_alert_severity(a, summary)
+                    if severity == "MACRO_WATCH":
+                        print(f"[intraday] proactive DM skip {ticker}: classified MACRO_WATCH (generic macro caution)")
+                        continue
+                    # SELL always fires immediately — no cooldown
+                    if action_str == "SELL":
+                        dm_parts.append(a)
+                        continue
+                    # ALERT: 60-minute cooldown, reset if price moves >0.5% closer to stop
+                    last = float(a.get("last") or 0)
+                    stop = float(a.get("stop") or 0)
+                    current_dist = (last - stop) / stop if stop else 1.0
+                    cd = _ALERT_COOLDOWN.get(ticker)
+                    if cd:
+                        mins_since = (_now - cd["ts"]) / 60
+                        dist_worsened = cd["dist"] - current_dist
+                        if mins_since < 60 and dist_worsened < 0.005:
+                            print(f"[intraday] ALERT cooldown active for {ticker} ({mins_since:.0f}m since last DM)")
+                            continue
+                    _ALERT_COOLDOWN[ticker] = {"ts": _now, "dist": current_dist}
+                    dm_parts.append(a)
+                if dm_parts:
+                    dm_lines = ["🚨 POSITION ALERT — immediate review required\n"]
+                    for a in dm_parts:
+                        ticker = a.get("ticker", "?")
+                        action_str = a.get("action", "?")
+                        reason = a.get("reason") or ""
+                        dm_lines.append(f"{action_str}  {ticker}: {reason[:200]}")
+                    dm_msg = "\n".join(dm_lines)
+                    try:
+                        owner_chat_id = _owner_chat_id()
+                        if owner_chat_id:
+                            ok_dm = send_telegram(dm_msg, chat_id=owner_chat_id)
+                            print(f"[intraday] proactive DM sent success={ok_dm}")
+                    except Exception as _e:
+                        print(f"[intraday] proactive DM error: {_e}")
         else:
             print("[intraday] dry-run: final telegram send suppressed")
             print("[intraday] telegram report success=True")

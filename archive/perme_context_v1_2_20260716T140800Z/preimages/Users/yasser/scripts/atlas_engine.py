@@ -1756,10 +1756,7 @@ def check_insider_buying(ticker):
     _write_json_cache("insider_buys", cache)
     return bool(result.get("hit")), result
 
-def analyze_ticker(ticker, regime=None, macro_context_v1=None):
-    # Exact existing regime input only; no scoring policy is introduced.
-    if macro_context_v1 is not None and macro_context_v1.get("perme_regime") == "RISK_OFF" and regime is None:
-        regime = (False, "macro context V1 RISK_OFF")
+def analyze_ticker(ticker, regime=None):
     aggs = get_massive_aggs(ticker)
     if not aggs:
         return {"error": f"Could not fetch price data for {ticker}"}
@@ -1968,12 +1965,4 @@ if __name__ == "__main__":
         print(json.dumps({"error": "Please provide a ticker symbol."}))
         sys.exit(1)
     ticker = sys.argv[1].upper()
-    _macro_gate = None
-    if os.environ.get("ATLAS_MACRO_CONTEXT_V1_GATE_JSON"):
-        try:
-            _candidate = json.loads(os.environ["ATLAS_MACRO_CONTEXT_V1_GATE_JSON"])
-            if isinstance(_candidate, dict) and set(_candidate) <= {"sentiment","perme_regime","cautious","upcoming_events","event_checked","event_risk","mapped_open_holdings"}:
-                _macro_gate = _candidate
-        except Exception:
-            _macro_gate = None
-    print(json.dumps(analyze_ticker(ticker, macro_context_v1=_macro_gate), indent=2))
+    print(json.dumps(analyze_ticker(ticker), indent=2))

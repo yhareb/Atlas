@@ -326,20 +326,7 @@ def render_tfe(packet: Mapping[str, Any], fields: set[str], *, quiver_context: M
 
 
 def render_holdings(ticker: str, holdings_packet: Mapping[str, Any] | None, fields: set[str], *, now: datetime | None, policy: RouterPolicy) -> tuple[str, dict[str, Any], str]:
-    packet_version = (holdings_packet or {}).get("packet_version")
-    if packet_version == "intraday_holdings_action_freshness.v1":
-        row = next((dict(p) for p in ((holdings_packet or {}).get("holdings") or []) if str((p or {}).get("ticker") or "").upper() == str(ticker or "").upper()), None)
-        if not row:
-            struct = {"ticker": str(ticker or "").upper(), "error": "NO_RECONCILED_INTRADAY_POSITION", "authority": "INTRADAY_SINGLE_ACTION_AUTHORITY"}
-            return "HOLDINGS DATA UNAVAILABLE — NO_RECONCILED_INTRADAY_POSITION", struct, "DATA_INCOMPLETE"
-        action = str(row.get("final_action") or "DATA INCOMPLETE")
-        if action == "DATA INCOMPLETE":
-            text = f"ATLAS HOLDINGS ANSWER — {row['ticker']}\nFINAL ACTION: DATA INCOMPLETE — NO TRADE INSTRUCTION\nWHY NOW: {row.get('why_now') or 'validation incomplete'}"
-        else:
-            text = f"ATLAS HOLDINGS ANSWER — {row['ticker']}\nFINAL ACTION: {action}\nWHY NOW: {row.get('why_now') or ''}"
-        struct = {**row, "authority": "INTRADAY_SINGLE_ACTION_AUTHORITY", "packet_digest": (holdings_packet or {}).get("input_digest")}
-        return text, struct, str((row.get("data_freshness") or {}).get("holdings_packet") or "UNKNOWN")
-    if packet_version == "holdings_merged_action.v1":
+    if (holdings_packet or {}).get("packet_version") == "holdings_merged_action.v1":
         return render_ticker_answer(ticker, holdings_packet)
     merged = build_merged_packet(holdings_packet, now=now, ttl_seconds=policy.holdings_ttl_seconds)
     return render_ticker_answer(ticker, merged)

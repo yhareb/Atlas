@@ -258,134 +258,20 @@ def _row_ticker(row: dict[str, Any]) -> str:
 
 
 def _exit_events_by_ticker(summary: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
-    """Retain raw exit rows as evidence only; never grant owner-facing authority here."""
     out: dict[str, dict[str, Any]] = {}
     for row in (summary or {}).get("exit_results") or []:
         if not isinstance(row, dict):
             continue
         ticker = _row_ticker(row)
-        if ticker and str(row.get("action") or "").upper() == "SELL":
+        if not ticker:
+            continue
+        action = str(row.get("action") or "").upper()
+        reason = str(row.get("reason") or "")
+        price = _num(row.get("last") or row.get("price") or row.get("current_price") or row.get("exit_price"))
+        stop = _num(row.get("stop") or row.get("stop_loss"))
+        if action == "SELL" and ("persisted stop hit" in reason.lower() or (price is not None and stop is not None and price <= stop)):
             out[ticker] = dict(row)
     return out
-
-
-def _execution_event_kind(event: dict[str, Any] | None) -> str | None:
-    reason = str((event or {}).get("reason") or "").lower()
-    explicit = str((event or {}).get("event_kind") or (event or {}).get("event_type") or "").upper()
-    if "STOP" in explicit or "stop hit" in reason or "stop breach" in reason:
-        return "STOP"
-    if "TARGET" in explicit or "target hit" in reason:
-        return "TARGET"
-    return None
-
-
-def validate_execution_event(ticker: str, pos: dict[str, Any], event: dict[str, Any] | None, *, report_ts: dt.datetime, db_path: str | None = None) -> dict[str, Any]:
-    """Validate one raw exit row as current-cycle evidence, never as authority by itself."""
-    ticker = str(ticker or "").upper()
-    event = dict(event or {})
-    reasons: list[str] = []
-    kind = _execution_event_kind(event)
-    event_id = event.get("event_id") or event.get("stop_event_id") or event.get("target_event_id") or event.get("journal_event_id")
-    event_ts = _parse_dt(event.get("event_timestamp") or event.get("occurred_at") or event.get("timestamp"))
-    price_ts = _parse_dt(event.get("price_timestamp") or event.get("quote_timestamp") or event.get("timestamp"))
-    price = _event_price(event)
-    source = str(event.get("price_source") or event.get("source") or "").upper()
-    role = str(event.get("price_role") or event.get("role") or "").upper()
-    event_trade = _event_trade_id(event)
-    pos_trade = _position_trade_id(pos)
-    event_lot = _event_lot_id(event)
-    pos_lot = _position_lot_id(pos, db_path)
-    stop = _num(event.get("stop") or event.get("stop_loss") or pos.get("stop_loss") or pos.get("stop"))
-    target = _num(event.get("target") or event.get("target_price") or pos.get("target_price") or pos.get("target"))
-    session = current_trading_session(report_ts)
-    if not event_id:
-        reasons.append("EVENT_ID_MISSING")
-    if kind not in {"STOP", "TARGET"}:
-        reasons.append("EVENT_KIND_INVALID")
-    if event_trade is None or pos_trade is None or event_trade != pos_trade:
-        reasons.append("TRADE_IDENTITY_INVALID")
-    if event_lot is None or pos_lot is None or event_lot != pos_lot:
-        reasons.append("LOT_IDENTITY_INVALID")
-    if str(pos.get("status") or "OPEN").upper() != "OPEN":
-        reasons.append("BROKER_LIFECYCLE_NOT_OPEN")
-    if price is None:
-        reasons.append("ACTIONABLE_PRICE_MISSING")
-    if not source or any(x in source for x in ("FALLBACK", "CACHE", "ENTRY", "INTRADAY_CYCLE")):
-        reasons.append("PRICE_SOURCE_NOT_INDEPENDENT")
-    expected_role = "STOP_EVALUATION" if kind == "STOP" else "TARGET_EVALUATION"
-    if role != expected_role:
-        reasons.append("PRICE_ROLE_INVALID")
-    if not event_ts:
-        reasons.append("EVENT_TIMESTAMP_INVALID")
-    elif event_ts.astimezone(ET).date().isoformat() != session:
-        reasons.append("EVENT_NOT_CURRENT_CYCLE")
-    if not price_ts:
-        reasons.append("PRICE_TIMESTAMP_INVALID")
-    elif price_ts.astimezone(ET).date().isoformat() != session:
-        reasons.append("PRICE_NOT_CURRENT_CYCLE")
-    if kind == "STOP" and (price is None or stop is None or price > stop):
-        reasons.append("STOP_EVENT_NOT_BREACHED")
-    if kind == "TARGET" and (price is None or target is None or price < target):
-        reasons.append("TARGET_EVENT_NOT_REACHED")
-    state = str(event.get("event_status") or event.get("lifecycle_state") or event.get("status") or "ACTIVE").upper()
-    if state not in {"ACTIVE", "ACTIVE_STOP_BREACH", "ACTIVE_TARGET_HIT", "UNRESOLVED_ACTIVE"}:
-        reasons.append("EVENT_LIFECYCLE_INVALID")
-    raw_action = _norm_action(event.get("strategy_action") or event.get("final_action") or event.get("action"))
-    if raw_action not in {"SELL NOW", "EXIT REVIEW", "TRIM REVIEW"}:
-        reasons.append("STRATEGY_ACTION_INVALID")
-    return {
-        "valid": not reasons,
-        "action": raw_action if not reasons else "DATA INCOMPLETE",
-        "kind": kind,
-        "event_id": event_id,
-        "trade_id": event_trade,
-        "lot_id": event_lot,
-        "price": price,
-        "price_source": source or None,
-        "price_role": role or None,
-        "timestamp": event_ts.isoformat() if event_ts else None,
-        "session": session,
-        "reason_codes": sorted(set(reasons)),
-        "raw_evidence": event,
-    }
-
-
-def proactive_action_rows(packet: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return deduplicated alerts from the same reconciled objects used by the report."""
-    rows: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str | None]] = set()
-    for holding in packet.get("holdings") or []:
-        if not holding.get("owner_alert_required"):
-            continue
-        row = {
-            "ticker": holding.get("ticker"),
-            "action": holding.get("final_action"),
-            "why": holding.get("why_now"),
-            "event_id": holding.get("execution_event", {}).get("event_id"),
-            "reason_codes": holding.get("authority_reason_codes") or [],
-        }
-        key = (str(row["ticker"]), str(row["action"]), row["event_id"])
-        if key not in seen:
-            seen.add(key)
-            rows.append(row)
-    return rows
-
-
-def shadow_comparison_rows(packet: dict[str, Any], canonical_by_ticker: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Project the reconciled external action into append-only shadow comparison input."""
-    canonical_by_ticker = canonical_by_ticker or {}
-    return [
-        {
-            "ticker": holding.get("ticker"),
-            "legacy_reconciled_final_action": holding.get("final_action"),
-            "legacy_reconciled_digest": packet.get("input_digest"),
-            "canonical_shadow": canonical_by_ticker.get(str(holding.get("ticker") or "").upper()),
-            "raw_exit_evidence": holding.get("raw_exit_evidence"),
-            "execution_event": holding.get("execution_event"),
-            "authority_reason_codes": holding.get("authority_reason_codes") or [],
-        }
-        for holding in packet.get("holdings") or []
-    ]
 
 
 def _payload(row: Any) -> dict[str, Any]:
@@ -660,58 +546,11 @@ def build_packet(*, summary: dict[str, Any] | None = None, positions: list[dict[
         pf = profit_freshness_for_ticker(ticker, provider, captured_at, now, latest_session)
         pp_action = _norm_action(pp.get("action")) if pf["state"] in {"FRESH_CURRENT_SESSION", "FRESH_LATEST_COMPLETED_SESSION"} else "DATA INCOMPLETE"
         stop = _num(pos.get("stop_loss") or pos.get("stop"))
-        raw_event = stop_events.get(ticker)
-        execution_event = validate_execution_event(ticker, pos, raw_event, report_ts=now, db_path=db_path) if raw_event else None
-        price_obj = normalized_price_for_holding(ticker, pos, stop=stop, report_ts=now, stop_event=raw_event, db_path=db_path)
+        price_obj = normalized_price_for_holding(ticker, pos, stop=stop, report_ts=now, stop_event=stop_events.get(ticker), db_path=db_path)
         cur = _num(price_obj.get("price"))
         stop_state = price_obj.get("stop_status") or "UNKNOWN — NO ACTIONABLE PRICE"
-        execution_reasons: list[str] = list((execution_event or {}).get("reason_codes") or [])
-        advisory_reasons: list[str] = []
-        packet_fresh = packet.get("status") == "FRESH"
-        if not packet_fresh:
-            advisory_reasons.append("HOLDINGS_PACKET_NOT_CURRENT")
-        if daily_action == "DATA INCOMPLETE":
-            advisory_reasons.append("DAILY_DATA_INCOMPLETE")
-        if pp_action == "DATA INCOMPLETE":
-            advisory_reasons.append("PROFIT_PROTECTION_DATA_INCOMPLETE")
-        candidate_execution = raw_event is not None
-        if raw_event and (execution_event or {}).get("valid"):
-            final = execution_event.get("action") or "DATA INCOMPLETE"
-            cur = _num(execution_event.get("price"))
-            price_obj = {
-                **price_obj,
-                "price": cur,
-                "source": execution_event.get("price_source"),
-                "timestamp": execution_event.get("timestamp"),
-                "session": execution_event.get("session"),
-                "authority": "VALIDATED_CURRENT_EXECUTION_EVENT",
-                "fallback_used": False,
-                "freshness": "ACTIONABLE",
-                "valuation_included": True,
-                "valuation_exclusion_reason": None,
-                "stop_status": _session_stop_label(now) if execution_event.get("kind") == "STOP" else "TARGET HIT — CURRENT SESSION",
-                "stop_event_lifecycle_state": "ACTIVE_STOP_BREACH" if execution_event.get("kind") == "STOP" else "ACTIVE_TARGET_HIT",
-                "stop_event_lifecycle_reason": "validated current-cycle execution event",
-                "stop_event_id": execution_event.get("event_id"),
-                "stop_event_trade_id": execution_event.get("trade_id"),
-                "stop_event_lot_id": execution_event.get("lot_id"),
-                "stop_event_price": cur,
-                "stop_event_timestamp": execution_event.get("timestamp"),
-            }
-            stop_state = price_obj["stop_status"]
-        elif candidate_execution:
-            final = "DATA INCOMPLETE"
-        elif not packet_fresh:
-            final = "DATA INCOMPLETE"
-        elif daily_action not in {"HOLD", "DATA INCOMPLETE"} or pp_action not in {"HOLD", "DATA INCOMPLETE"}:
-            execution_reasons.append("VALID_LIFECYCLE_EVENT_MISSING")
-            final = "DATA INCOMPLETE"
-        else:
-            final = strongest(daily_action, pp_action)
-        execution_reasons = sorted(set(execution_reasons))
-        advisory_reasons = sorted(set(advisory_reasons))
-        authority_reasons = sorted(set(execution_reasons + advisory_reasons))
-        owner_alert_required = final in {"SELL NOW", "EXIT REVIEW", "TRIM REVIEW"} and bool((execution_event or {}).get("valid"))
+        stop_action = "SELL NOW" if stop_state == "STOP BREACHED — REGULAR SESSION" else "STOP BREACHED / URGENT STOP REVIEW" if str(stop_state).startswith("STOP BREACHED") else None
+        final = strongest(daily_action, pp_action, stop_action)
         entry = _num(pos.get("entry_price") or pos.get("entry"))
         shares = _num(pos.get("shares") or pos.get("quantity") or pos.get("qty")) or 0
         pnl_pct = ((cur-entry)/entry*100.0) if cur is not None and entry else None
@@ -731,22 +570,13 @@ def build_packet(*, summary: dict[str, Any] | None = None, positions: list[dict[
             why.append(f"Daily Re-Underwriting {daily_action}")
         if final == pp_action and pp_action not in {"HOLD", "DATA INCOMPLETE"}:
             why.append(f"Profit Protection {pp_action}")
-        if final == "SELL NOW" and execution_event:
-            level = stop if execution_event.get("kind") == "STOP" else _num(pos.get("target_price") or pos.get("target"))
-            why.append(f"validated current {str(execution_event.get('kind') or '').lower()} event {execution_event.get('event_id')} at {_money(execution_event.get('price'))} versus {_money(level)}")
-        if final == "DATA INCOMPLETE":
-            why = ["DATA INCOMPLETE — NO TRADE INSTRUCTION"]
+        if str(stop_state).startswith("STOP BREACHED"):
+            why.append(f"verified stop breach at {_money(price_obj.get('price'))} below {_money(stop)}")
         if not why:
             why.append("no stronger valid advisory action currently present")
         details.append({
             "ticker": ticker,
             "final_action": final,
-            "owner_alert_required": owner_alert_required,
-            "authority_reason_codes": authority_reasons,
-            "execution_critical_reason_codes": execution_reasons,
-            "advisory_component_reason_codes": advisory_reasons,
-            "execution_event": execution_event,
-            "raw_exit_evidence": raw_event,
             "daily_reunderwriting_action": daily_action,
             "daily_reason_codes": daily.get("reason_codes") or [],
             "daily_packet_status": packet.get("status"),
@@ -809,11 +639,11 @@ def render_action_sections(packet: dict[str, Any]) -> list[str]:
         lines += [f"- {r['ticker']}: {r['why_now']}" for r in sells]
     else:
         lines.append("none")
-    for action in ("EXIT REVIEW", "TRIM REVIEW", "STOP BREACHED / URGENT STOP REVIEW", "DATA INCOMPLETE"):
+    for action in ("EXIT REVIEW", "TRIM REVIEW", "STOP BREACHED / URGENT STOP REVIEW"):
         items = [r for r in rows if r["final_action"] == action]
         if items:
             lines.append("")
-            lines.append(action if action != "DATA INCOMPLETE" else "DATA INCOMPLETE — NO TRADE INSTRUCTION")
+            lines.append(action)
             lines += [f"- {r['ticker']}: {r['why_now']}" for r in items]
     tight = [r for r in rows if r["final_action"] == "HOLD TIGHT"]
     lines += ["", "━━━ ⚠️ HOLD TIGHT ━━━"]

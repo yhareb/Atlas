@@ -50,7 +50,6 @@ import atlas_portfolio as port
 from atlas_symbol_meta import company_name
 from atlas_time import current_et_market_date_str
 from atlas_engine import analyze_ticker, check_regime, check_macro_context, get_macro_sentiment
-from atlas_macro_context_v1 import load_context, adapt_existing_gates
 try:
     import atlas_fda_calendar
 except Exception:
@@ -505,18 +504,7 @@ def run(args):
     if live and not macro_active:
         macro_sentiment["shadow_only"] = True
     LAST_RUN_SUMMARY["macro_sentiment"] = macro_sentiment
-    # V1.2 is opt-in. Missing/rejected context preserves the legacy path.
-    _macro_load = load_context(os.environ.get("ATLAS_MACRO_CONTEXT_V1_PATH"), consumer="atlas_manage")
-    _macro_legacy, _macro_receipt = adapt_existing_gates(_macro_load.context, consumer="atlas_manage")
     perme_overlay = _load_perme_threshold_overlay()
-    if _macro_load.context is not None:
-        perme_overlay = dict(perme_overlay)
-        _sent = _macro_legacy.get("sentiment", "NEUTRAL")
-        perme_overlay.update(active=_sent == "RISK_OFF", sentiment=_sent,
-                             global_min_pillars=4 if _sent == "RISK_OFF" else 3,
-                             global_min_rvol=2.0 if _sent == "RISK_OFF" else 1.5,
-                             perme_flagged_tickers=set())
-    LAST_RUN_SUMMARY["macro_context_v1_receipt"] = dict(_macro_receipt if _macro_load.context is not None else _macro_load.receipt)
     quiver_packet = None
     quiver_packet_status = "disabled"
     quiver_decision_sidecar = os.environ.get("ATLAS_QUIVER_DECISION_SIDECAR")
@@ -554,7 +542,7 @@ def run(args):
 
     # 2. EXITS FIRST --------------------------------------------------------
     _hdr("EXITS  (evaluated before any new buys)")
-    exit_results = port.run_exits(dry_run=not live, macro_context_v1=_macro_legacy if _macro_load.context is not None else None)
+    exit_results = port.run_exits(dry_run=not live)
     sells = [r for r in exit_results if r.get("action") == "SELL"]
     LAST_RUN_SUMMARY.update({"exit_results": exit_results, "sells": sells})
     if not exit_results:
@@ -606,9 +594,6 @@ def run(args):
 
     # 4 + 5. SCORE & CONSIDER ----------------------------------------------
     candidates = load_candidates(args)
-    if _macro_load.context is not None:
-        _macro_legacy, _macro_receipt = adapt_existing_gates(_macro_load.context, consumer="atlas_manage.candidate_future_admission", candidates=candidates)
-        LAST_RUN_SUMMARY["macro_context_v1_receipt"] = _macro_receipt
     pending_rows = atlas_db.get_pending_pullbacks(status="WAITING")
     stale_expired_pullbacks = _expire_stale_pending_pullbacks(pending_rows, live=live)
     if stale_expired_pullbacks:

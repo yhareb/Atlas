@@ -1,0 +1,176 @@
+{
+  "archive_transaction": {
+    "absent_preimages": [
+      "/Users/yasser/Library/LaunchAgents/com.atlas.perme-context-v1-2.plist",
+      "/Users/yasser/scripts/atlas_macro_context_v1.py",
+      "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/__init__.py",
+      "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/build.py",
+      "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/collect.py",
+      "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/io.py",
+      "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/pipeline.py",
+      "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/render.py",
+      "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/validation.py",
+      "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1_cli.py",
+      "/Users/yasser/scripts/perme_context_v1_2/perme_v1/run_perme_context_v1.sh",
+      "/Users/yasser/scripts/perme_context_v1_2/perme_v1/schemas/perme_context_v1.schema.json",
+      "/Users/yasser/scripts/perme_context_v1_2/perme_v1/schemas/tfe_machine_context_v1.schema.json",
+      "/Users/yasser/scripts/perme_context_v1_2/run_perme_context_v1_2.sh"
+    ],
+    "archive_root_template": "/Users/yasser/scripts/archive/perme_context_v1_2_<UTC>",
+    "required": true
+  },
+  "evidence": {
+    "consolidated_evidence": "/tmp/perme_context_v1_2_stage/evidence/production_equivalent_gate/consolidated_evidence.json",
+    "consolidated_evidence_sha256": "48639eda4fb2433a6108b2d9445980facbfc4d58e546a669cd93955fc48b5b25",
+    "corrected_gate": "PASS",
+    "production_deployed": false,
+    "profit_protection_wired": false,
+    "telegram_sends": 0
+  },
+  "files": [
+    {
+      "preimage_sha256": null,
+      "preimage_state": "ABSENT",
+      "release_path": "targets/Users/yasser/Library/LaunchAgents/com.atlas.perme-context-v1-2.plist",
+      "staged_sha256": "09029b9294d69d428316f790fa3580f0bab1fd87a5d1d186147855dd7d67d93c",
+      "target_path": "/Users/yasser/Library/LaunchAgents/com.atlas.perme-context-v1-2.plist"
+    },
+    {
+      "preimage_sha256": "a3908a609b37533e6daa106ade23f3a886c1ad628cb6c847ea4c5bc6448a071a",
+      "preimage_state": "PRESENT",
+      "release_path": "targets/Users/yasser/scripts/atlas_engine.py",
+      "staged_sha256": "ddbf5d2909ef150dc4ea19008b3200b758c37497f95c0e154c3ad523ebc2cb5c",
+      "target_path": "/Users/yasser/scripts/atlas_engine.py"
+    },
+    {
+      "preimage_sha256": "5aa917e56b73d97a79951fc704cab178e65846820ed8147fbaa85d5bce73697b",
+      "preimage_state": "PRESENT",
+      "release_path": "targets/Users/yasser/scripts/atlas_holdings_reunderwrite.py",
+      "staged_sha256": "c196c3e6ba7c6635469744fc2a49a35c62a50318ebe5700b6d8055117959885c",
+      "target_path": "/Users/yasser/scripts/atlas_holdings_reunderwrite.py"
+    },
+    {
+      "preimage_sha256": "a9c2feb801495214d6dfad1247f9f7ce6703c0996a97dff5c30ee1cf4dab71b1",
+      "preimage_state": "PRESENT",
+      "release_path": "targets/Users/yasser/scripts/atlas_holdings_reunderwrite_runner.py",
+      "staged_sha256": "2b8f6bd9e5f6481deeb2f791a11a290fa009a882c07c1371914fc29480d2dc67",
+      "target_path": "/Users/yasser/scripts/atlas_holdings_reunderwrite_runner.py"
+    },
+    {
+      "preimage_sha256": null,
+      "preimage_state": "ABSENT",
+      "release_path": "targets/Users/yasser/scripts/atlas_macro_context_v1.py",
+      "staged_sha256": "8a412af94a730dab14b547ded31c37de342845a91939113e939551b71b5ab4b9",
+      "target_path": "/Users/yasser/scripts/atlas_macro_context_v1.py"
+    },
+    {
+      "preimage_sha256": "fc11cc96e132e971c1e475bfe3919e8004cc51aa76138834e58aeefc588ee6ab",
+      "preimage_state": "PRESENT",
+      "release_path": "targets/Users/yasser/scripts/atlas_manage.py",
+      "staged_sha256": "a0d2d37a6c29c9dae373f53efbd214f5a527778f1d4c8e6b812398574bd85227",
+      "target_path": "/Users/yasser/scripts/atlas_manage.py"
+    },
+    {
+      "preimage_sha256": "8fed8d2985bb6ff4ac661dfa75f447f5d30b7325f335dede60232329a90b1444",
+      "preimage_state": "PRESENT",
+      "release_path": "targets/Users/yasser/scripts/atlas_portfolio.py",
+      "staged_sha256": "597749a659aad5be3c5ef233370472a637c281ac5c6d8339237eb440c0167f2e",
+      "target_path": "/Users/yasser/scripts/atlas_portfolio.py"
+    },
+    {
+      "preimage_sha256": "8f90f4ac13e0bfde61f38b94f05287128896ed1a84a2224f1afeca2feb6fdff2",
+      "preimage_state": "PRESENT",
+      "release_path": "targets/Users/yasser/scripts/atlas_single_ticker_tfe_runner.py",
+      "staged_sha256": "cfd4fe467942c3485da22b2378a24e61f57ddec2e064521ab38e2f9a903ff254",
+      "target_path": "/Users/yasser/scripts/atlas_single_ticker_tfe_runner.py"
+    },
+    {
+      "preimage_sha256": null,
+      "preimage_state": "ABSENT",
+      "release_path": "targets/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/__init__.py",
+      "staged_sha256": "5c40eb01f8286ca75f54bde6b891b738af2db31a7d95dec7a4cd66b07c21f98e",
+      "target_path": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/__init__.py"
+    },
+    {
+      "preimage_sha256": null,
+      "preimage_state": "ABSENT",
+      "release_path": "targets/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/build.py",
+      "staged_sha256": "cf3f28884c70a0f61689b85d50a7727fab30c01598de34d8655890aa4e8badfa",
+      "target_path": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/build.py"
+    },
+    {
+      "preimage_sha256": null,
+      "preimage_state": "ABSENT",
+      "release_path": "targets/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/collect.py",
+      "staged_sha256": "5bad8069fb81a6326ff3e77f71148571bcc8891ce251637ee6eec843dc014ff7",
+      "target_path": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/collect.py"
+    },
+    {
+      "preimage_sha256": null,
+      "preimage_state": "ABSENT",
+      "release_path": "targets/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/io.py",
+      "staged_sha256": "3ec14c4a76ede30ec591d0612a2e02ba0a4da6ddfed021178e0b317586c00515",
+      "target_path": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/io.py"
+    },
+    {
+      "preimage_sha256": null,
+      "preimage_state": "ABSENT",
+      "release_path": "targets/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/pipeline.py",
+      "staged_sha256": "4f1798e611d29e44c7c36e1af92eb57c98d70848c9a823cd39cc280483778f4a",
+      "target_path": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/pipeline.py"
+    },
+    {
+      "preimage_sha256": null,
+      "preimage_state": "ABSENT",
+      "release_path": "targets/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/render.py",
+      "staged_sha256": "346e91bf84f37d6097894452f63e16977a3fde8e79331b7b2d0fbb8d7b72c975",
+      "target_path": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/render.py"
+    },
+    {
+      "preimage_sha256": null,
+      "preimage_state": "ABSENT",
+      "release_path": "targets/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/validation.py",
+      "staged_sha256": "da829f6a732851a690405d47f7ba026b8526e5c15f1cded244c411ebe8a16301",
+      "target_path": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/validation.py"
+    },
+    {
+      "preimage_sha256": null,
+      "preimage_state": "ABSENT",
+      "release_path": "targets/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1_cli.py",
+      "staged_sha256": "abb809a732dd101ed7c15d686d4c3903ccf344fc26e3eb9370dba11e942a5ce1",
+      "target_path": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1_cli.py"
+    },
+    {
+      "preimage_sha256": null,
+      "preimage_state": "ABSENT",
+      "release_path": "targets/Users/yasser/scripts/perme_context_v1_2/perme_v1/run_perme_context_v1.sh",
+      "staged_sha256": "27b428daa5a8fdea4f47cb8c259d507e801d7f2fdd10d22ef174278360a71630",
+      "target_path": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/run_perme_context_v1.sh"
+    },
+    {
+      "preimage_sha256": null,
+      "preimage_state": "ABSENT",
+      "release_path": "targets/Users/yasser/scripts/perme_context_v1_2/perme_v1/schemas/perme_context_v1.schema.json",
+      "staged_sha256": "fc044437f58925780f7528613b3783d922d85d4404088482b4a53bcb628099b3",
+      "target_path": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/schemas/perme_context_v1.schema.json"
+    },
+    {
+      "preimage_sha256": null,
+      "preimage_state": "ABSENT",
+      "release_path": "targets/Users/yasser/scripts/perme_context_v1_2/perme_v1/schemas/tfe_machine_context_v1.schema.json",
+      "staged_sha256": "77aa65c8a2597622295dcb160a70672d4128e45bc5673020909ba89d687627c7",
+      "target_path": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/schemas/tfe_machine_context_v1.schema.json"
+    },
+    {
+      "preimage_sha256": null,
+      "preimage_state": "ABSENT",
+      "release_path": "targets/Users/yasser/scripts/perme_context_v1_2/run_perme_context_v1_2.sh",
+      "staged_sha256": "e151b683f95986170c21f0b056363955f3f635de24b9d6f963d20799cff78a47",
+      "target_path": "/Users/yasser/scripts/perme_context_v1_2/run_perme_context_v1_2.sh"
+    }
+  ],
+  "schema": "perme_context_v1_2_atomic_release.v1",
+  "source_only": true,
+  "status": "RELEASE_CANDIDATE",
+  "whole_unit_required": true
+}

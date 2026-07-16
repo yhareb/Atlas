@@ -15,7 +15,6 @@ from typing import Any, Mapping
 
 from atlas_conversation_schemas import Authority, RouterError, attach_digest, field
 from atlas_conversation_db_snapshot import RuntimeDBSnapshotManager, SnapshotError, CANONICAL_SOURCE_DB, DEFAULT_RUNTIME_ROOT
-from atlas_macro_context_v1 import AtlasMacroContextV1, adapt_existing_gates
 
 SCHEMA_VERSION = "atlas_single_ticker_tfe_packet_v1"
 PROD_SCRIPTS = Path("/Users/yasser/scripts")
@@ -42,15 +41,12 @@ class ProductionSafeTFERunner:
     def __call__(self, ticker: str) -> Mapping[str, Any]:
         return self.run(ticker=ticker)
 
-    def run(self, *, ticker: str, request_id: str | None = None, context: AtlasMacroContextV1 | None = None) -> Mapping[str, Any]:
+    def run(self, *, ticker: str, request_id: str | None = None) -> Mapping[str, Any]:
         started_wall = time.time()
         runner_started_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         ticker = str(ticker or "").strip().upper()
         if not ticker:
             raise RouterError("TFE_RUNNER_TICKER_MISSING")
-        if context is not None and not isinstance(context, AtlasMacroContextV1):
-            raise RouterError("TFE_RUNNER_CONTEXT_NOT_STRICTLY_VALIDATED")
-        context_gate, context_receipt = adapt_existing_gates(context, consumer="single_ticker_tfe", candidates=[ticker])
         db_path = None
         manifest = None
         packet: dict[str, Any] | None = None
@@ -59,7 +55,7 @@ class ProductionSafeTFERunner:
             db_path, manifest = self.snapshot_manager.create_snapshot(request_id=request_id, acquisition_timeout=min(20.0, self.total_timeout_seconds))
             if time.time() - started_wall > self.total_timeout_seconds:
                 raise RouterError("FRESH_TFE_RESULT_UNAVAILABLE:TOTAL_TIMEOUT_BEFORE_TFE")
-            raw = self._invoke_tfe(ticker=ticker, db_path=db_path, remaining_timeout=max(0.001, min(self.timeout_seconds, self.total_timeout_seconds - (time.time() - started_wall))), context=context_gate if context is not None else None)
+            raw = self._invoke_tfe(ticker=ticker, db_path=db_path, remaining_timeout=max(0.001, min(self.timeout_seconds, self.total_timeout_seconds - (time.time() - started_wall))))
             packet = normalize_tfe_output(ticker, raw, source="production atlas_engine.py via secure runtime SQLite snapshot")
             runner_completed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
             provenance = dict(packet.get("source_provenance") or {})
@@ -74,8 +70,6 @@ class ProductionSafeTFERunner:
             packet["source_provenance"] = provenance
             packet["runtime_request_id"] = manifest.runtime_request_id
             packet["snapshot_table_count_digest"] = manifest.table_count_digest
-            if context is not None:
-                packet["macro_context_v1_receipt"] = context_receipt
             packet = attach_digest(packet)
             cleanup_status = self.snapshot_manager.cleanup_snapshot(db_path, success=True, manifest=manifest)
             packet["source_provenance"]["cleanup_status"] = cleanup_status.get("cleanup_status")
@@ -94,7 +88,7 @@ class ProductionSafeTFERunner:
                 raise RouterError("FRESH_TFE_RESULT_UNAVAILABLE:SNAPSHOT:" + str(exc)) from exc
             raise RouterError("FRESH_TFE_RESULT_UNAVAILABLE:" + type(exc).__name__ + ":" + str(exc)) from exc
 
-    def _invoke_tfe(self, *, ticker: str, db_path: Path, remaining_timeout: float, context: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
+    def _invoke_tfe(self, *, ticker: str, db_path: Path, remaining_timeout: float) -> Mapping[str, Any]:
         if Path(db_path).resolve() == CANONICAL_SOURCE_DB.resolve():
             raise RouterError("TFE_RUNNER_REFUSES_PRODUCTION_DB_CHILD")
         env = dict(os.environ)
@@ -109,9 +103,6 @@ class ProductionSafeTFERunner:
         for key in ("ATLAS_PROD_DB", "ATLAS_DB_PATH_PROD"):
             env.pop(key, None)
         cmd = [sys.executable, str(self.scripts_dir / "atlas_engine.py"), ticker]
-        if context is not None:
-            # Child receives a bounded gate-only object, never the evidence packet.
-            env["ATLAS_MACRO_CONTEXT_V1_GATE_JSON"] = json.dumps(dict(context), sort_keys=True, allow_nan=False)
         try:
             proc = subprocess.run(cmd, cwd=str(self.scripts_dir), env=env, text=True, capture_output=True, timeout=remaining_timeout)
         except subprocess.TimeoutExpired as exc:

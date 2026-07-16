@@ -10,7 +10,6 @@ from atlas_holdings_reunderwrite_acquire import acquire
 from atlas_holdings_entry_time_reconcile import reconcile
 from atlas_holdings_reunderwrite import evaluate_holding, packet_from_snapshots, write_outputs, persist_packet, open_sidecar
 from atlas_holdings_final_action import build_merged_packet
-from atlas_macro_context_v1 import load_context, adapt_existing_gates
 try:
     from atlas_profit_protection_v2 import evaluate_current_open_from_snapshot as _pp_evaluate_current_open
 except Exception:
@@ -81,21 +80,19 @@ def _context_status(packet, ticker, kind):
         return {'status':'NO_USABLE_TICKER_EVIDENCE','display':'NO USABLE TICKER EVIDENCE — packet healthy'}
     return {'status':'PACKET_UNAVAILABLE','display':'PACKET_UNAVAILABLE'}
 
-def context_for(ticker, acq, macro_context_v1=None):
+def context_for(ticker, acq):
     ext=acq.get('external_context') or {}
     qstate=_context_status(ext.get('quiver'), ticker, 'quiver')
     pstate=_context_status(ext.get('perme'), ticker, 'perme')
     news=((ext.get('benzinga_news') or {}).get(ticker) or {})
     catalyst_state='POSITIVE' if news.get('items') else None
     qposture=qstate.get('display') if qstate.get('status')=='VALID_CONTEXT' else None
-    result={'quiver_posture': qposture,
+    return {'quiver_posture': qposture,
             'quiver_status': qstate.get('status'), 'quiver_display': qstate.get('display'),
             'perme_regime': (pstate.get('context') or {}).get('sentiment') if pstate.get('status')=='VALID_CONTEXT' else None,
             'perme_status': pstate.get('status'), 'perme_display': pstate.get('display'),
             'catalyst_state': catalyst_state, 'sector_known': bool((acq.get('sector_map') or {}).get(ticker)), 'event_checked': True,
             'benzinga_news_freshness': news.get('freshness')}
-    if macro_context_v1 is not None: result.update(macro_context_v1)
-    return result
 
 
 
@@ -241,7 +238,7 @@ def persist_packet_idempotent(packet, sidecar=DEFAULT_SIDECAR):
     finally:
         conn.close()
 
-def evaluate_corrected(acq, rec, db, macro_context_v1=None, macro_receipt=None):
+def evaluate_corrected(acq, rec, db):
     conn=_conn_ro(db)
     try:
         trades={r['id']:dict(r) for r in conn.execute("select * from trades where status='OPEN'").fetchall()}
@@ -252,18 +249,17 @@ def evaluate_corrected(acq, rec, db, macro_context_v1=None, macro_receipt=None):
         bars=[]
         for b in c['entry_session_intraday_bars_used']+c['subsequent_daily_bars']:
             bars.append({'date':b.get('date'),'open':b.get('open'),'high':b.get('high'),'low':b.get('low'),'close':b.get('close'),'volume':b.get('volume')})
-        s=evaluate_holding(tr,bars=bars,context=context_for(str(tr.get('ticker')).upper(), acq, macro_context_v1),as_of=rec['latest_session'])
+        s=evaluate_holding(tr,bars=bars,context=context_for(str(tr.get('ticker')).upper(), acq),as_of=rec['latest_session'])
         s['entry_time_reconciliation']=c['authoritative']
         m=s['current_metrics']; peak=m.get('mfe_pct') or 0; cur=m.get('current_gain_pct') or 0; surrendered=max(0, peak-cur); retained=(cur/peak*100) if peak>0 and cur>0 else 0
         s['human_metrics']={'peak_gain_pct':peak,'current_gain_pct':cur,'profit_retained_pct':retained,'profit_surrendered_pct':surrendered,'loss_below_entry_pct':abs(cur) if cur<0 else 0,'overrun_label':'GAIN FULLY SURRENDERED AND POSITION BELOW ENTRY' if peak>0 and cur<0 else None}
         snaps.append(s)
     pkt=packet_from_snapshots(snaps, run_date=rec['latest_session'])
     pkt['acquisition_digest']=acq.get('input_digest'); pkt['entry_time_reconciliation_digest']=rec.get('input_digest')
-    if macro_receipt is not None: pkt['macro_context_v1_receipt']=macro_receipt
     return pkt
 
 def main(argv=None):
-    ap=argparse.ArgumentParser(); ap.add_argument('--db',default='/Users/yasser/scripts/atlas.db'); ap.add_argument('--out',default=DEFAULT_OUT); ap.add_argument('--sidecar',default=DEFAULT_SIDECAR); ap.add_argument('--context'); ap.add_argument('--dry-run',action='store_true'); ap.add_argument('--force-session',action='store_true')
+    ap=argparse.ArgumentParser(); ap.add_argument('--db',default='/Users/yasser/scripts/atlas.db'); ap.add_argument('--out',default=DEFAULT_OUT); ap.add_argument('--sidecar',default=DEFAULT_SIDECAR); ap.add_argument('--dry-run',action='store_true'); ap.add_argument('--force-session',action='store_true')
     args=ap.parse_args(argv); signal.signal(signal.SIGALRM,_timeout); signal.alarm(TOTAL_TIMEOUT)
     try:
         if not args.force_session and dt.datetime.now(ET).weekday()>=5: log('SKIP_NON_TRADING_DAY'); return 0
@@ -275,11 +271,7 @@ def main(argv=None):
             out=Path(args.out); out.mkdir(parents=True,exist_ok=True)
             acq=acquire(args.db, str(out/'holdings_reunderwrite_acquisition_v1.json'))
             rec=reconcile(args.db, acq.get('latest_completed_session'), str(out/'holdings_entry_time_reconciliation_v1.json'))
-            with _conn_ro(args.db) as _c: _holds=[r[0].upper() for r in _c.execute("select ticker from trades where status='OPEN'")]
-            _loaded=load_context(args.context or os.environ.get('ATLAS_MACRO_CONTEXT_V1_PATH'), authoritative_holdings=_holds, consumer='daily_reunderwrite.runner/context_for')
-            _legacy,_receipt=adapt_existing_gates(_loaded.context,consumer='daily_reunderwrite.runner/context_for',holdings=_holds)
-            if _loaded.context is None: _receipt=dict(_loaded.receipt)
-            pkt=evaluate_corrected(acq,rec,args.db,_legacy if _loaded.context is not None else None,_receipt)
+            pkt=evaluate_corrected(acq,rec,args.db)
             pp_by_ticker = profit_protection_by_ticker(args.db)
             digest, canonical_input = apply_canonical_digest(pkt, pp_by_ticker)
             persist_result = {'status': 'DRY_RUN', 'run_id': None, 'snapshots_inserted': 0} if args.dry_run else persist_packet_idempotent(pkt,args.sidecar)

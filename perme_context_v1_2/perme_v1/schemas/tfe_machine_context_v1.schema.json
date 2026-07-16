@@ -1,0 +1,5 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema", "$id":"TFEMachineContextV1", "type":"object", "additionalProperties":false,
+  "required":["schema","generated_at","macro_regime","event_risks","sector_conditions","holding_context","freshness","confidence","evidence_ids"],
+  "properties":{"schema":{"const":"TFEMachineContextV1"},"generated_at":{"type":"string"},"macro_regime":{"type":"string"},"event_risks":{"type":"array"},"sector_conditions":{"type":"array"},"holding_context":{"type":"array"},"freshness":{"type":"object"},"confidence":{"type":"number"},"evidence_ids":{"type":"array"}}
+}

@@ -1,0 +1,20 @@
+{
+  "created_utc": "20260716T140800Z",
+  "paths": [
+    "/Users/yasser/Library/LaunchAgents/com.atlas.perme-context-v1-2.plist",
+    "/Users/yasser/scripts/atlas_macro_context_v1.py",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/__init__.py",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/build.py",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/collect.py",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/io.py",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/pipeline.py",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/render.py",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/validation.py",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1_cli.py",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/run_perme_context_v1.sh",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/schemas/perme_context_v1.schema.json",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/schemas/tfe_machine_context_v1.schema.json",
+    "/Users/yasser/scripts/perme_context_v1_2/run_perme_context_v1_2.sh"
+  ],
+  "schema": "perme_context_v1_2_deployment_absent_ledger.v1"
+}

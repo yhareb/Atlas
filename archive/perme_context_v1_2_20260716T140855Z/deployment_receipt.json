@@ -1,0 +1,102 @@
+{
+  "authoritative_sha256": {
+    "archive": "2e09b90c65c60c583a663632d5b16662a7905b623822f4e5d732efb5cf1707b8",
+    "gate": "f8da20403e843a074fb37b347c9055b55eddcb5aa4b0d16c839af0fff2afe3ba",
+    "manifest": "ca4752119ec9807ead3fb9be8aa4bdc4566ca2c94d7a9b0b4237b7f7d80d2631"
+  },
+  "backup_path": "/Users/yasser/scripts/archive/perme_context_v1_2_20260716T140855Z",
+  "db_after": {
+    "foreign_key_violations": 0,
+    "integrity_check": [
+      "ok"
+    ],
+    "row_counts": {
+      "account": 1,
+      "broker_position_display_snapshots": 0,
+      "broker_reconciliation": 0,
+      "cash_ledger": 26,
+      "ema_retry_candidates": 0,
+      "evidence_attachments": 1,
+      "handoff": 20,
+      "invariant_checks": 90,
+      "ledger_postings": 62,
+      "manual_trade_overrides": 1,
+      "pending_pullbacks": 72,
+      "portfolio_event_journal": 99,
+      "position_lots": 69,
+      "report_snapshots": 238,
+      "signals": 45310,
+      "trades": 353,
+      "valuation_marks": 74
+    },
+    "table_count": 17
+  },
+  "db_before": {
+    "foreign_key_violations": 0,
+    "integrity_check": [
+      "ok"
+    ],
+    "row_counts": {
+      "account": 1,
+      "broker_position_display_snapshots": 0,
+      "broker_reconciliation": 0,
+      "cash_ledger": 26,
+      "ema_retry_candidates": 0,
+      "evidence_attachments": 1,
+      "handoff": 20,
+      "invariant_checks": 90,
+      "ledger_postings": 62,
+      "manual_trade_overrides": 1,
+      "pending_pullbacks": 72,
+      "portfolio_event_journal": 99,
+      "position_lots": 69,
+      "report_snapshots": 238,
+      "signals": 45310,
+      "trades": 353,
+      "valuation_marks": 74
+    },
+    "table_count": 17
+  },
+  "files_deployed": {
+    "/Users/yasser/Library/LaunchAgents/com.atlas.perme-context-v1-2.plist": "09029b9294d69d428316f790fa3580f0bab1fd87a5d1d186147855dd7d67d93c",
+    "/Users/yasser/scripts/atlas_engine.py": "ddbf5d2909ef150dc4ea19008b3200b758c37497f95c0e154c3ad523ebc2cb5c",
+    "/Users/yasser/scripts/atlas_holdings_reunderwrite.py": "c196c3e6ba7c6635469744fc2a49a35c62a50318ebe5700b6d8055117959885c",
+    "/Users/yasser/scripts/atlas_holdings_reunderwrite_runner.py": "2b8f6bd9e5f6481deeb2f791a11a290fa009a882c07c1371914fc29480d2dc67",
+    "/Users/yasser/scripts/atlas_macro_context_v1.py": "8a412af94a730dab14b547ded31c37de342845a91939113e939551b71b5ab4b9",
+    "/Users/yasser/scripts/atlas_manage.py": "a0d2d37a6c29c9dae373f53efbd214f5a527778f1d4c8e6b812398574bd85227",
+    "/Users/yasser/scripts/atlas_portfolio.py": "597749a659aad5be3c5ef233370472a637c281ac5c6d8339237eb440c0167f2e",
+    "/Users/yasser/scripts/atlas_single_ticker_tfe_runner.py": "cfd4fe467942c3485da22b2378a24e61f57ddec2e064521ab38e2f9a903ff254",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/__init__.py": "5c40eb01f8286ca75f54bde6b891b738af2db31a7d95dec7a4cd66b07c21f98e",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/build.py": "cf3f28884c70a0f61689b85d50a7727fab30c01598de34d8655890aa4e8badfa",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/collect.py": "5bad8069fb81a6326ff3e77f71148571bcc8891ce251637ee6eec843dc014ff7",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/io.py": "3ec14c4a76ede30ec591d0612a2e02ba0a4da6ddfed021178e0b317586c00515",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/pipeline.py": "4f1798e611d29e44c7c36e1af92eb57c98d70848c9a823cd39cc280483778f4a",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/render.py": "346e91bf84f37d6097894452f63e16977a3fde8e79331b7b2d0fbb8d7b72c975",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/validation.py": "da829f6a732851a690405d47f7ba026b8526e5c15f1cded244c411ebe8a16301",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1_cli.py": "abb809a732dd101ed7c15d686d4c3903ccf344fc26e3eb9370dba11e942a5ce1",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/run_perme_context_v1.sh": "27b428daa5a8fdea4f47cb8c259d507e801d7f2fdd10d22ef174278360a71630",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/schemas/perme_context_v1.schema.json": "fc044437f58925780f7528613b3783d922d85d4404088482b4a53bcb628099b3",
+    "/Users/yasser/scripts/perme_context_v1_2/perme_v1/schemas/tfe_machine_context_v1.schema.json": "77aa65c8a2597622295dcb160a70672d4128e45bc5673020909ba89d687627c7",
+    "/Users/yasser/scripts/perme_context_v1_2/run_perme_context_v1_2.sh": "e151b683f95986170c21f0b056363955f3f635de24b9d6f963d20799cff78a47"
+  },
+  "import_origin": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/__init__.py",
+  "phase": "Phase 1",
+  "plist_lint": {
+    "/Users/yasser/Library/LaunchAgents/com.atlas.perme-context-v1-2.plist": "/Users/yasser/Library/LaunchAgents/com.atlas.perme-context-v1-2.plist: OK"
+  },
+  "preimages_verified": true,
+  "relevant_consumers_idle_after": true,
+  "service_state_after": {
+    "com.atlas.holdings_reunderwrite": "loaded",
+    "com.atlas.perme": "loaded",
+    "com.atlas.perme-context-v1-2": "unloaded"
+  },
+  "service_state_before": {
+    "com.atlas.holdings_reunderwrite": "loaded",
+    "com.atlas.perme": "loaded",
+    "com.atlas.perme-context-v1-2": "unloaded"
+  },
+  "staged_hashes_verified": true,
+  "status": "PASS",
+  "unit_count": 20
+}

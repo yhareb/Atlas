@@ -1,0 +1,20 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"PermeContextV1",
+  "type":"object",
+  "additionalProperties":false,
+  "required":["schema","generated_at","expires_at","freshness","mode","routine","sources","evidence","macro_regime","events","open_holdings","trading_instructions"],
+  "properties":{
+    "schema":{"const":"PermeContextV1"},
+    "generated_at":{"type":"string","format":"date-time"},
+    "expires_at":{"type":"string","format":"date-time"},
+    "freshness":{"type":"object","additionalProperties":false,"required":["ttl_minutes","status"],"properties":{"ttl_minutes":{"type":"integer","minimum":1},"status":{"const":"FRESH"}}},
+    "mode":{"enum":["mock","live"]},"routine":{"type":"string"},
+    "sources":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["source_id","kind","locator","observed_at","read_only","status","completeness"],"properties":{"source_id":{"type":"string"},"kind":{"type":"string"},"locator":{"type":"string"},"observed_at":{"type":"string","format":"date-time"},"read_only":{"const":true},"status":{"type":"string"},"completeness":{"type":"string"}}}},
+    "evidence":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["evidence_id","source_id","source_record_type","observed_at","source_timestamp","freshness_status","raw_record"],"properties":{"evidence_id":{"type":"string"},"source_id":{"type":"string"},"source_record_type":{"type":"string"},"observed_at":{"type":"string","format":"date-time"},"source_timestamp":{"type":"string","format":"date-time"},"freshness_status":{"enum":["FRESH","FUTURE_SCHEDULED"]},"raw_record":{}}}},
+    "macro_regime":{"enum":["RISK_OFF","RISK_ON","NEUTRAL"]},
+    "events":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["event_id","evidence_ids","event_type","importance","headline","ticker","issuer","sector","industry","numeric_facts","scheduled_event_time","confidence","portfolio_relationship","causal_claims"],"properties":{"event_id":{"type":"string"},"evidence_ids":{"type":"array","items":{"type":"string"}},"event_type":{"enum":["NEWS","EARNINGS","MACRO_EVENT","SECTOR_SNAPSHOT"]},"importance":{"enum":["UNKNOWN","LOW","MEDIUM","HIGH"]},"headline":{"type":"string"},"ticker":{"type":["string","null"]},"issuer":{"type":["string","null"]},"sector":{"type":["string","null"]},"industry":{"type":["string","null"]},"numeric_facts":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["name","value","unit"],"properties":{"name":{"type":"string"},"value":{"type":"number"},"unit":{"type":"string"}}}},"scheduled_event_time":{"type":["string","null"],"format":"date-time"},"confidence":{"type":"number","minimum":0,"maximum":1},"portfolio_relationship":{"enum":["OPEN_HOLDING","NOT_OPEN_HOLDING","MARKET_WIDE"]},"causal_claims":{"type":"array","maxItems":0}}}},
+    "open_holdings":{"type":"object","additionalProperties":false,"required":["evidence_ids","tickers"],"properties":{"evidence_ids":{"type":"array","items":{"type":"string"}},"tickers":{"type":"array","items":{"type":"string"}}}},
+    "trading_instructions":{"type":"array","maxItems":0}
+  }
+}

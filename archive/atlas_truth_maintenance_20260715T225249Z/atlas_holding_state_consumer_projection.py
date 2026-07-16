@@ -1,14 +1,9 @@
 """Explicit typed section integration with ordinary arguments (no context-local state)."""
 from __future__ import annotations
-import json, os, pathlib, uuid
-from datetime import datetime, timezone
+import json, os, pathlib
 from typing import Any, Callable, Mapping
 EVENT_LOG_ENV = 'ATLAS_CANONICAL_EVENT_LOG'
 BYPASS_SENTINEL_ENV = 'ATLAS_BYPASS_SENTINEL_LOG'
-
-def _evidence_context():
-    now=datetime.now(timezone.utc).replace(microsecond=0)
-    return {'timestamp':now.isoformat().replace('+00:00','Z'),'nyse_session':os.environ.get('ATLAS_NYSE_SESSION') or now.date().isoformat(),'run_id':os.environ.get('ATLAS_RUN_ID') or uuid.uuid4().hex,'execution_context':os.environ.get('ATLAS_EXECUTION_CONTEXT','LIVE_SCHEDULER')}
 
 def bypass_local_authority(reference: str, legacy_callable: Callable | None=None, *args, **kwargs):
     """Runtime sentinel for an explicit REPLACE_AUTHORITY construction site.
@@ -18,7 +13,7 @@ def bypass_local_authority(reference: str, legacy_callable: Callable | None=None
     """
     selected = mode()
     target = os.environ.get(BYPASS_SENTINEL_ENV)
-    event = {'event': 'BYPASS_LOCAL_AUTHORITY', 'reference': reference, 'mode': selected, 'legacy_invoked': selected in ('legacy', 'shadow') and legacy_callable is not None, **_evidence_context()}
+    event = {'event': 'BYPASS_LOCAL_AUTHORITY', 'reference': reference, 'mode': selected, 'legacy_invoked': selected in ('legacy', 'shadow') and legacy_callable is not None}
     if target:
         with pathlib.Path(target).open('a', encoding='utf-8') as fh:
             fh.write(json.dumps(event, sort_keys=True, separators=(',', ':')) + '\n')
@@ -33,7 +28,7 @@ def _append_event(*, entrypoint, unit, selected_mode, legacy_called, projection=
         return
     if not target:
         return
-    event = {'entrypoint': entrypoint or '<unspecified>', 'unit': unit, 'selected_mode': selected_mode, 'legacy_called': bool(legacy_called), 'projection_packet_id': None, 'projection_packet_digest': None, 'projection_present': projection is not None, 'external_authority_selected':'legacy' if selected_mode=='shadow' else selected_mode, 'owner_facing_send':False, **_evidence_context()}
+    event = {'entrypoint': entrypoint or '<unspecified>', 'unit': unit, 'selected_mode': selected_mode, 'legacy_called': bool(legacy_called), 'projection_packet_id': None, 'projection_packet_digest': None, 'projection_present': projection is not None}
     if packet is not None:
         event['projection_packet_id'] = packet.get('packet_id')
         event['projection_packet_digest'] = packet.get('packet_digest') or packet.get('digest')
@@ -50,12 +45,6 @@ ENTRY_ADAPTER = {'pre_market_report.generate_pre_market_report': 'PRE_MARKET_TYP
 def load_build_validate_rebuild(unit: str):
     if unit not in UNITS:
         raise ValueError('UNKNOWN_ACTIVATION_UNIT')
-    if os.environ.get('ATLAS_EXECUTION_CONTEXT','LIVE_SCHEDULER')=='LIVE_SCHEDULER':
-        try:
-            from atlas_holding_state_truth_maintenance import ensure_current_manifest
-            ensure_current_manifest(reason='CONSUMER_'+unit)
-        except Exception:
-            pass
     manifest = verify_runtime_manifest(os.environ[MANIFEST_ENV])
     return coordinator_load(manifest, unit)
 
@@ -92,11 +81,6 @@ def select_leaf(unit: str, legacy_thunk: Callable, *, reference: str, projector:
     if selected == 'shadow':
         value = legacy_thunk()
         _append_event(entrypoint=reference, unit=unit, selected_mode=selected, legacy_called=True, projection=projection, packet=packet)
-        try:
-            from atlas_holding_state_truth_maintenance import record_dispatch
-            record_dispatch(unit=unit,entrypoint=reference,packet=packet)
-        except Exception:
-            pass
         return value
     value = projector(projection) if projector else list(projection.lines)
     _append_event(entrypoint=reference, unit=unit, selected_mode=selected, legacy_called=False, projection=projection, packet=packet)
@@ -132,11 +116,6 @@ def dispatch_at_entry(unit: str, legacy_callable: Callable, args=(), kwargs=None
             else:
                 os.environ['ATLAS_CANONICAL_EVENT_SUPPRESS'] = old_suppress
         _append_event(entrypoint=entrypoint, unit=unit, selected_mode=selected, legacy_called=True, projection=projection, packet=packet)
-        try:
-            from atlas_holding_state_truth_maintenance import record_dispatch
-            record_dispatch(unit=unit,entrypoint=entrypoint or '<unspecified>',packet=packet)
-        except Exception:
-            pass
         return {'handled': True, 'mode': 'shadow', 'value': original, 'shadow_projection': projection}
     chosen = adapter_name or (ENTRY_ADAPTER.get(entrypoint) if entrypoint else None) or UNIT_ADAPTER[unit]
     original = legacy_callable(*args, **kwargs)
