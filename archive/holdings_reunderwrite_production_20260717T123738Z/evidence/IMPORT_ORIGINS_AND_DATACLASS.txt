@@ -1,0 +1,5 @@
+atlas_holdings_reunderwrite /Users/yasser/scripts/atlas_holdings_reunderwrite.py
+atlas_holdings_reunderwrite_runner /Users/yasser/scripts/atlas_holdings_reunderwrite_runner.py
+atlas_profit_protection_v2 /Users/yasser/scripts/atlas_profit_protection_v2.py
+atlas_holdings_final_action /Users/yasser/scripts/atlas_holdings_final_action.py
+dataclass_compatibility True

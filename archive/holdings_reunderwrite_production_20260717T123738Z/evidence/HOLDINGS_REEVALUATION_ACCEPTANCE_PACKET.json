@@ -1,0 +1,149 @@
+{
+  "authority": {
+    "broker": "NO",
+    "mutation": "NO",
+    "trading": "ADVISORY_ONLY"
+  },
+  "input_digest": "1cb34c78dbd0952825c3f3fa1897b7847f5e64b69d6d630acfe2b34bae11acfc",
+  "packet_version": "holdings_reunderwrite.v2",
+  "policy_version": "daily_holdings_reunderwrite_v2.0.0",
+  "positions": [
+    {
+      "authoritative_price": 147.8,
+      "automatic_trade_closure": "NO",
+      "broker_authority": "NO",
+      "broker_confirmation": "NOT CONFIRMED \u2014 advisory only; no broker query or action",
+      "current_gain_loss_pct": 3.334964692721814,
+      "daily_result": "HOLD",
+      "deterministic_reason": "canonical stop intact and deterministic completed-session deterioration thresholds not met",
+      "entry": 143.03,
+      "exact_recheck": "After the next completed NYSE session at/after 16:15 ET; immediately on newly authoritative stop-hit evidence.",
+      "final_action": "HOLD",
+      "freshness": "FRESH",
+      "indicators": {
+        "atr14": 4.530357142857148,
+        "ema21": 144.5450652238584,
+        "ema50": 140.6227599172019,
+        "rsi14": 58.69054609512627
+      },
+      "optional_context": {
+        "catalyst": "NOT PROVIDED \u2014 optional, non-authoritative",
+        "prior_daily_result": null
+      },
+      "peak_gain_pct": 5.488359085506533,
+      "peak_price": 150.88,
+      "pp_result": "HOLD",
+      "price_authority": "massive:adjusted_daily_aggregates",
+      "session_date": "2026-07-16",
+      "stop": 143.04,
+      "stop_status": "NOT BREACHED: authoritative completed-session low > canonical DB stop",
+      "surrendered_pct_points": 2.1533943927847194,
+      "target": 157.17,
+      "ticker": "ABNB",
+      "trade_id": 48
+    },
+    {
+      "authoritative_price": 61.49,
+      "automatic_trade_closure": "NO",
+      "broker_authority": "NO",
+      "broker_confirmation": "NOT CONFIRMED \u2014 advisory only; no broker query or action",
+      "current_gain_loss_pct": 7.688266199649737,
+      "daily_result": "HOLD",
+      "deterministic_reason": "profit protection TRIM REVIEW: target not reached; canonical target retained",
+      "entry": 57.1,
+      "exact_recheck": "After the next completed NYSE session at/after 16:15 ET; immediately on newly authoritative stop-hit evidence.",
+      "final_action": "TRIM REVIEW",
+      "freshness": "FRESH",
+      "indicators": {
+        "atr14": 1.2410642857142864,
+        "ema21": 58.56144059529762,
+        "ema50": 56.107282704848764,
+        "rsi14": 67.44186046511626
+      },
+      "optional_context": {
+        "catalyst": "NOT PROVIDED \u2014 optional, non-authoritative",
+        "prior_daily_result": null
+      },
+      "peak_gain_pct": 8.633975481611207,
+      "peak_price": 62.03,
+      "pp_result": "TRIM REVIEW",
+      "price_authority": "massive:adjusted_daily_aggregates",
+      "session_date": "2026-07-16",
+      "stop": 59.71,
+      "stop_status": "NOT BREACHED: authoritative completed-session low > canonical DB stop",
+      "surrendered_pct_points": 0.9457092819614701,
+      "target": 63.35,
+      "ticker": "BAC",
+      "trade_id": 47
+    },
+    {
+      "authoritative_price": 65.97,
+      "automatic_trade_closure": "NO",
+      "broker_authority": "NO",
+      "broker_confirmation": "NOT CONFIRMED \u2014 advisory only; no broker query or action",
+      "current_gain_loss_pct": -12.853368560105686,
+      "daily_result": "SELL NOW",
+      "deterministic_reason": "verified stop hit: session low 64.6400 <= canonical stop 76.4400",
+      "entry": 75.7,
+      "exact_recheck": "After the next completed NYSE session at/after 16:15 ET; immediately on newly authoritative stop-hit evidence.",
+      "final_action": "SELL NOW",
+      "freshness": "FRESH",
+      "indicators": {
+        "atr14": 9.977199999999998,
+        "ema21": 69.37744002701984,
+        "ema50": 59.83803109505409,
+        "rsi14": 49.495459132189715
+      },
+      "optional_context": {
+        "catalyst": "NOT PROVIDED \u2014 optional, non-authoritative",
+        "prior_daily_result": null
+      },
+      "peak_gain_pct": 18.705416116248344,
+      "peak_price": 89.86,
+      "pp_result": "EXIT REVIEW",
+      "price_authority": "massive:adjusted_daily_aggregates",
+      "session_date": "2026-07-16",
+      "stop": 76.44,
+      "stop_status": "BREACHED: authoritative completed-session low <= canonical DB stop",
+      "surrendered_pct_points": 31.55878467635403,
+      "target": 87.96,
+      "ticker": "PENG",
+      "trade_id": 111
+    },
+    {
+      "authoritative_price": 115.55,
+      "automatic_trade_closure": "NO",
+      "broker_authority": "NO",
+      "broker_confirmation": "NOT CONFIRMED \u2014 advisory only; no broker query or action",
+      "current_gain_loss_pct": -8.612780765580514,
+      "daily_result": "HOLD",
+      "deterministic_reason": "canonical stop intact and deterministic completed-session deterioration thresholds not met",
+      "entry": 126.44,
+      "exact_recheck": "After the next completed NYSE session at/after 16:15 ET; immediately on newly authoritative stop-hit evidence.",
+      "final_action": "HOLD",
+      "freshness": "FRESH",
+      "indicators": {
+        "atr14": 8.100064285714286,
+        "ema21": 124.88256578840901,
+        "ema50": 121.70364918626714,
+        "rsi14": 42.33521083878824
+      },
+      "optional_context": {
+        "catalyst": "NOT PROVIDED \u2014 optional, non-authoritative",
+        "prior_daily_result": null
+      },
+      "peak_gain_pct": 7.394811768427709,
+      "peak_price": 135.79,
+      "pp_result": "HOLD",
+      "price_authority": "massive:adjusted_daily_aggregates",
+      "session_date": "2026-07-16",
+      "stop": 113.35,
+      "stop_status": "NOT BREACHED: authoritative completed-session low > canonical DB stop",
+      "surrendered_pct_points": 16.00759253400822,
+      "target": 156.61,
+      "ticker": "SYNA",
+      "trade_id": 18
+    }
+  ],
+  "run_date": "2026-07-16"
+}

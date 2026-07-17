@@ -1,0 +1,112 @@
+gui/501/com.atlas.intraday = {
+	active count = 0
+	path = /Users/yasser/Library/LaunchAgents/com.atlas.intraday.plist
+	type = LaunchAgent
+	state = not running
+
+	program = /usr/bin/python3
+	arguments = {
+		/usr/bin/python3
+		/Users/yasser/scripts/atlas_intraday.py
+	}
+
+	stdout path = /Users/yasser/scripts/atlas_intraday.log
+	stderr path = /Users/yasser/scripts/atlas_intraday.err.log
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.V28FNGheZR/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		XPC_SERVICE_NAME => com.atlas.intraday
+	}
+
+	domain = gui/501 [100018]
+	asid = 100018
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 0
+	last exit code = (never exited)
+
+	event triggers = {
+		com.atlas.intraday.268435826 => {
+			keepalive = 0
+			service = com.atlas.intraday
+			stream = com.apple.launchd.calendarinterval
+			monitor = com.apple.UserEventAgent-Aqua
+			descriptor = {
+				"Minute" => 20
+			}
+		}
+		com.atlas.intraday.268435825 => {
+			keepalive = 0
+			service = com.atlas.intraday
+			stream = com.apple.launchd.calendarinterval
+			monitor = com.apple.UserEventAgent-Aqua
+			descriptor = {
+				"Minute" => 10
+			}
+		}
+		com.atlas.intraday.268435824 => {
+			keepalive = 0
+			service = com.atlas.intraday
+			stream = com.apple.launchd.calendarinterval
+			monitor = com.apple.UserEventAgent-Aqua
+			descriptor = {
+				"Minute" => 0
+			}
+		}
+		com.atlas.intraday.268435829 => {
+			keepalive = 0
+			service = com.atlas.intraday
+			stream = com.apple.launchd.calendarinterval
+			monitor = com.apple.UserEventAgent-Aqua
+			descriptor = {
+				"Minute" => 50
+			}
+		}
+		com.atlas.intraday.268435828 => {
+			keepalive = 0
+			service = com.atlas.intraday
+			stream = com.apple.launchd.calendarinterval
+			monitor = com.apple.UserEventAgent-Aqua
+			descriptor = {
+				"Minute" => 40
+			}
+		}
+		com.atlas.intraday.268435827 => {
+			keepalive = 0
+			service = com.atlas.intraday
+			stream = com.apple.launchd.calendarinterval
+			monitor = com.apple.UserEventAgent-Aqua
+			descriptor = {
+				"Minute" => 30
+			}
+		}
+	}
+
+	event channels = {
+		"com.apple.launchd.calendarinterval" = {
+			port = 0x0
+			active = 0
+			managed = 1
+			reset = 0
+			hide = 0
+			watching = 1
+		}
+	}
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+
+	properties = inferred program
+}

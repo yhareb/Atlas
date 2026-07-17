@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.atlas.daily</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/yasser/scripts/atlas_daily.py</string>
+    <string>--dry-run</string>
+  </array>
+
+  <!-- Run at 16:15 local, Monday(1) through Friday(5): 15 min after the
+       US market close so exits/entries use settled closing prices. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>17</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>17</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>17</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>17</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>17</integer><key>Minute</key><integer>30</integer></dict>
+  </array>
+
+  <!-- If the Mac was asleep at 16:15, run as soon as it wakes. -->
+  <key>RunAtLoad</key><false/>
+
+  <key>StandardOutPath</key><string>/Users/yasser/scripts/atlas_daily.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/yasser/scripts/atlas_daily.err.log</string>
+</dict>
+</plist>

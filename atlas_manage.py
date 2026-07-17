@@ -350,10 +350,11 @@ def _expire_stale_pending_pullbacks(pending_rows, live=False, threshold=0.07, pr
 
 
 def _load_perme_threshold_overlay(path=None, now_utc=None):
-    """Load Perme ticker threshold overlay from latest_context.json.
+    """Return an overlay only from the strict provenance-bound contract.
 
-    Missing, stale, invalid, or NEUTRAL context returns an inactive overlay so
-    the existing Atlas thresholds remain unchanged.
+    Legacy Perme prose/latest_context fields are never parsed. Missing, stale,
+    malformed, conflicting, or unverifiable packets preserve exact baseline
+    behavior.
     """
     overlay = {
         "active": False,
@@ -362,46 +363,15 @@ def _load_perme_threshold_overlay(path=None, now_utc=None):
         "global_min_rvol": 1.5,
         "perme_flagged_tickers": set(),
     }
-    context_path = path or os.environ.get("ATLAS_PERME_CONTEXT_PATH") or "/Users/yasser/atlas_inbox/latest_context.json"
-    try:
-        if not os.path.exists(context_path):
-            return overlay
-        with open(context_path) as f:
-            payload = json.load(f)
-        if not isinstance(payload, dict):
-            return overlay
-        generated_at = str(payload.get("generated_at") or "").strip()
-        ttl_minutes = int(payload.get("ttl_minutes") or 240)
-        if not generated_at or ttl_minutes <= 0:
-            return overlay
-        stamp = generated_at[:-1] + "+00:00" if generated_at.endswith("Z") else generated_at
-        generated_dt = datetime.fromisoformat(stamp)
-        if generated_dt.tzinfo is None:
-            generated_dt = generated_dt.replace(tzinfo=timezone.utc)
-        generated_dt = generated_dt.astimezone(timezone.utc)
-        current_utc = now_utc or datetime.now(timezone.utc)
-        if current_utc.tzinfo is None:
-            current_utc = current_utc.replace(tzinfo=timezone.utc)
-        if (current_utc.astimezone(timezone.utc) - generated_dt).total_seconds() > ttl_minutes * 60:
-            return overlay
-        sentiment = str(payload.get("sentiment") or "NEUTRAL").upper()
-        if sentiment not in {"RISK_OFF", "CAUTION"}:
-            return overlay
-        flagged = {
-            str(t or "").strip().upper()
-            for t in (payload.get("ticker_notes") or [])
-            if str(t or "").strip()
-        }
-        overlay.update({
-            "active": True,
-            "sentiment": sentiment,
-            "global_min_pillars": 4 if sentiment == "RISK_OFF" else 3,
-            "global_min_rvol": 2.0 if sentiment == "RISK_OFF" else 1.5,
-            "perme_flagged_tickers": flagged,
-        })
-        return overlay
-    except Exception:
-        return overlay
+    result = load_context(
+        path or os.environ.get("ATLAS_MACRO_CONTEXT_V1_PATH"),
+        now=now_utc,
+        consumer="atlas_manage.threshold_overlay",
+    )
+    gates, _receipt = adapt_existing_gates(result.context, consumer="atlas_manage.threshold_overlay")
+    if gates.get("perme_regime") == "RISK_OFF":
+        overlay.update(active=True, sentiment="RISK_OFF", global_min_pillars=4, global_min_rvol=2.0)
+    return overlay
 
 
 def _float_value(value, default=0.0):
@@ -508,14 +478,15 @@ def run(args):
     # V1.2 is opt-in. Missing/rejected context preserves the legacy path.
     _macro_load = load_context(os.environ.get("ATLAS_MACRO_CONTEXT_V1_PATH"), consumer="atlas_manage")
     _macro_legacy, _macro_receipt = adapt_existing_gates(_macro_load.context, consumer="atlas_manage")
-    perme_overlay = _load_perme_threshold_overlay()
-    if _macro_load.context is not None:
-        perme_overlay = dict(perme_overlay)
-        _sent = _macro_legacy.get("sentiment", "NEUTRAL")
-        perme_overlay.update(active=_sent == "RISK_OFF", sentiment=_sent,
-                             global_min_pillars=4 if _sent == "RISK_OFF" else 3,
-                             global_min_rvol=2.0 if _sent == "RISK_OFF" else 1.5,
-                             perme_flagged_tickers=set())
+    # No legacy latest_context fallback: only the single validated object may
+    # reach existing regime/event gates.
+    perme_overlay = {
+        "active": _macro_legacy.get("perme_regime") == "RISK_OFF",
+        "sentiment": _macro_legacy.get("sentiment", "NEUTRAL"),
+        "global_min_pillars": 4 if _macro_legacy.get("perme_regime") == "RISK_OFF" else 3,
+        "global_min_rvol": 2.0 if _macro_legacy.get("perme_regime") == "RISK_OFF" else 1.5,
+        "perme_flagged_tickers": set(),
+    }
     LAST_RUN_SUMMARY["macro_context_v1_receipt"] = dict(_macro_receipt if _macro_load.context is not None else _macro_load.receipt)
     quiver_packet = None
     quiver_packet_status = "disabled"

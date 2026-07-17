@@ -5,6 +5,10 @@ from zoneinfo import ZoneInfo
 
 import requests
 from atlas_notify import send_telegram, _admin_chat_id as _owner_chat_id
+try:
+    import atlas_cycle_receipts as _cycle_receipts
+except Exception:
+    _cycle_receipts = None
 # atlas_stream imports provider/engine credentials; streaming is currently disabled
 # below, so avoid importing it during render/import smoke.
 atlas_stream = None
@@ -737,15 +741,15 @@ def _header_lines(summary, hold_count):
             # Canonical valuation is represented by the typed holding projection;
             # never eagerly evaluate the legacy row authority for header decoration.
             valid, excluded, invested, current_value = [], [], 0.0, 0.0
-        roi = ((current_value - invested) / invested * 100.0) if invested else 0.0
+        roi = ((current_value - invested) / invested * 100.0) if invested else None
         positions_note = " · valuation PARTIAL excl " + ",".join([str(x) for x in excluded if x]) if excluded else ""
     except Exception:
-        roi = 0.0
+        roi = None
         positions_note = ""
     lines = [
         f"🦅 ATLAS INTRADAY — {now_et} ET",
         f"📡 {regime} · SPY {spy}{macro_note}",
-        f"💰 Equity {_money(account.get('equity'))} · Cash {_money(account.get('cash'))} · {positions} positions · ROI {_fmt_pct(roi, signed=True, decimals=1)}{positions_note}",
+        f"💰 Equity {_money(account.get('equity'))} · Cash {_money(account.get('cash'))} · {positions} positions · ROI {'N/A' if roi is None else _fmt_pct(roi, signed=True, decimals=1)}{positions_note}",
     ]
     perme_line = _perme_header_line(_perme_flags(summary))
     if perme_line:
@@ -1749,9 +1753,21 @@ def _authority_open_position_rows(summary=None):
         rows = atlas_db.get_open_positions()
     except Exception:
         rows = atlas_db.get_trades(status="OPEN")
+    # The backward-compatible position projection omits trade id/broker_ref.
+    # Join those lifecycle identifiers from the canonical trade ledger so the
+    # report can resolve broker-fill evidence without treating broker_ref alone
+    # as confirmation.
+    try:
+        trade_rows = {str(r.get("ticker") or "").upper(): dict(r) for r in atlas_db.get_trades(status="OPEN")}
+    except Exception:
+        trade_rows = {}
     out = []
     for row in rows or []:
         row = dict(row or {})
+        ledger_row = trade_rows.get(_row_ticker(row), {})
+        for key in ("id", "broker_ref", "status"):
+            if row.get(key) in (None, "") and ledger_row.get(key) not in (None, ""):
+                row[key] = ledger_row.get(key)
         ticker = _row_ticker(row)
         entry = row.get("entry_price") or row.get("price")
         hold = holds_by_ticker.get(ticker, {})
@@ -2231,6 +2247,8 @@ def _build_report(summary):
                 positions=_authority_open_position_rows(summary),
                 db_path=getattr(atlas_db, "DB_PATH", "/Users/yasser/scripts/atlas.db"),
             )
+            if _cycle_receipts:
+                _cycle_receipts.record_holdings(summary["intraday_holdings_freshness_packet"], _authority_open_position_rows(summary))
         except Exception as exc:
             print(f"[intraday] holdings freshness packet warning: {type(exc).__name__}: {exc}")
     lines = _header_lines(summary, hold_count)
@@ -2457,6 +2475,8 @@ def run_intraday():
         LOCK_PATH = os.environ.get("ATLAS_INTRADAY_LOCK_PATH") or STAGING_LOCK_PATH
     now = datetime.datetime.now()
     print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Atlas intraday loop starting...")
+    if os.environ.get("ATLAS_CYCLE_ID"):
+        print(f"ATLAS_CYCLE_ID={os.environ['ATLAS_CYCLE_ID']}")
     if cli_force and cli_dry_run and not cli_live:
         print("[intraday] --force without --live: verification dry-run enforced; production DB writes and Telegram sends suppressed")
         print(f"[intraday] dry-run lock path: {LOCK_PATH}")
@@ -2678,6 +2698,9 @@ def _run_intraday_locked(now, force=False, dry_run=False):
         print("Result: DO NOTHING. No new buys, no exits this cycle.")
 
     report_msg = _build_report(summary)
+    if _cycle_receipts:
+        _cycle_receipts.record_perme(summary)
+        _cycle_receipts.record_accounting(summary)
     print("\n[intraday] telegram report body begin")
     print(report_msg)
     print("[intraday] telegram report body end")

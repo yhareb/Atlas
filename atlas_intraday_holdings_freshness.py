@@ -18,6 +18,7 @@ except Exception:
     _shared_strongest_action = None
 from typing import Any
 from zoneinfo import ZoneInfo
+from atlas_report_authority import broker_confirmation_for_trade
 
 ET = ZoneInfo("America/New_York")
 UTC = dt.timezone.utc
@@ -574,7 +575,10 @@ def normalized_price_for_holding(ticker: str, pos: dict[str, Any], *, stop: floa
     ticker = str(ticker or "").upper()
     pa = pos.get("price_authority") if isinstance(pos.get("price_authority"), dict) else {}
     display_price = _num(pos.get("current_price") or pos.get("last_price") or pos.get("price"))
+    entry_price = _num(pos.get("entry_price") or pos.get("entry"))
     fallback_price = display_price
+    if fallback_price is not None and entry_price is not None and abs(fallback_price - entry_price) < 0.005:
+        fallback_price = None
     fallback_reason = None
     source_label = str(pa.get("source_label") or pos.get("current_price_source") or "").upper()
     pa_price = _num(pa.get("display_price") or pa.get("valuation_price"))
@@ -602,7 +606,7 @@ def normalized_price_for_holding(ticker: str, pos: dict[str, Any], *, stop: floa
     elif pa.get("is_valuation_valid") and _num(pa.get("valuation_price")) is not None and "FALLBACK" not in source_label:
         price = _num(pa.get("valuation_price")); source = pa.get("source_label") or "latest valid valuation mark"; authority = "LATEST_VALID_VALUATION_MARK"; fallback_used = False
     else:
-        price = fallback_price; source = "Fallback display price only; not used for stop logic"; authority = "FALLBACK_DISPLAY_ONLY"; fallback_used = True
+        price = None; source = "N/A — no actionable current-session price"; authority = "PRICE_UNAVAILABLE"; fallback_used = True
         fallback_reason = pa.get("reason") or "No actionable live/provider/stop-event price available"
     stop_status = "UNKNOWN — NO ACTIONABLE PRICE"
     actionable = not fallback_used and price is not None
@@ -725,7 +729,8 @@ def build_packet(*, summary: dict[str, Any] | None = None, positions: list[dict[
             giveback = daily.get("human_metrics", {}).get("profit_surrendered_pct")
         except Exception:
             giveback = None
-        broker_status = "NOT CONFIRMED"
+        broker_evidence = broker_confirmation_for_trade(db_path, _position_trade_id(pos)) if db_path and _position_trade_id(pos) else {"status": "NOT CONFIRMED"}
+        broker_status = broker_evidence.get("status") or "NOT CONFIRMED"
         why = []
         if final == daily_action and daily_action not in {"HOLD", "DATA INCOMPLETE"}:
             why.append(f"Daily Re-Underwriting {daily_action}")
@@ -762,6 +767,7 @@ def build_packet(*, summary: dict[str, Any] | None = None, positions: list[dict[
             "stop_event_price": price_obj.get("stop_event_price"),
             "stop_event_timestamp": price_obj.get("stop_event_timestamp"),
             "broker_status": broker_status,
+            "broker_confirmation_evidence": broker_evidence,
             "entry": entry,
             "current_price": cur,
             "quantity": shares,

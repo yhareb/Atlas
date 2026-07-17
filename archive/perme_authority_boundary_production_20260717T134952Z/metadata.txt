@@ -1,0 +1,4 @@
+/Users/yasser/scripts/archive/perme_authority_boundary_production_20260717T134952Z/atlas_engine.py owner=yasser group=staff mode=-rwxr-xr-x
+/Users/yasser/scripts/archive/perme_authority_boundary_production_20260717T134952Z/atlas_macro_context_v1.py owner=yasser group=staff mode=-rw-------
+/Users/yasser/scripts/archive/perme_authority_boundary_production_20260717T134952Z/atlas_manage.py owner=yasser group=staff mode=-rw-r--r--
+/Users/yasser/scripts/archive/perme_authority_boundary_production_20260717T134952Z/atlas_portfolio.py owner=yasser group=staff mode=-rw-r--r--

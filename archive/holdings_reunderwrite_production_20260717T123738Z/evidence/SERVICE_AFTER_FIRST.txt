@@ -1,0 +1,61 @@
+gui/501/com.atlas.holdings_reunderwrite = {
+	active count = 0
+	path = /Users/yasser/Library/LaunchAgents/com.atlas.holdings_reunderwrite.plist
+	type = LaunchAgent
+	state = not running
+
+	program = /Users/yasser/scripts/run_holdings_reunderwrite.sh
+	arguments = {
+		/Users/yasser/scripts/run_holdings_reunderwrite.sh
+	}
+
+	stdout path = /Users/yasser/Library/Logs/Atlas/holdings_reunderwrite.out.log
+	stderr path = /Users/yasser/Library/Logs/Atlas/holdings_reunderwrite.err.log
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.V28FNGheZR/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		TZ => America/New_York
+		XPC_SERVICE_NAME => com.atlas.holdings_reunderwrite
+	}
+
+	domain = gui/501 [100018]
+	asid = 100018
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 1
+	last exit code = 0
+
+	resource coalition = {
+		ID = 75853
+		type = resource
+		state = active
+		active count = 1
+		name = com.atlas.holdings_reunderwrite
+	}
+
+	jetsam coalition = {
+		ID = 75854
+		type = jetsam
+		state = active
+		active count = 1
+		name = com.atlas.holdings_reunderwrite
+	}
+
+	spawn type = background (5)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+	run interval = 900 seconds
+
+	properties = runatload | inferred program
+}

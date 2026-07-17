@@ -354,7 +354,9 @@ def resolve_price_authority(
         reason = "cache_missing_timestamp_or_stale"
     return {
         "ticker": ticker,
-        "display_price": entry,
+        # Entry is reference data only. It must never occupy a current-price
+        # slot because downstream renderers may calculate P/L from it.
+        "display_price": None,
         "valuation_price": None,
         "source_class": "FALLBACK" if entry is not None else PRICE_SOURCE_UNAVAILABLE,
         "source_label": SOURCE_FALLBACK if entry is not None else "[UNAVAILABLE]",
@@ -364,6 +366,29 @@ def resolve_price_authority(
         "is_valuation_valid": False,
         "reason": reason,
     }
+
+
+def broker_confirmation_for_trade(db_path: str, trade_id: Any) -> dict[str, Any]:
+    """Read canonical fill evidence for one trade; broker_ref alone is insufficient."""
+    import json
+    import sqlite3
+    result = {"confirmed": False, "status": "NOT CONFIRMED", "event_id": None, "source": None}
+    try:
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT id,source,payload_json FROM portfolio_event_journal "
+            "WHERE event_type='BROKER_BUY_FILLED' AND legacy_trades_id=? ORDER BY effective_at DESC,id DESC",
+            (int(trade_id),),
+        ).fetchall()
+        con.close()
+        for row in rows:
+            payload = json.loads(row["payload_json"] or "{}")
+            if payload.get("quantity") not in (None, "") and payload.get("entry_price") not in (None, ""):
+                return {"confirmed": True, "status": "CONFIRMED", "event_id": row["id"], "source": row["source"]}
+    except Exception:
+        pass
+    return result
 
 
 def valuation_excluded_tickers(rows: Iterable[dict] | None) -> list[str]:

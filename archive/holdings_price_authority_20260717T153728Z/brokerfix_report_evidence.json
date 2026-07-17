@@ -1,0 +1,13 @@
+{
+  "observed_at": "2026-07-17T15:56:59.606552+00:00",
+  "price": "$114.30",
+  "detail_price": "$114.30",
+  "broker": "CONFIRMED",
+  "entry_fallback": false,
+  "begin": 1,
+  "end": 1,
+  "traceback": false,
+  "overlap": false,
+  "success": false,
+  "detail": "   FINAL ACTION: DATA INCOMPLETE\n   AUTHORITATIVE PRICE: $114.30\n   PRICE SOURCE: Market data\n   Current price/session: $114.30 (Market data; session 2026-07-17)\n   Entry: $126.44\n   Current gain/loss: \u22129.6% (\u2212$96)\n   Peak gain: +7.4%\n   Profit surrendered: 11.2 percentage points\n   Canonical stop: $113.35\n   Canonical target: $156.61\n   STOP STATUS: NEAR STOP (UNKNOWN)\n   DAILY RE-UNDERWRITING: DATA INCOMPLETE\n   PROFIT PROTECTION: HOLD (Latest completed-session data from Jul 16)\n   Why now: DATA INCOMPLETE \u2014 NO TRADE INSTRUCTION\n   Exact recheck condition: Recheck next completed session; escalate on EMA21/50-day loss, RS deterioration, or catalyst risk.\n   Broker confirmation: CONFIRMED\n   Data freshness: holdings packet STALE; Profit Protection FRESH_LATEST_COMPLETED_SESSION"
+}

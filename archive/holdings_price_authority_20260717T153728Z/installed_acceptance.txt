@@ -1,0 +1,1 @@
+{"BAC": "post-sale eligible", "broker_event_id": 78, "invalid_event_reason": "event timestamp invalid or missing", "missing_price": "N/A", "production_stale_ids": [], "tests": "PASS", "valid_price": 115.3}

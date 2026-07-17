@@ -47,6 +47,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.environ.get("ATLAS_SCRIPTS_DIR", "/Users/yasser/scripts"))
 
 import atlas_db
+import atlas_corporate_action_gate as corporate_action_gate
 import atlas_account as acct
 from atlas_time import current_et_market_date, add_trading_days
 from atlas_symbol_meta import normalize_price, normalize_snapshot_fields
@@ -363,6 +364,10 @@ def check_admission(ticker, regime=None, pending=None):
     """
     ticker = ticker.upper()
     pending = {p.upper() for p in (pending or [])}
+
+    ca_allowed, ca_receipt = corporate_action_gate.admission(ticker, "central_candidate_admission")
+    if not ca_allowed:
+        return False, f"CORPORATE_ACTION_{ca_receipt['outcome']}: {ca_receipt['reason']}"
 
     if ticker in BLOCKED_TRADE_TICKERS:
         return False, f"Benchmark/index ETF excluded from trading ({ticker})"
@@ -946,7 +951,9 @@ def evaluate_exit(lot, dry_run=True, regime=None, macro_context_v1=None):
         trail_note = f"regime risk-OFF -> stop tightened to breakeven ({regime_detail})"
 
     # ── Macro-stress full re-analysis ─────────────────────────────────────────
-    perme_ctx = macro_context_v1 if macro_context_v1 is not None else _load_perme_context()
+    # A caller must supply values adapted from the validated strict contract.
+    # Never fall back to legacy prose/latest_context.
+    perme_ctx = macro_context_v1 or {}
     perme_sentiment = str((perme_ctx or {}).get("sentiment") or "NEUTRAL").upper()
     perme_ticker_notes = [str(t).upper() for t in ((perme_ctx or {}).get("ticker_notes") or [])]
     perme_suppressed_sectors = [str(s).upper() for s in ((perme_ctx or {}).get("suppressed_sectors") or [])]
@@ -1097,24 +1104,8 @@ def evaluate_exit(lot, dry_run=True, regime=None, macro_context_v1=None):
 
 
 def _load_perme_context():
-    """Load and validate Perme latest_context.json. Returns dict or None if stale/missing."""
-    import json as _json
-    from pathlib import Path as _Path
-    from datetime import datetime as _dt
-    _ctx_path = _Path("/Users/yasser/atlas_inbox/latest_context.json")
-    try:
-        if not _ctx_path.exists():
-            return None
-        _ctx = _json.loads(_ctx_path.read_text())
-        _generated_raw = str(_ctx.get("generated_at") or "").strip()
-        _ttl_minutes = int(_ctx.get("ttl_minutes") or 240)
-        _generated_at = _dt.strptime(_generated_raw, "%Y-%m-%dT%H:%M:%SZ")
-        _age_minutes = (_dt.utcnow() - _generated_at).total_seconds() / 60
-        if _age_minutes > _ttl_minutes:
-            return None  # stale
-        return _ctx
-    except Exception:
-        return None
+    """Compatibility shim: legacy Perme prose has zero strategy authority."""
+    return None
 
 
 def _compute_rvol(aggs, lookback=20):
@@ -1322,6 +1313,7 @@ def consider_gap_up_breakout(signal_result, dry_run=True, regime=None, pending=N
     }
     if not dry_run:
         try:
+            corporate_action_gate.enforce_automatic_write(ticker)
             atlas_db.open_trade(
                 ticker, round(entry, 2), shares, stop_loss=stop, risk_pct=decision["risk_pct"], target_price=target,
                 status="PENDING_FILL",
@@ -1767,6 +1759,7 @@ def consider_intraday_breakout_continuation(signal_result, dry_run=True, regime=
     }
     if not dry_run:
         try:
+            corporate_action_gate.enforce_automatic_write(ticker)
             atlas_db.open_trade(
                 ticker, entry, shares, stop_loss=stop, risk_pct=decision["risk_pct"], target_price=target,
                 status="PENDING_FILL",
@@ -2021,6 +2014,7 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
 
     if not dry_run:
         try:
+            corporate_action_gate.enforce_automatic_write(ticker)
             atlas_db.open_trade(
                 ticker, fill, shares,
                 stop_loss=stop, risk_pct=decision["risk_pct"], target_price=target,

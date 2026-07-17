@@ -1,0 +1,3 @@
+Restore source preimages with atomic fsync+rename from *.predeploy to /Users/yasser/scripts/.
+Restore DB via SQLite backup API from atlas.db.pre_reconcile only if reconciliation changed rows (none expected).
+Predeploy DB SHA: 2fd4e0868b7da12095eab5fcbe72b1c77c9bb5641b00e4c02dfbd607705874e7

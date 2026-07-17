@@ -1,0 +1,18 @@
+{
+  "open_count": 4,
+  "evaluated": 4,
+  "missing": [],
+  "duplicates": [],
+  "one_action_each": true,
+  "completed_session": true,
+  "valid_price_authority": true,
+  "no_broker_authority": true,
+  "final_actions": {
+    "ABNB": "HOLD",
+    "BAC": "TRIM REVIEW",
+    "PENG": "SELL NOW",
+    "SYNA": "HOLD"
+  },
+  "packet_sha_expected": true,
+  "pass": true
+}

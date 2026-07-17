@@ -1,0 +1,69 @@
+{
+  "backup_dir": "/Users/yasser/scripts/archive/atlas_ca_transaction_20260717T111245-0400-1c7515aa",
+  "deployment_id": "20260717T111245-0400-1c7515aa",
+  "import_origins": {
+    "gate": "/Users/yasser/scripts/atlas_corporate_action_gate.py",
+    "portfolio": "/Users/yasser/scripts/atlas_portfolio.py"
+  },
+  "installed_acceptance": {
+    "copied_db_sha256": "a72c7b383bf1f95525f35b9a55530349942d81abab28ca34a895828e5af28a42",
+    "external_boundaries": "INERT",
+    "fk_errors": 0,
+    "integrity": "ok",
+    "production_db_writes": 0
+  },
+  "manual_cycles_triggered": 0,
+  "protected_post": {
+    "/Users/yasser/scripts/atlas.db": "6532fc35ded98947069d318e4e5f7a1d97b304fcf2754c41cc5ddcb3ec2960d6",
+    "/Users/yasser/scripts/atlas_holdings_final_action.py": "b1e876905b6bc131fe9c3db2408fb105d12e00f9c5210f430266a9501a3f30d9",
+    "/Users/yasser/scripts/atlas_holdings_reunderwrite.py": "6940b1b340a5b3d292b20d3fa31550badea197146673a5d629f65db5fef3c281",
+    "/Users/yasser/scripts/atlas_holdings_reunderwrite_runner.py": "03758c677681a267e404d39cda11482b1cb7fe4769071f4f0e80ac9ecb59a4e8",
+    "/Users/yasser/scripts/atlas_perme.py": "348408bf64738ef6f96bbbbccbe9f37263f7406afe919c45921230c82628e2cb"
+  },
+  "protected_pre": {
+    "/Users/yasser/scripts/atlas.db": "6532fc35ded98947069d318e4e5f7a1d97b304fcf2754c41cc5ddcb3ec2960d6",
+    "/Users/yasser/scripts/atlas_holdings_final_action.py": "b1e876905b6bc131fe9c3db2408fb105d12e00f9c5210f430266a9501a3f30d9",
+    "/Users/yasser/scripts/atlas_holdings_reunderwrite.py": "6940b1b340a5b3d292b20d3fa31550badea197146673a5d629f65db5fef3c281",
+    "/Users/yasser/scripts/atlas_holdings_reunderwrite_runner.py": "03758c677681a267e404d39cda11482b1cb7fe4769071f4f0e80ac9ecb59a4e8",
+    "/Users/yasser/scripts/atlas_perme.py": "348408bf64738ef6f96bbbbccbe9f37263f7406afe919c45921230c82628e2cb"
+  },
+  "services_before": [
+    {
+      "label": "com.atlas.daily",
+      "loaded": true,
+      "plist": "/Users/yasser/Library/LaunchAgents/com.atlas.daily_backup_20260622_220421_wave3.plist"
+    },
+    {
+      "label": "com.atlas.intraday",
+      "loaded": true,
+      "plist": "/Users/yasser/Library/LaunchAgents/com.atlas.intraday.plist"
+    }
+  ],
+  "state_sha256": "e917bb466ebfebc6316f05142707a210d99e796bbae5fe9321ace2b37ed7f88d",
+  "status": "DEPLOYED_BLOCKED_PENDING_LIVE_ACCEPTANCE",
+  "targets": [
+    {
+      "pre_gid": null,
+      "pre_mode": null,
+      "pre_uid": null,
+      "preimage": "ABSENT",
+      "target": "/Users/yasser/scripts/atlas_corporate_action_gate.py"
+    },
+    {
+      "backup": "/Users/yasser/scripts/archive/atlas_ca_transaction_20260717T111245-0400-1c7515aa/atlas_portfolio.py.predeploy",
+      "backup_sha256": "03a691bab0d211eb48a7a6b26cd4823b3298e3b7d49c3a5c05cf5556392b3931",
+      "pre_gid": 20,
+      "pre_mode": 420,
+      "pre_uid": 501,
+      "preimage": "03a691bab0d211eb48a7a6b26cd4823b3298e3b7d49c3a5c05cf5556392b3931",
+      "target": "/Users/yasser/scripts/atlas_portfolio.py"
+    },
+    {
+      "pre_gid": null,
+      "pre_mode": null,
+      "pre_uid": null,
+      "preimage": "ABSENT",
+      "target": "/Users/yasser/scripts/.atlas_ca_enforcement_state.json"
+    }
+  ]
+}

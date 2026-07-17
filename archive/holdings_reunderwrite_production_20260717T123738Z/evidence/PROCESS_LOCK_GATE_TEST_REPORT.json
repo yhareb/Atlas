@@ -1,0 +1,93 @@
+{
+  "status": "PASS",
+  "tests": [
+    {
+      "name": "no runner/no lock CLEAR",
+      "pass": true,
+      "detail": "zero exact matches; absent fixture lock"
+    },
+    {
+      "name": "loaded idle service CLEAR",
+      "pass": true,
+      "detail": "launchd loaded state is not process evidence"
+    },
+    {
+      "name": "real runner BLOCK exact PID",
+      "pass": true,
+      "detail": [
+        {
+          "pid": 4242,
+          "ppid": 1,
+          "command": "/usr/bin/python3 /Users/yasser/scripts/atlas_holdings_reunderwrite_runner.py",
+          "parsed_script": "/Users/yasser/scripts/atlas_holdings_reunderwrite_runner.py",
+          "parse_reason": "interpreter script argv",
+          "match_reason": "exact approved execution path in script position"
+        }
+      ]
+    },
+    {
+      "name": "deployment command containing terms CLEAR",
+      "pass": true,
+      "detail": "term only in non-script argument"
+    },
+    {
+      "name": "grep/helper containing terms CLEAR",
+      "pass": true,
+      "detail": "grep/python -c ignored"
+    },
+    {
+      "name": "unrelated Python CLEAR",
+      "pass": true,
+      "detail": "different exact script path"
+    },
+    {
+      "name": "live matching lock owner BLOCK",
+      "pass": true,
+      "detail": {
+        "path": "/var/folders/nz/48nykj7s0tl__8dfhq6dd0vm0000gn/T/holdings-gate-test-oqsy7b0_/lock",
+        "exists": true,
+        "age_seconds": 4.8160552978515625e-05,
+        "sanitized_contents": "62716",
+        "recorded_pid": 62716,
+        "pid_liveness": true,
+        "live_pid_executes_approved_runner_path": true,
+        "status": "BLOCK_LIVE_MATCHING_LOCK_OWNER"
+      }
+    },
+    {
+      "name": "stale lock explicitly reported without false live match",
+      "pass": true,
+      "detail": {
+        "path": "/var/folders/nz/48nykj7s0tl__8dfhq6dd0vm0000gn/T/holdings-gate-test-oqsy7b0_/stale",
+        "exists": true,
+        "age_seconds": 2.2411346435546875e-05,
+        "sanitized_contents": "99999999",
+        "recorded_pid": 99999999,
+        "pid_liveness": false,
+        "live_pid_executes_approved_runner_path": false,
+        "status": "CLEAR_STALE_PID_REPORTED"
+      }
+    },
+    {
+      "name": "invalid lock sanitized and explicitly reported",
+      "pass": true,
+      "detail": {
+        "path": "/var/folders/nz/48nykj7s0tl__8dfhq6dd0vm0000gn/T/holdings-gate-test-oqsy7b0_/invalid",
+        "exists": true,
+        "age_seconds": 2.4080276489257812e-05,
+        "sanitized_contents": "[REDACTED_INVALID_LOCK_CONTENT]",
+        "recorded_pid": null,
+        "pid_liveness": false,
+        "live_pid_executes_approved_runner_path": false,
+        "status": "CLEAR_INVALID_LOCK_REPORTED"
+      }
+    },
+    {
+      "name": "all test artifacts cleaned",
+      "pass": true,
+      "detail": "TemporaryDirectory cleanup completed; production lock untouched"
+    }
+  ],
+  "production_runner_invoked": false,
+  "production_lock_mutated": false
+}
