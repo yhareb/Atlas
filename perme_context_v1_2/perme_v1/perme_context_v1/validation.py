@@ -3,7 +3,7 @@ import math
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
-from .build import NUMERIC_KEYS, TRADE_WORDS, _freshness, _importance, _iso, _number, _scheduled, _source_timestamp, _tickers
+from .build import NUMERIC_KEYS, TRADE_WORDS, _confidence, _freshness, _importance, _iso, _number, _scheduled, _source_timestamp, _tickers
 
 ET=ZoneInfo("America/New_York")
 TOP={"schema","generated_at","expires_at","freshness","mode","routine","sources","evidence","macro_regime","events","open_holdings","trading_instructions"}
@@ -84,6 +84,7 @@ def validate_context(packet:dict[str,Any],now:datetime|None=None)->dict[str,Any]
         if len(source_items)!=1 or any(x not in evidence for x in event["evidence_ids"]): raise ValidationError("event evidence cardinality")
         item=source_items[0]; row=item["raw_record"]; expected_type=type_map[item["source_record_type"]]
         if event["event_type"]!=expected_type or event["importance"]!=_importance(row): raise ValidationError("unsupported classification")
+        if event["confidence"]!=_confidence(row): raise ValidationError("unsupported confidence")
         if event["ticker"] not in _tickers(row): raise ValidationError("unsupported ticker")
         pair=(item["evidence_id"],event["ticker"])
         if pair in seen_pairs: raise ValidationError("duplicate ticker event")

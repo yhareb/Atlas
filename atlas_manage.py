@@ -51,7 +51,7 @@ import atlas_stop_invariant_guard as stop_guard
 from atlas_symbol_meta import company_name
 from atlas_time import current_et_market_date_str
 from atlas_engine import analyze_ticker, check_regime, check_macro_context, get_macro_sentiment
-from atlas_macro_context_v1 import load_context, adapt_existing_gates
+from atlas_macro_context_v1 import load_context, adapt_existing_gates, context_gate
 from atlas_market_gear import build_gear_packet, header_line
 try:
     import atlas_fda_calendar
@@ -96,26 +96,26 @@ def _timing_log(section, event, start=None, ticker=None, extra=""):
     print(f"[TIMING] {datetime.now().isoformat(timespec='seconds')} section={section} event={event}{symbol}{elapsed}{detail}", flush=True)
 
 
-def _analyze_ticker_worker(ticker, regime):
+def _analyze_ticker_worker(ticker, regime, macro_context_v1=None):
     tkr = str(ticker or "").upper()
     pillar_start = time.perf_counter()
     _timing_log("pillar_checks", "start", ticker=tkr)
     try:
-        res = analyze_ticker(tkr, regime=regime)
+        res = analyze_ticker(tkr, regime=regime, macro_context_v1=macro_context_v1)
     except TypeError:
         res = analyze_ticker(tkr)  # back-compat if regime kwarg absent
     _timing_log("pillar_checks", "end", pillar_start, tkr)
     return tkr, res
 
 
-def _run_parallel_pillar_checks(tickers, regime, max_workers=8):
+def _run_parallel_pillar_checks(tickers, regime, macro_context_v1=None, max_workers=8):
     unique = [str(t or "").upper() for t in dict.fromkeys(tickers or []) if str(t or "").strip()]
     workers = max(1, int(max_workers or 8))
     parallel_start = time.perf_counter()
     _timing_log("pillar_checks_parallel", "start", extra=f"tickers={len(unique)} workers={workers}")
     results = {}
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        future_to_ticker = {executor.submit(_analyze_ticker_worker, tkr, regime): tkr for tkr in unique}
+        future_to_ticker = {executor.submit(_analyze_ticker_worker, tkr, regime, macro_context_v1): tkr for tkr in unique}
         for future in as_completed(future_to_ticker):
             tkr, res = future.result()
             results[tkr] = res
@@ -454,6 +454,7 @@ def run(args, gear_packet=None):
     # V1.2 is opt-in. Missing/rejected context preserves the legacy path.
     _macro_load = load_context(os.environ.get("ATLAS_MACRO_CONTEXT_V1_PATH"), consumer="atlas_manage")
     _macro_legacy, _macro_receipt = adapt_existing_gates(_macro_load.context, consumer="atlas_manage")
+    _macro_gate = context_gate(_macro_load, _macro_legacy)
     # Exactly one immutable packet is shared by all entry routes and receipts.
     if gear_packet is None:
         try:
@@ -524,6 +525,7 @@ def run(args, gear_packet=None):
     # 2. EXITS FIRST --------------------------------------------------------
     _hdr("EXITS  (evaluated before any new buys)")
     exit_results = port.run_exits(dry_run=not live, macro_context_v1=_macro_legacy if _macro_load.context is not None else None,
+                                  macro_context_status=_macro_gate,
                                   eligible_trade_ids=eligible_trade_ids)
     sells = [r for r in exit_results if r.get("action") == "SELL"]
     LAST_RUN_SUMMARY.update({"exit_results": exit_results, "sells": sells})
@@ -614,7 +616,7 @@ def run(args, gear_packet=None):
     idx = 0
     ticker_loop_start = time.perf_counter()
     _timing_log("ticker_loop", "start", extra=f"candidates={len(candidates)}")
-    pillar_results = _run_parallel_pillar_checks(candidates, entry_regime, max_workers=8)
+    pillar_results = _run_parallel_pillar_checks(candidates, entry_regime, _macro_legacy if _macro_gate.status == "ACCEPTED" else None, max_workers=8)
     while idx < len(candidates):
         tkr = candidates[idx]
         idx += 1
@@ -718,7 +720,7 @@ def run(args, gear_packet=None):
         if res is None:
             # Dynamic additions, e.g. sector-sweep peers, are analyzed only if they
             # were not present in the original base batch.
-            _, res = _analyze_ticker_worker(tkr, entry_regime)
+            _, res = _analyze_ticker_worker(tkr, entry_regime, _macro_legacy if _macro_load.context is not None else None)
             pillar_results[tkr.upper()] = res
         if "error" in res:
             scan_errors.append({"ticker": tkr.upper(), "error": res["error"]})

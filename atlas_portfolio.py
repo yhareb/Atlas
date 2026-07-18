@@ -890,7 +890,7 @@ def _days_open(entry_at):
     return (datetime.now(timezone.utc) - dt).days
 
 
-def evaluate_exit(lot, dry_run=True, regime=None, macro_context_v1=None):
+def evaluate_exit(lot, dry_run=True, regime=None, macro_context_v1=None, macro_context_status=None):
     """Decide whether an open lot should be closed today.
 
     Uses the persisted decision stop as the hard stop. Trailing/regime rules may
@@ -905,7 +905,7 @@ def evaluate_exit(lot, dry_run=True, regime=None, macro_context_v1=None):
 
     aggs = _normalize_price_bars(ticker, get_massive_aggs(ticker, days=90))
     if not aggs:
-        return {"ticker": ticker, "action": "HOLD", "reason": "no price data"}
+        return _apply_macro_context_gate({"ticker": ticker, "action": "HOLD", "reason": "no price data"}, macro_context_status)
 
     atr = calculate_atr(aggs) or (entry * 0.05)
     exit_aggs = aggs
@@ -1135,7 +1135,7 @@ def evaluate_exit(lot, dry_run=True, regime=None, macro_context_v1=None):
             result["action"] = "ALERT"
             result["reason"] = macro_alert_reason
             result["recommendation"] = macro_recommendation
-        return result
+        return _apply_macro_context_gate(result, macro_context_status)
 
     # Exit detection is advisory-only. The position remains OPEN until
     # close_trade_broker_confirmed() receives confirmed broker sell evidence,
@@ -1144,6 +1144,20 @@ def evaluate_exit(lot, dry_run=True, regime=None, macro_context_v1=None):
             "entry": round(entry, 2), "stop": round(stop, 2), "target": round(target, 2),
             "regime_ok": regime_ok, "macro_alert": macro_alert_reason,
             "advisory_only": True, "broker_confirmation_required": True}
+
+
+def _apply_macro_context_gate(result, gate):
+    """Convert non-safety outcomes to DATA_INCOMPLETE; deterministic SELL wins."""
+    status = getattr(gate, "status", None) if gate is not None else "MISSING"
+    if status == "ACCEPTED" or result.get("action") == "SELL":
+        return result
+    if status not in {"MISSING", "STALE", "INVALID"}:
+        status = "INVALID"
+    out = dict(result)
+    out.update(action="DATA_INCOMPLETE", reason="strict Perme context " + status.lower(),
+               reason_code="PERME_CONTEXT_" + status, macro_context_status=status,
+               macro_context_sha256=getattr(gate, "input_sha256", None))
+    return out
 
 
 def _load_perme_context():
@@ -1178,7 +1192,7 @@ def current_atr14_for_open_lots(lots=None):
     return out
 
 
-def run_exits(dry_run=True, macro_context_v1=None, eligible_trade_ids=None):
+def run_exits(dry_run=True, macro_context_v1=None, macro_context_status=None, eligible_trade_ids=None):
     """Evaluate every open lot for an exit. Returns list of decisions."""
     results = []
     regime = check_regime()
@@ -1186,7 +1200,7 @@ def run_exits(dry_run=True, macro_context_v1=None, eligible_trade_ids=None):
     for lot in _open_positions():
         if eligible is not None and int(lot.get("id")) not in eligible:
             continue
-        results.append(evaluate_exit(lot, dry_run=dry_run, regime=regime, macro_context_v1=macro_context_v1))
+        results.append(evaluate_exit(lot, dry_run=dry_run, regime=regime, macro_context_v1=macro_context_v1, macro_context_status=macro_context_status))
     return results
 
 

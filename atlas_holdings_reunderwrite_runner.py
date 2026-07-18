@@ -4,6 +4,7 @@ import argparse,datetime as dt,fcntl,json,os,sqlite3,tempfile
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from atlas_holdings_reunderwrite import build_packet,stable_actions
+from atlas_macro_context_v1 import load_context,adapt_existing_gates,context_gate
 ET=ZoneInfo('America/New_York')
 # NYSE full-close exceptions; runner also requires authoritative evidence for the session.
 HOLIDAYS={'2026-01-01','2026-01-19','2026-02-16','2026-04-03','2026-05-25','2026-06-19','2026-07-03','2026-09-07','2026-11-26','2026-12-25'}
@@ -19,15 +20,15 @@ def atomic(path,obj):
     p=Path(path);p.parent.mkdir(parents=True,exist_ok=True);data=json.dumps(obj,sort_keys=True,indent=2)+'\n'; fd,tmp=tempfile.mkstemp(dir=p.parent,prefix=p.name+'.')
     with os.fdopen(fd,'w') as f:f.write(data);f.flush();os.fsync(f.fileno())
     os.replace(tmp,p)
-def run(db,evidence,out,sidecar,now,force_session=None):
-    session=force_session or due_session(now); packet=build_packet(db,evidence,session)
+def run(db,evidence,out,sidecar,now,force_session=None,macro_context=None):
+    session=force_session or due_session(now); loaded=load_context(macro_context,now=now,consumer='holdings_reunderwrite');legacy,_=adapt_existing_gates(loaded.context,consumer='holdings_reunderwrite');gate=context_gate(loaded,legacy);packet=build_packet(db,evidence,session,gate,macro_context)
     Path(sidecar).parent.mkdir(parents=True,exist_ok=True)
     con=sqlite3.connect(sidecar);con.execute('PRAGMA foreign_keys=ON');con.execute(SCHEMA)
     before=con.total_changes;con.execute('INSERT OR IGNORE INTO runs VALUES(?,?,?,?)',(session,packet['input_digest'],json.dumps(packet,sort_keys=True),now.astimezone(dt.timezone.utc).isoformat()));con.commit();inserted=con.total_changes-before
     atomic(out,packet);con.close()
     return {'status':'INSERTED' if inserted else 'IDEMPOTENT_NO_OP','session':session,'positions':len(packet['positions']),'input_digest':packet['input_digest'],'stable_actions':stable_actions(packet)}
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--db',required=True);p.add_argument('--evidence',required=True);p.add_argument('--out',required=True);p.add_argument('--sidecar',required=True);p.add_argument('--now');p.add_argument('--force-session');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--db',required=True);p.add_argument('--evidence',required=True);p.add_argument('--out',required=True);p.add_argument('--sidecar',required=True);p.add_argument('--macro-context',required=True);p.add_argument('--now');p.add_argument('--force-session');a=p.parse_args()
     now=dt.datetime.fromisoformat(a.now) if a.now else dt.datetime.now(ET)
-    print(json.dumps(run(a.db,a.evidence,a.out,a.sidecar,now,a.force_session),sort_keys=True));return 0
+    print(json.dumps(run(a.db,a.evidence,a.out,a.sidecar,now,a.force_session,a.macro_context),sort_keys=True));return 0
 if __name__=='__main__':raise SystemExit(main())

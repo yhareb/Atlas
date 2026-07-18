@@ -92,20 +92,30 @@ class AtlasMacroContextV1:
 class ContextLoadResult:
     context:AtlasMacroContextV1|None; receipt:Mapping[str,Any]
 
+@dataclass(frozen=True)
+class MacroContextGateV1:
+    status:str; context:Mapping[str,Any]|None; input_sha256:str|None
+    rejection_code:str|None; generated_at:str|None; ttl_minutes:int|None
+
 def load_context(path:str|Path|None,*,now:datetime|None=None,authoritative_holdings:Iterable[str]|None=None,consumer="loader")->ContextLoadResult:
-    base={"contract":"AtlasMacroContextV1","consumer":consumer,"input_sha256":None,"status":"NO_CONTEXT","accepted_field_paths":[],"consumed_field_paths":[],"ignored_field_paths":[],"rejected_field_paths":[],"mapped_holdings":[],"mapped_candidates":[],"existing_gates_evaluated":[],"deterministic_effect":"NONE"}
+    base={"contract":"AtlasMacroContextV1","consumer":consumer,"input_sha256":None,"status":"MISSING","accepted_field_paths":[],"consumed_field_paths":[],"ignored_field_paths":[],"rejected_field_paths":[],"mapped_holdings":[],"mapped_candidates":[],"existing_gates_evaluated":[],"deterministic_effect":"NONE","generated_at":None,"ttl_minutes":None}
     if not path: return ContextLoadResult(None,MappingProxyType(base))
     p=Path(path)
     if not p.exists(): return ContextLoadResult(None,MappingProxyType(base))
-    data=p.read_bytes(); base["input_sha256"]=sha256(data).hexdigest()
+    data=p.read_bytes(); base["input_sha256"]=sha256(data).hexdigest(); raw=None
     try: raw=json.loads(data); validate_machine_context(raw,now=now,authoritative_holdings=authoritative_holdings)
     except Exception as e:
-        base.update(status="REJECTED",rejected_field_paths=["$"],deterministic_effect="NONE",rejection_code=str(e))
+        code=str(e); base.update(status="STALE" if code=="STALE_CONTEXT" else "INVALID",rejected_field_paths=["$"],deterministic_effect="NONE",rejection_code=code)
+        if isinstance(raw,dict): base.update(generated_at=raw.get("generated_at"),ttl_minutes=(raw.get("freshness") or {}).get("ttl_minutes"))
         return ContextLoadResult(None,MappingProxyType(base))
     paths=tuple(sorted(_paths(raw)))
     ctx=AtlasMacroContextV1(base["input_sha256"],raw["generated_at"],raw["macro_regime"],tuple(_freeze(x) for x in raw["event_risks"]),paths)
-    base.update(status="ACCEPTED",accepted_field_paths=list(paths),ignored_field_paths=list(paths))
+    base.update(status="ACCEPTED",accepted_field_paths=list(paths),ignored_field_paths=list(paths),generated_at=raw["generated_at"],ttl_minutes=raw["freshness"]["ttl_minutes"])
     return ContextLoadResult(ctx,MappingProxyType(base))
+
+def context_gate(result:ContextLoadResult,legacy:Mapping[str,Any]|None=None)->MacroContextGateV1:
+    r=result.receipt
+    return MacroContextGateV1(str(r.get("status") or "INVALID"),MappingProxyType(dict(legacy or {})) if result.context else None,r.get("input_sha256"),r.get("rejection_code"),r.get("generated_at"),r.get("ttl_minutes"))
 
 def adapt_existing_gates(ctx:AtlasMacroContextV1|None,*,consumer:str,candidates:Iterable[str]=(),holdings:Iterable[str]=())->tuple[dict[str,Any],dict[str,Any]]:
     """Return legacy gate values plus a truthful deterministic consumption receipt."""
@@ -129,4 +139,4 @@ def adapt_existing_gates(ctx:AtlasMacroContextV1|None,*,consumer:str,candidates:
     consumed=sorted(set(consumed)); r["consumed_field_paths"]=consumed; r["ignored_field_paths"]=sorted(set(r["accepted_field_paths"])-set(consumed)); r["existing_gates_evaluated"]=sorted(set(gates)); r["deterministic_effect"]="EXISTING_GATES_ONLY" if consumed else "NONE"
     return legacy,r
 
-__all__=["AtlasMacroContextV1","ContextLoadResult","ContextRejected","validate_machine_context","load_context","adapt_existing_gates"]
+__all__=["AtlasMacroContextV1","ContextLoadResult","MacroContextGateV1","ContextRejected","validate_machine_context","load_context","adapt_existing_gates","context_gate"]

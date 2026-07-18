@@ -70,7 +70,7 @@ def evaluate(trade:dict,bars:list[dict],expected_session:str,source:str,daily_pr
     freshness='FRESH' if not missing else 'INCOMPLETE: '+', '.join(missing)
     return {'ticker':t,'trade_id':trade.get('id'),'authoritative_price':price,'session_date':last['date'] if last else None,'price_authority':source,'entry':entry,'current_gain_loss_pct':gain,'peak_price':peak,'peak_gain_pct':peak_gain,'surrendered_pct_points':surrendered,'stop':stop,'target':target,'stop_status':stop_status,'daily_result':action,'pp_result':(pp_prior or {}).get('action','NOT AVAILABLE'),'final_action':action,'deterministic_reason':reason,'exact_recheck':'After the next completed NYSE session at/after 16:15 ET; immediately on newly authoritative stop-hit evidence.','freshness':freshness,'broker_confirmation':'NOT CONFIRMED — advisory only; no broker query or action','indicators':indicators,'optional_context':{'catalyst':'NOT PROVIDED — optional, non-authoritative','prior_daily_result':(daily_prior or {}).get('action')},'broker_authority':'NO','automatic_trade_closure':'NO'}
 
-def build_packet(db,evidence,expected_session):
+def build_packet(db,evidence,expected_session,macro_gate=None,macro_path=None):
     ev=json.loads(Path(evidence).read_text()); provider=ev.get('provider') or {}; trades=open_trades(db); positions=[]
     from atlas_profit_protection_v2 import evaluate as pp_evaluate
     for tr in trades:
@@ -86,9 +86,16 @@ def build_packet(db,evidence,expected_session):
             row['final_action']='TRIM REVIEW';row['deterministic_reason']='profit protection TRIM REVIEW: '+pp.why
         elif row['final_action']=='HOLD' and pp.action in ('TIGHTEN','PROTECT PROFIT'):
             row['final_action']='HOLD TIGHT';row['deterministic_reason']='profit protection '+pp.action+': '+pp.why
+        status=getattr(macro_gate,'status','MISSING'); digest=getattr(macro_gate,'input_sha256',None)
+        row.update(macro_context_status=status,macro_context_sha256=digest,macro_context_path=macro_path)
+        if status!='ACCEPTED' and row['final_action']!='SELL NOW':
+            if status not in ('MISSING','STALE','INVALID'):status='INVALID'
+            row['final_action']='DATA INCOMPLETE';row['deterministic_reason']='PERME_CONTEXT_'+status
+        elif status=='ACCEPTED' and getattr(macro_gate,'context',{}).get('perme_regime')=='RISK_OFF' and row['final_action'] not in ('SELL NOW','EXIT REVIEW','TRIM REVIEW'):
+            row['final_action']='EXIT REVIEW';row['deterministic_reason']='PERME_RISK_OFF_ADVISORY'
         positions.append(row)
-    core={'packet_version':'holdings_reunderwrite.v2','policy_version':POLICY_VERSION,'run_date':expected_session,'positions':positions,'authority':{'trading':'ADVISORY_ONLY','broker':'NO','mutation':'NO'}}
-    core['input_digest']=sha({'policy':POLICY_VERSION,'session':expected_session,'positions':positions});return core
+    core={'packet_version':'holdings_reunderwrite.v2','policy_version':POLICY_VERSION,'run_date':expected_session,'positions':positions,'macro_context':{'status':getattr(macro_gate,'status','MISSING'),'sha256':getattr(macro_gate,'input_sha256',None),'path':macro_path},'authority':{'trading':'ADVISORY_ONLY','broker':'NO','mutation':'NO','stop_mutation':'NO'}}
+    core['input_digest']=sha({'policy':POLICY_VERSION,'session':expected_session,'positions':positions,'macro_context':core['macro_context']});return core
 
 def stable_actions(packet):
     return json.dumps([{'ticker':p['ticker'],'action':p['final_action'],'reason':p['deterministic_reason']} for p in packet['positions']],sort_keys=True,separators=(',',':'))

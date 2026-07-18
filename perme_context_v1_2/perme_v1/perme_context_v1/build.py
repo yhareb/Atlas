@@ -66,6 +66,13 @@ def _importance(row:dict[str,Any])->str:
     return val if val in {"LOW","MEDIUM","HIGH"} else "UNKNOWN"
 
 
+def _confidence(row:dict[str,Any])->float:
+    value=row.get("confidence")
+    if isinstance(value,bool) or not isinstance(value,(int,float)) or not 0<=float(value)<=1:
+        raise ValueError("provider confidence missing/invalid")
+    return float(value)
+
+
 def _number(value:Any)->float|None:
     if isinstance(value,bool) or value is None: return None
     if isinstance(value,(int,float)):
@@ -125,7 +132,7 @@ def build(bundle:dict[str,Any], ttl_minutes:int=240)->dict[str,Any]:
             if value is not None: facts.append({"name":key,"value":value,"unit":unit})
         for ticker in _tickers(row):
             relationship="OPEN_HOLDING" if ticker is not None and ticker in open_tickers else ("NOT_OPEN_HOLDING" if ticker is not None else "MARKET_WIDE")
-            events.append({"event_id":_id("EVENT-",[ev["evidence_id"],event_type,ticker]),"evidence_ids":[ev["evidence_id"]]+([portfolio_eid] if ticker else []),"event_type":event_type,"importance":_importance(row),"headline":_event_name(row,sector or ticker or event_type),"ticker":ticker,"issuer":None,"sector":sector,"industry":None,"numeric_facts":facts,"scheduled_event_time":_scheduled(row,event_type),"confidence":1.0 if bundle["mode"]=="mock" else 0.9,"portfolio_relationship":relationship,"causal_claims":[]})
+            events.append({"event_id":_id("EVENT-",[ev["evidence_id"],event_type,ticker]),"evidence_ids":[ev["evidence_id"]]+([portfolio_eid] if ticker else []),"event_type":event_type,"importance":_importance(row),"headline":_event_name(row,sector or ticker or event_type),"ticker":ticker,"issuer":None,"sector":sector,"industry":None,"numeric_facts":facts,"scheduled_event_time":_scheduled(row,event_type),"confidence":_confidence(row),"portfolio_relationship":relationship,"causal_claims":[]})
     changes=[f["value"] for e in events for f in e["numeric_facts"] if f["name"]=="change_pct"]
     regime="RISK_OFF" if any(e["importance"]=="HIGH" for e in events) or (changes and min(changes)<=-1.0) else ("RISK_ON" if changes and min(changes)>0 else "NEUTRAL")
     return {"schema":"PermeContextV1","generated_at":observed,"expires_at":expires,"freshness":{"ttl_minutes":ttl_minutes,"status":"FRESH"},"mode":bundle["mode"],"routine":p["routine"],"sources":sources,"evidence":evidence,"macro_regime":regime,"events":events,"open_holdings":{"evidence_ids":[portfolio_eid],"tickers":sorted(open_tickers)},"trading_instructions":[]}

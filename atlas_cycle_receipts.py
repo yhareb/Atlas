@@ -69,11 +69,13 @@ def record_holdings(packet,positions):
  record("holdings_health",{"source_version":"holdings_reunderwrite.v1","packet_id":hp.get("input_digest"),"packet_sha256":sha_file(src) if src and Path(src).is_file() else None,"run_date":hp.get("run_date"),"freshness":hp.get("freshness"),"action":"LOAD_EXISTING_ONLY","source":src,"sidecar_path":sidecar,"sidecar_integrity":integrity,"duplicate":False,"missing":hp.get("status")=="MISSING"})
 
 def record_perme(summary):
- r=(summary or {}).get("macro_context_v1_receipt") or {}; path=os.environ.get("ATLAS_MACRO_CONTEXT_V1_PATH"); raw={}
- try: raw=json.loads(Path(path).read_text()) if path else {}
+ r=(summary or {}).get("macro_context_v1_receipt") or {}; path=os.environ.get("ATLAS_MACRO_CONTEXT_V1_PATH"); raw={}; artifact={}
+ try:
+  raw=json.loads(Path(path).read_text()) if path else {}; artifact=raw.get("artifact") or {}
  except Exception: pass
  consumed=[x for x in (r.get("consumed_field_paths") or []) if x=="$.macro_regime" or x=="$.event_risks" or x.endswith(".event_id")]
- record("perme_strict",{"artifact_id":r.get("input_sha256"),"artifact_path":path,"artifact_sha256":sha_file(path) if path and Path(path).is_file() else None,"status":r.get("status"),"accepted":r.get("status")=="ACCEPTED","rejected":r.get("status")=="REJECTED","consumed_paths":consumed,"generated_at":raw.get("generated_at"),"ttl_minutes":(raw.get("freshness") or {}).get("ttl_minutes"),"schema":raw.get("schema")})
+ envelope_sha=sha_file(path) if path and Path(path).is_file() else None
+ record("perme_strict",{"envelope_path":path,"envelope_sha256":envelope_sha,"consumer_input_sha256":r.get("input_sha256"),"payload_path":artifact.get("path"),"payload_sha256":artifact.get("sha256"),"status":r.get("status"),"accepted":r.get("status")=="ACCEPTED","rejected":r.get("status")!="ACCEPTED","consumed_paths":consumed,"generated_at":raw.get("generated_at"),"ttl_minutes":(raw.get("freshness") or {}).get("ttl_minutes"),"schema":raw.get("schema")})
 
 def record_accounting(summary):
  d=cycle_dir(); events=[]
@@ -109,5 +111,30 @@ def verify_cycle(cid,require_envelope=False):
  if a.get("ca_receipt_count")!=len(list(d.glob("corporate_action.*.json"))): errors.append("CA_COUNT")
  hp=(objs.get("holdings_price") or {}).get("payload") or {}
  if hp.get("packet_sha256")!=hp.get("header_packet_sha256") or hp.get("packet_sha256")!=hp.get("detail_packet_sha256"): errors.append("HOLDINGS_PACKET_LINK")
+ perme=(objs.get("perme_strict") or {}).get("payload") or {}
+ if perme.get("status")!="ACCEPTED" or perme.get("accepted") is not True or perme.get("rejected") is not False: errors.append("PERME_NOT_ACCEPTED")
+ ep=perme.get("envelope_path"); envelope=None
+ if not ep or not Path(ep).is_file() or sha_file(ep)!=perme.get("envelope_sha256") or perme.get("consumer_input_sha256")!=perme.get("envelope_sha256"):
+  errors.append("PERME_ENVELOPE_SHA_LINK")
+ else:
+  try:
+   envelope=json.loads(Path(ep).read_text())
+   from atlas_macro_context_v1 import validate_machine_context
+   generated_for_shape=dt.datetime.fromisoformat(str(envelope.get("generated_at")).replace("Z","+00:00"))
+   validate_machine_context(envelope,now=generated_for_shape,artifact_path=perme.get("payload_path"))
+  except Exception: errors.append("PERME_ENVELOPE_INVALID")
+ artifact=(envelope or {}).get("artifact") or {}
+ pp=perme.get("payload_path")
+ if (not pp or not Path(pp).is_file() or sha_file(pp)!=perme.get("payload_sha256")
+     or artifact.get("path")!=pp or artifact.get("sha256")!=perme.get("payload_sha256")):
+  errors.append("PERME_PAYLOAD_SHA_LINK")
+ freshness=(envelope or {}).get("freshness") or {}
+ if ((envelope or {}).get("generated_at")!=perme.get("generated_at") or freshness.get("ttl_minutes")!=perme.get("ttl_minutes")):
+  errors.append("PERME_FRESHNESS_LINK")
+ if not {"$.macro_regime","$.event_risks"}.issubset(set(perme.get("consumed_paths") or [])): errors.append("PERME_UNCONSUMED")
+ try:
+  generated=dt.datetime.fromisoformat(str(perme.get("generated_at")).replace("Z","+00:00")); ttl=int(perme.get("ttl_minutes")); now=dt.datetime.now(dt.timezone.utc)
+  if generated.tzinfo is None or now>generated.astimezone(dt.timezone.utc)+dt.timedelta(minutes=ttl): errors.append("PERME_STALE")
+ except Exception: errors.append("PERME_FRESHNESS_INVALID")
  if require_envelope and not (d/"completion_envelope.json").exists(): errors.append("MISSING_ENVELOPE")
  return (not errors),sorted(errors),objs

@@ -2218,6 +2218,14 @@ def main(argv: list[str] | None = None) -> int:
     output_bytes = path.stat().st_size
     latest_context_path = write_latest_context(briefing, path.parent, generated_at)
     engine_packet_path = write_engine_packet(context, path.parent, generated_at)
+    strict_receipt = None
+    strict_outbox = os.environ.get("PERME_STRICT_OUTBOX")
+    if strict_outbox and not args.dry_run:
+        from atlas_perme_strict import publish as publish_strict
+        strict_receipt = publish_strict(
+            context, strict_outbox, os.environ.get("ATLAS_DB", "/Users/yasser/scripts/atlas.db"), generated_at,
+            {"success": bool(str(briefing).strip()), "provider": "openrouter", "model": "moonshotai/kimi-k3"},
+        )
     if args.dry_run:
         print("[atlas_rag] dry-run: indexer suppressed")
     else:
