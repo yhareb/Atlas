@@ -1,0 +1,66 @@
+{
+  "endpoint_status": [
+    {
+      "checked_at": "2026-07-11T20:35:03Z",
+      "dataset": "congress",
+      "http_status": 200,
+      "state": "ENTITLED"
+    },
+    {
+      "checked_at": "2026-07-11T20:35:04Z",
+      "dataset": "government_contracts",
+      "http_status": 200,
+      "state": "ENTITLED"
+    },
+    {
+      "checked_at": "2026-07-11T20:35:10Z",
+      "dataset": "government_contracts_all",
+      "http_status": 404,
+      "state": "NOT_FOUND"
+    },
+    {
+      "checked_at": "2026-07-11T20:35:10Z",
+      "dataset": "insider_trading",
+      "http_status": 403,
+      "state": "UNENTITLED"
+    },
+    {
+      "checked_at": "2026-07-11T20:35:11Z",
+      "dataset": "institutional_13f_changes",
+      "http_status": 403,
+      "state": "UNENTITLED"
+    },
+    {
+      "checked_at": "2026-07-11T20:35:09Z",
+      "dataset": "lobbying",
+      "http_status": 200,
+      "state": "ENTITLED"
+    },
+    {
+      "checked_at": "2026-07-11T20:35:09Z",
+      "dataset": "off_exchange",
+      "http_status": 200,
+      "state": "ENTITLED"
+    },
+    {
+      "checked_at": "2026-07-11T20:35:10Z",
+      "dataset": "patents",
+      "http_status": 404,
+      "state": "NOT_FOUND"
+    }
+  ],
+  "freshness_state": "FRESH",
+  "generated_at": "2026-07-11T21:21:17Z",
+  "latest_completed_session": "2026-07-10",
+  "packet_digest": "eea86474cdea4019d75d20eba2cdee1c240787bb9c70111b846358906e0b9b4f",
+  "schema_version": "quiver_engine_packet_v1",
+  "source_health": {
+    "fk_rows": 0,
+    "integrity_check": "ok",
+    "quick_check": "ok",
+    "status": "PASS"
+  },
+  "source_run_id": "run_d09b07bbf161c6100e2202a0",
+  "source_sidecar_sha": "97363e43363c44a80eaee994755d7bdb4759b26cc41e72e8f49aafb16e11a025",
+  "ticker_contexts": {}
+}

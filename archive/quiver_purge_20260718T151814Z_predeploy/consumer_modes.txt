@@ -1,0 +1,10 @@
+644 /Users/yasser/scripts/atlas_manage.py
+644 /Users/yasser/scripts/atlas_intraday_advisory.py
+600 /Users/yasser/scripts/atlas_conversation_router.py
+644 /Users/yasser/scripts/pre_market_report.py
+711 /Users/yasser/scripts/atlas_eod_positions.py
+755 /Users/yasser/scripts/atlas_intraday.py
+644 /Users/yasser/scripts/atlas_holding_state_schema.py
+444 /Users/yasser/scripts/atlas_holding_state_packet_builder.py
+600 /Users/yasser/scripts/atlas_holdings_reunderwrite_acquire.py
+600 /Users/yasser/scripts/atlas_conversation_schemas.py

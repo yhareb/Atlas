@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>WorkingDirectory</key>
+	<string>/Users/yasser/scripts</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+	</dict>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>Label</key>
+	<string>com.atlas.quiver_sidecar_capture</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>/Users/yasser/scripts/atlas_quiver_sidecar.py</string>
+		<string>capture</string>
+	</array>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict>
+			<key>Weekday</key>
+			<integer>3</integer>
+			<key>Hour</key>
+			<integer>0</integer>
+			<key>Minute</key>
+			<integer>35</integer>
+		</dict>
+		<dict>
+			<key>Weekday</key>
+			<integer>4</integer>
+			<key>Hour</key>
+			<integer>0</integer>
+			<key>Minute</key>
+			<integer>35</integer>
+		</dict>
+		<dict>
+			<key>Weekday</key>
+			<integer>5</integer>
+			<key>Hour</key>
+			<integer>0</integer>
+			<key>Minute</key>
+			<integer>35</integer>
+		</dict>
+		<dict>
+			<key>Weekday</key>
+			<integer>6</integer>
+			<key>Hour</key>
+			<integer>0</integer>
+			<key>Minute</key>
+			<integer>35</integer>
+		</dict>
+		<dict>
+			<key>Weekday</key>
+			<integer>7</integer>
+			<key>Hour</key>
+			<integer>0</integer>
+			<key>Minute</key>
+			<integer>35</integer>
+		</dict>
+	</array>
+	<key>StandardOutPath</key>
+	<string>/Users/yasser/Library/Application Support/Atlas/quiver_shadow/logs/capture.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/yasser/Library/Application Support/Atlas/quiver_shadow/logs/capture.err.log</string>
+	<key>ExitTimeOut</key>
+	<integer>900</integer>
+</dict>
+</plist>

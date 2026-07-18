@@ -1,0 +1,16 @@
+metric,value
+metric_class,LIVE_FORWARD
+sample_size,0
+settled_count,0
+pending_count,0
+average_forward_return,
+median_forward_return,
+hit_rate,
+false_BUY_reduction,INSUFFICIENT_EVIDENCE
+missed_winner_rate,INSUFFICIENT_EVIDENCE
+average_R,
+score_bucket_counts,{}
+endpoint_status,"[[""congress"",""ENTITLED"",200],[""congress"",""ENTITLED"",200],[""congress"",""ENTITLED"",200],[""government_contracts"",""ENTITLED"",200],[""government_contracts"",""ENTITLED"",200],[""government_contracts"",""ENTITLED"",200],[""government_contracts_all"",""NOT_FOUND"",404],[""government_contracts_all"",""NOT_FOUND"",404],[""government_contracts_all"",""NOT_FOUND"",404],[""insider_trading"",""UNENTITLED"",403],[""insider_trading"",""UNENTITLED"",403],[""insider_trading"",""UNENTITLED"",403],[""institutional_13f_changes"",""UNENTITLED"",403],[""institutional_13f_changes"",""UNENTITLED"",403],[""institutional_13f_changes"",""UNENTITLED"",403],[""lobbying"",""ENTITLED"",200],[""lobbying"",""ENTITLED"",200],[""lobbying"",""ENTITLED"",200],[""off_exchange"",""ENTITLED"",200],[""off_exchange"",""ENTITLED"",200],[""off_exchange"",""ENTITLED"",200],[""patents"",""NOT_FOUND"",404],[""patents"",""NOT_FOUND"",404],[""patents"",""NOT_FOUND"",404]]"
+research_gates,"{""min_10d_20d"":false,""min_30_bucket"":false,""min_50_settled_broad"":false}"
+performance_conclusion,INSUFFICIENT_EVIDENCE
+strategy_recommendation,NO_RECOMMENDATION

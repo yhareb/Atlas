@@ -1,0 +1,870 @@
+#!/usr/bin/env python3
+"""Intraday holdings action/freshness packet builder and renderer.
+
+Report-only deterministic merge layer. No DB writes, no Telegram, no broker action,
+no strategy/scoring mutation.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import json
+import os
+import sqlite3
+from pathlib import Path
+try:
+    from atlas_holdings_final_action import strongest_action as _shared_strongest_action
+except Exception:
+    _shared_strongest_action = None
+from typing import Any
+from zoneinfo import ZoneInfo
+from atlas_report_authority import broker_confirmation_for_trade
+
+ET = ZoneInfo("America/New_York")
+UTC = dt.timezone.utc
+ACTION_PRIORITY = {
+    "SELL NOW": 0,
+    "EXIT REVIEW": 1,
+    "TRIM REVIEW": 2,
+    "STOP BREACHED / URGENT STOP REVIEW": 3,
+    "STOP BREACHED": 3,
+    "HOLD TIGHT": 4,
+    "HOLD": 5,
+    "DATA INCOMPLETE": 6,
+}
+ORDERED_ACTIONS = ["SELL NOW", "EXIT REVIEW", "TRIM REVIEW", "STOP BREACHED / URGENT STOP REVIEW", "HOLD TIGHT", "HOLD", "DATA INCOMPLETE"]
+DEFAULT_HOLDINGS_PACKET_PATHS = (
+    "/Users/yasser/atlas_inbox/holdings_reunderwrite/latest/holdings_reunderwrite_packet_v1.json",
+    "/Users/yasser/atlas_inbox/holdings_reunderwrite_packet_v1.json",
+    "/Users/yasser/atlas_inbox/holdings_reunderwrite/holdings_reunderwrite_packet_v1.json",
+)
+DEFAULT_HOLDINGS_SIDECAR = "/Users/yasser/Library/Application Support/Atlas/holdings_reunderwrite/db/holdings_reunderwrite.sqlite"
+DEFAULT_PROFIT_SNAPSHOT_DIR = "/Users/yasser/Library/Application Support/Atlas/position_evidence_bake/snapshots"
+
+
+def _parse_dt(value: Any) -> dt.datetime | None:
+    if value in (None, ""):
+        return None
+    try:
+        s = str(value).strip().replace("Z", "+00:00")
+        out = dt.datetime.fromisoformat(s)
+        return out.replace(tzinfo=UTC) if out.tzinfo is None else out.astimezone(UTC)
+    except Exception:
+        return None
+
+
+def _report_now(summary: dict[str, Any] | None = None, explicit: Any = None) -> dt.datetime:
+    for value in (explicit, (summary or {}).get("advisory_as_of"), (summary or {}).get("generated_at"), (summary or {}).get("report_timestamp")):
+        parsed = _parse_dt(value)
+        if parsed:
+            return parsed
+    return dt.datetime.now(UTC)
+
+
+def _session_day(d: dt.date) -> bool:
+    # Deterministic US-market calendar subset: weekdays plus fixed/observed full-market holidays.
+    if d.weekday() >= 5:
+        return False
+    fixed = {(1, 1), (7, 4), (12, 25)}
+    if (d.month, d.day) in fixed:
+        return False
+    # Observed fixed holidays on adjacent weekdays.
+    if d.weekday() == 0 and ((d.month, d.day - 1) in fixed):
+        return False
+    if d.weekday() == 4 and ((d.month, d.day + 1) in fixed):
+        return False
+    # 2026 major full-market holidays relevant to deterministic staging.
+    if d.isoformat() in {"2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-09-07", "2026-11-26"}:
+        return False
+    return True
+
+
+def latest_completed_session(report_ts: dt.datetime) -> str:
+    et = report_ts.astimezone(ET)
+    d = et.date()
+    # Before market close, latest completed regular session is previous session.
+    if et.time() < dt.time(16, 0) or not _session_day(d):
+        d -= dt.timedelta(days=1)
+    while not _session_day(d):
+        d -= dt.timedelta(days=1)
+    return d.isoformat()
+
+
+def current_trading_session(report_ts: dt.datetime) -> str:
+    et = report_ts.astimezone(ET)
+    return et.date().isoformat() if _session_day(et.date()) else "CLOSED"
+
+
+def _sha_json(obj: Any) -> str:
+    return hashlib.sha256(json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+
+
+def _read_json(path: str | Path) -> dict[str, Any] | None:
+    try:
+        p = Path(path)
+        return json.loads(p.read_text()) if p.exists() else None
+    except Exception:
+        return None
+
+
+def _load_holdings_from_sidecar(sidecar: str = DEFAULT_HOLDINGS_SIDECAR) -> tuple[dict[str, Any] | None, str | None]:
+    p = Path(sidecar)
+    if not p.exists():
+        return None, None
+    try:
+        con = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        row = con.execute("select packet_json from underwriting_runs order by id desc limit 1").fetchone()
+        con.close()
+        if row:
+            return json.loads(row["packet_json"]), str(p)
+    except Exception:
+        return None, None
+    return None, None
+
+
+def load_holdings_packet(report_ts: dt.datetime, expected_session: str | None = None) -> dict[str, Any]:
+    paths = []
+    env = os.environ.get("ATLAS_HOLDINGS_REUNDERWRITE_PACKET")
+    if env:
+        paths.append(env)
+    paths.extend(DEFAULT_HOLDINGS_PACKET_PATHS)
+    for path in paths:
+        pkt = _read_json(path)
+        if pkt:
+            return _validate_holdings_packet(pkt, str(path), report_ts, expected_session)
+    pkt, source = _load_holdings_from_sidecar(os.environ.get("ATLAS_HOLDINGS_REUNDERWRITE_SIDECAR", DEFAULT_HOLDINGS_SIDECAR))
+    if pkt:
+        return _validate_holdings_packet(pkt, source or DEFAULT_HOLDINGS_SIDECAR, report_ts, expected_session)
+    return {"status": "MISSING", "source": None, "freshness": "MISSING", "positions": {}, "reason": "holdings packet not found"}
+
+
+def _validate_holdings_packet(pkt: dict[str, Any], source: str, report_ts: dt.datetime, expected_session: str | None) -> dict[str, Any]:
+    created = _parse_dt(pkt.get("created_at") or pkt.get("generated_at"))
+    run_date = str(pkt.get("run_date") or "")
+    positions = {str(p.get("ticker") or "").upper(): p for p in (pkt.get("positions") or []) if p.get("ticker")}
+    reasons = []
+    status = "FRESH"
+    if pkt.get("packet_version") != "holdings_reunderwrite.v1":
+        status = "INVALID"; reasons.append("packet_version_invalid")
+    if not (pkt.get("input_digest") or pkt.get("packet_digest")):
+        status = "INVALID"; reasons.append("digest_missing")
+    if not created:
+        status = "INVALID"; reasons.append("created_at_invalid")
+    else:
+        age_h = (report_ts - created).total_seconds() / 3600.0
+        if age_h < -0.01:
+            status = "INVALID"; reasons.append("created_at_future")
+        elif age_h > 96:
+            status = "STALE"; reasons.append(f"created_age_hours={age_h:.1f}")
+    if expected_session and run_date != expected_session:
+        status = "STALE" if status == "FRESH" else status
+        reasons.append(f"run_date={run_date}; expected_latest_completed_session={expected_session}")
+    return {"status": status, "source": source, "freshness": status, "run_date": run_date, "created_at": pkt.get("created_at"), "positions": positions, "reason": "; ".join(reasons) or "ok", "input_digest": pkt.get("input_digest") or pkt.get("packet_digest")}
+
+
+def latest_profit_snapshot() -> str | None:
+    env = os.environ.get("ATLAS_PROFIT_PROTECTION_SNAPSHOT")
+    if env and Path(env).exists():
+        return env
+    files = sorted(Path(DEFAULT_PROFIT_SNAPSHOT_DIR).glob("snapshot_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return str(files[0]) if files else None
+
+
+def _snapshot_bars_by_ticker(snapshot_path: str | None) -> tuple[dict[str, Any], str | None, str | None]:
+    if not snapshot_path:
+        return {}, None, None
+    snap = _read_json(snapshot_path) or {}
+    provider = snap.get("provider") or {}
+    return provider, snap.get("captured_at"), str(snapshot_path)
+
+
+def _bar_session_date(bar: dict[str, Any]) -> str | None:
+    return str(bar.get("session_date") or bar.get("date") or "")[:10] or None
+
+
+def profit_freshness_for_ticker(ticker: str, provider: dict[str, Any], captured_at: Any, report_ts: dt.datetime, latest_session: str) -> dict[str, Any]:
+    src = provider.get(ticker) or {}
+    bars = src.get("bars") or []
+    if not bars:
+        return {"state": "MISSING", "readable": "Profit Protection evidence missing", "provider_ts": None, "captured_at": captured_at, "age_hours": None, "session_date": None}
+    last = bars[-1]
+    provider_ts = last.get("provider_timestamp")
+    provider_dt = _parse_dt(provider_ts)
+    cap_dt = _parse_dt(captured_at)
+    session_date = _bar_session_date(last)
+    if not provider_dt or (captured_at and not cap_dt):
+        return {"state": "TIMESTAMP_INVALID", "readable": "Profit Protection timestamp invalid", "provider_ts": provider_ts, "captured_at": captured_at, "age_hours": None, "session_date": session_date}
+    age_h = (report_ts - provider_dt).total_seconds() / 3600.0
+    if age_h < -0.01:
+        return {"state": "TIMESTAMP_INVALID", "readable": "Profit Protection timestamp is in the future", "provider_ts": provider_ts, "captured_at": captured_at, "age_hours": round(age_h, 1), "session_date": session_date}
+    if session_date == current_trading_session(report_ts) and report_ts.astimezone(ET).time() >= dt.time(9, 30):
+        state = "FRESH_CURRENT_SESSION"
+        text = f"Current-session data from {session_date}"
+    elif session_date == latest_session:
+        state = "FRESH_LATEST_COMPLETED_SESSION"
+        text = f"Latest completed-session data from {dt.date.fromisoformat(session_date).strftime('%b %-d')}"
+    else:
+        state = "STALE"
+        text = f"Stale: {age_h:.1f} hours old; source session {session_date}, expected {latest_session}"
+    return {"state": state, "readable": text, "provider_ts": provider_ts, "captured_at": captured_at, "age_hours": round(age_h, 1), "session_date": session_date}
+
+
+def _load_profit_actions(snapshot_path: str | None, db_path: str | None) -> dict[str, dict[str, Any]]:
+    try:
+        from atlas_profit_protection_v2 import evaluate_current_open_from_snapshot, advisory_contract
+        results = evaluate_current_open_from_snapshot(snapshot_path, db_path=db_path or "/Users/yasser/scripts/atlas.db")
+        return {r.ticker: advisory_contract(r) for r in results}
+    except Exception as exc:
+        return {"__ERROR__": {"action": "DATA INCOMPLETE", "why": f"profit protection unavailable: {type(exc).__name__}: {exc}"}}
+
+
+def _norm_action(action: Any) -> str:
+    a = str(action or "DATA INCOMPLETE").upper().strip()
+    if a in {"SELL", "SELL_NOW"}:
+        return "SELL NOW"
+    if a in {"PROTECT PROFIT", "TIGHTEN"}:
+        return "HOLD TIGHT"
+    return a if a in ACTION_PRIORITY else "DATA INCOMPLETE"
+
+
+def strongest(*actions: Any) -> str:
+    if _shared_strongest_action is not None:
+        return _shared_strongest_action(*actions)
+    vals = [_norm_action(a) for a in actions if a not in (None, "")]
+    return min(vals or ["DATA INCOMPLETE"], key=lambda a: ACTION_PRIORITY.get(a, 99))
+
+
+def _num(x: Any) -> float | None:
+    try:
+        return None if x in (None, "") else float(x)
+    except Exception:
+        return None
+
+
+def _money(x: Any) -> str:
+    n = _num(x)
+    return "N/A" if n is None else f"${n:,.2f}"
+
+
+def _pct(x: Any) -> str:
+    n = _num(x)
+    if n is None:
+        return "N/A"
+    return f"{'+' if n >= 0 else '−'}{abs(n):.1f}%"
+
+
+def _row_ticker(row: dict[str, Any]) -> str:
+    return str(row.get("ticker") or row.get("symbol") or "").upper()
+
+
+def _exit_events_by_ticker(summary: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    """Retain raw exit rows as evidence only; never grant owner-facing authority here."""
+    out: dict[str, dict[str, Any]] = {}
+    for row in (summary or {}).get("exit_results") or []:
+        if not isinstance(row, dict):
+            continue
+        ticker = _row_ticker(row)
+        if ticker and str(row.get("action") or "").upper() == "SELL":
+            out[ticker] = dict(row)
+    return out
+
+
+def _execution_event_kind(event: dict[str, Any] | None) -> str | None:
+    reason = str((event or {}).get("reason") or "").lower()
+    explicit = str((event or {}).get("event_kind") or (event or {}).get("event_type") or "").upper()
+    if "STOP" in explicit or "stop hit" in reason or "stop breach" in reason:
+        return "STOP"
+    if "TARGET" in explicit or "target hit" in reason:
+        return "TARGET"
+    return None
+
+
+def validate_execution_event(ticker: str, pos: dict[str, Any], event: dict[str, Any] | None, *, report_ts: dt.datetime, db_path: str | None = None) -> dict[str, Any]:
+    """Validate one raw exit row as current-cycle evidence, never as authority by itself."""
+    ticker = str(ticker or "").upper()
+    event = dict(event or {})
+    reasons: list[str] = []
+    kind = _execution_event_kind(event)
+    event_id = event.get("event_id") or event.get("stop_event_id") or event.get("target_event_id") or event.get("journal_event_id")
+    event_ts = _parse_dt(event.get("event_timestamp") or event.get("occurred_at") or event.get("timestamp"))
+    price_ts = _parse_dt(event.get("price_timestamp") or event.get("quote_timestamp") or event.get("timestamp"))
+    price = _event_price(event)
+    source = str(event.get("price_source") or event.get("source") or "").upper()
+    role = str(event.get("price_role") or event.get("role") or "").upper()
+    event_trade = _event_trade_id(event)
+    pos_trade = _position_trade_id(pos)
+    event_lot = _event_lot_id(event)
+    pos_lot = _position_lot_id(pos, db_path)
+    stop = _num(event.get("stop") or event.get("stop_loss") or pos.get("stop_loss") or pos.get("stop"))
+    target = _num(event.get("target") or event.get("target_price") or pos.get("target_price") or pos.get("target"))
+    session = current_trading_session(report_ts)
+    if not event_id:
+        reasons.append("EVENT_ID_MISSING")
+    if kind not in {"STOP", "TARGET"}:
+        reasons.append("EVENT_KIND_INVALID")
+    if event_trade is None or pos_trade is None or event_trade != pos_trade:
+        reasons.append("TRADE_IDENTITY_INVALID")
+    if event_lot is None or pos_lot is None or event_lot != pos_lot:
+        reasons.append("LOT_IDENTITY_INVALID")
+    if str(pos.get("status") or "OPEN").upper() != "OPEN":
+        reasons.append("BROKER_LIFECYCLE_NOT_OPEN")
+    if price is None:
+        reasons.append("ACTIONABLE_PRICE_MISSING")
+    if not source or any(x in source for x in ("FALLBACK", "CACHE", "ENTRY", "INTRADAY_CYCLE")):
+        reasons.append("PRICE_SOURCE_NOT_INDEPENDENT")
+    expected_role = "STOP_EVALUATION" if kind == "STOP" else "TARGET_EVALUATION"
+    if role != expected_role:
+        reasons.append("PRICE_ROLE_INVALID")
+    if not event_ts:
+        reasons.append("EVENT_TIMESTAMP_INVALID")
+    elif event_ts.astimezone(ET).date().isoformat() != session:
+        reasons.append("EVENT_NOT_CURRENT_CYCLE")
+    if not price_ts:
+        reasons.append("PRICE_TIMESTAMP_INVALID")
+    elif price_ts.astimezone(ET).date().isoformat() != session:
+        reasons.append("PRICE_NOT_CURRENT_CYCLE")
+    if kind == "STOP" and (price is None or stop is None or price > stop):
+        reasons.append("STOP_EVENT_NOT_BREACHED")
+    if kind == "TARGET" and (price is None or target is None or price < target):
+        reasons.append("TARGET_EVENT_NOT_REACHED")
+    state = str(event.get("event_status") or event.get("lifecycle_state") or event.get("status") or "ACTIVE").upper()
+    if state not in {"ACTIVE", "ACTIVE_STOP_BREACH", "ACTIVE_TARGET_HIT", "UNRESOLVED_ACTIVE"}:
+        reasons.append("EVENT_LIFECYCLE_INVALID")
+    raw_action = _norm_action(event.get("strategy_action") or event.get("final_action") or event.get("action"))
+    if raw_action not in {"SELL NOW", "EXIT REVIEW", "TRIM REVIEW"}:
+        reasons.append("STRATEGY_ACTION_INVALID")
+    return {
+        "valid": not reasons,
+        "action": raw_action if not reasons else "DATA INCOMPLETE",
+        "kind": kind,
+        "event_id": event_id,
+        "trade_id": event_trade,
+        "lot_id": event_lot,
+        "price": price,
+        "price_source": source or None,
+        "price_role": role or None,
+        "timestamp": event_ts.isoformat() if event_ts else None,
+        "session": session,
+        "reason_codes": sorted(set(reasons)),
+        "raw_evidence": event,
+    }
+
+
+def proactive_action_rows(packet: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return deduplicated alerts from the same reconciled objects used by the report."""
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str | None]] = set()
+    for holding in packet.get("holdings") or []:
+        if not holding.get("owner_alert_required"):
+            continue
+        row = {
+            "ticker": holding.get("ticker"),
+            "action": holding.get("final_action"),
+            "why": holding.get("why_now"),
+            "event_id": holding.get("execution_event", {}).get("event_id"),
+            "reason_codes": holding.get("authority_reason_codes") or [],
+        }
+        key = (str(row["ticker"]), str(row["action"]), row["event_id"])
+        if key not in seen:
+            seen.add(key)
+            rows.append(row)
+    return rows
+
+
+def shadow_comparison_rows(packet: dict[str, Any], canonical_by_ticker: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Project the reconciled external action into append-only shadow comparison input."""
+    canonical_by_ticker = canonical_by_ticker or {}
+    return [
+        {
+            "ticker": holding.get("ticker"),
+            "legacy_reconciled_final_action": holding.get("final_action"),
+            "legacy_reconciled_digest": packet.get("input_digest"),
+            "canonical_shadow": canonical_by_ticker.get(str(holding.get("ticker") or "").upper()),
+            "raw_exit_evidence": holding.get("raw_exit_evidence"),
+            "execution_event": holding.get("execution_event"),
+            "authority_reason_codes": holding.get("authority_reason_codes") or [],
+        }
+        for holding in packet.get("holdings") or []
+    ]
+
+
+def _payload(row: Any) -> dict[str, Any]:
+    try:
+        return json.loads(row.get("payload_json") or "{}") if isinstance(row, dict) else {}
+    except Exception:
+        return {}
+
+
+def _row_get(row: Any, key: str, default: Any = None) -> Any:
+    try:
+        return row.get(key, default)
+    except Exception:
+        try:
+            return row[key]
+        except Exception:
+            return default
+
+
+def _event_time(stop_event: dict[str, Any] | None) -> dt.datetime | None:
+    if not stop_event:
+        return None
+    return _parse_dt(stop_event.get("timestamp") or stop_event.get("time") or stop_event.get("occurred_at") or stop_event.get("event_timestamp"))
+
+
+def _event_price(stop_event: dict[str, Any] | None) -> float | None:
+    return _num((stop_event or {}).get("last") or (stop_event or {}).get("price") or (stop_event or {}).get("current_price") or (stop_event or {}).get("exit_price") or (stop_event or {}).get("hit_price"))
+
+
+def _event_stop(stop_event: dict[str, Any] | None, current_stop: float | None) -> float | None:
+    return _num((stop_event or {}).get("stop") or (stop_event or {}).get("stop_loss") or (stop_event or {}).get("stop_value") or current_stop)
+
+
+def _event_trade_id(stop_event: dict[str, Any] | None) -> int | None:
+    for key in ("trade_id", "legacy_trades_id", "legacy_trade_id"):
+        try:
+            val = (stop_event or {}).get(key)
+            if val not in (None, ""):
+                return int(val)
+        except Exception:
+            pass
+    return None
+
+
+def _event_lot_id(stop_event: dict[str, Any] | None) -> int | None:
+    for key in ("lot_id", "position_lot_id"):
+        try:
+            val = (stop_event or {}).get(key)
+            if val not in (None, ""):
+                return int(val)
+        except Exception:
+            pass
+    return None
+
+
+def _position_trade_id(pos: dict[str, Any]) -> int | None:
+    for key in ("id", "trade_id", "legacy_trades_id"):
+        try:
+            val = pos.get(key)
+            if val not in (None, ""):
+                return int(val)
+        except Exception:
+            pass
+    return None
+
+
+def _position_lot_id(pos: dict[str, Any], db_path: str | None = None) -> int | None:
+    for key in ("lot_id", "position_lot_id"):
+        try:
+            val = pos.get(key)
+            if val not in (None, ""):
+                return int(val)
+        except Exception:
+            pass
+    trade_id = _position_trade_id(pos)
+    if not trade_id or not db_path:
+        return None
+    try:
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        row = con.execute("select id from position_lots where legacy_trades_id=? and status='OPEN' order by id desc limit 1", (trade_id,)).fetchone()
+        con.close()
+        return int(row[0]) if row else None
+    except Exception:
+        return None
+
+
+def resolve_stop_event_lifecycle(ticker: str, pos: dict[str, Any], stop_event: dict[str, Any] | None, *, stop: float | None, report_ts: dt.datetime, db_path: str | None = None) -> dict[str, Any]:
+    """Resolve persisted stop-hit lifecycle. Only ACTIVE_STOP_BREACH may force SELL NOW."""
+    ticker = str(ticker or "").upper()
+    event_id = (stop_event or {}).get("event_id") or (stop_event or {}).get("stop_event_id") or (stop_event or {}).get("journal_event_id")
+    event_dt = _event_time(stop_event)
+    price = _event_price(stop_event)
+    event_stop = _event_stop(stop_event, stop)
+    event_trade = _event_trade_id(stop_event)
+    pos_trade = _position_trade_id(pos)
+    event_lot = _event_lot_id(stop_event)
+    pos_lot = _position_lot_id(pos, db_path)
+    event_status = str((stop_event or {}).get("event_status") or (stop_event or {}).get("lifecycle_state") or (stop_event or {}).get("status") or "UNRESOLVED").upper()
+    reason = str((stop_event or {}).get("reason") or "")
+    base = {
+        "state": "UNKNOWN" if not stop_event else "INVALID_EVENT",
+        "event_id": event_id,
+        "trade_id": event_trade or pos_trade,
+        "lot_id": event_lot or pos_lot,
+        "event_timestamp": event_dt.isoformat() if event_dt else None,
+        "stop_value_at_event": event_stop,
+        "hit_price": price,
+        "session": event_dt.astimezone(ET).date().isoformat() if event_dt else None,
+        "event_status": event_status,
+        "actionable": False,
+        "reason": "no persisted stop-hit event",
+    }
+    if not stop_event:
+        return base
+    if event_status in {"RESOLVED_BY_BROKER_FILL", "BROKER_FILLED", "FILLED", "RESOLVED"}:
+        base.update(state="RESOLVED_BY_BROKER_FILL", reason="event status already resolved by broker fill")
+        return base
+    if event_status in {"SUPERSEDED_BY_STOP_CHANGE", "SUPERSEDED_BY_MANUAL_CORRECTION", "POSITION_CLOSED", "STALE_EVENT", "INVALID_EVENT"}:
+        base.update(state=event_status, reason=f"event status is {event_status}")
+        return base
+    if event_trade and pos_trade and event_trade != pos_trade:
+        base.update(state="POSITION_CLOSED", reason=f"event trade {event_trade} is not current open trade {pos_trade}")
+        return base
+    if event_lot and pos_lot and event_lot != pos_lot:
+        base.update(state="POSITION_CLOSED", reason=f"event lot {event_lot} is not current open lot {pos_lot}")
+        return base
+    if str(pos.get("status") or "OPEN").upper() != "OPEN":
+        base.update(state="POSITION_CLOSED", reason="current position is not OPEN")
+        return base
+    if price is None or event_stop is None or price > event_stop:
+        base.update(state="INVALID_EVENT", reason="event has no actionable stop-breach price")
+        return base
+    if not event_dt:
+        base.update(state="INVALID_EVENT", reason="event timestamp invalid or missing")
+        return base
+    # Same-session validity: historical/past-session events cannot force current SELL NOW unless already explicitly ACTIVE.
+    current_session = current_trading_session(report_ts)
+    if event_dt.astimezone(ET).date().isoformat() != current_session and event_status not in {"ACTIVE_STOP_BREACH", "ACTIVE", "UNRESOLVED_ACTIVE"}:
+        base.update(state="STALE_EVENT", reason=f"event session {base['session']} is not current session {current_session}")
+        return base
+    later_events: list[dict[str, Any]] = []
+    if db_path and (event_trade or pos_trade):
+        try:
+            con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            con.row_factory = sqlite3.Row
+            trade_id = event_trade or pos_trade
+            for r in con.execute("select * from portfolio_event_journal where legacy_trades_id=? and occurred_at > ? order by occurred_at, id", (trade_id, event_dt.isoformat())):
+                later_events.append(dict(r))
+            row = con.execute("select status, stop_loss, updated_at from trades where id=?", (trade_id,)).fetchone()
+            con.close()
+            if row and str(row["status"] or "").upper() != "OPEN":
+                base.update(state="POSITION_CLOSED", reason=f"current trade status is {row['status']}")
+                return base
+        except Exception:
+            later_events = []
+    for ev in later_events:
+        etype = str(ev.get("event_type") or "").upper()
+        pay = _payload(ev)
+        if etype == "BROKER_SELL_FILLED":
+            base.update(state="RESOLVED_BY_BROKER_FILL", reason=f"later broker fill event {ev.get('id')}")
+            return base
+        if etype in {"STOP_CHANGED", "STOP_UPDATE", "OFFICIAL_ATLAS_STOP_UPDATE"} or any(k in pay for k in ("new_stop", "new_stop_loss", "stop_loss", "old_stop")):
+            base.update(state="SUPERSEDED_BY_STOP_CHANGE", reason=f"later stop-change event {ev.get('id')}")
+            return base
+        if etype in {"MANUAL_CORRECTION", "REVERSAL", "RECONCILIATION_EXCEPTION", "RECONCILIATION"}:
+            base.update(state="SUPERSEDED_BY_MANUAL_CORRECTION", reason=f"later manual/reconciliation event {ev.get('id')}")
+            return base
+    if stop is not None and event_stop is not None and abs(float(stop) - float(event_stop)) > 1e-6:
+        base.update(state="SUPERSEDED_BY_STOP_CHANGE", reason=f"current canonical stop {stop} differs from event stop {event_stop}")
+        return base
+    if "persisted stop hit" not in reason.lower() and str((stop_event or {}).get("action") or "").upper() != "SELL":
+        base.update(state="INVALID_EVENT", reason="event is not a stop-hit SELL event")
+        return base
+    base.update(state="ACTIVE_STOP_BREACH", actionable=True, reason="unresolved current-lot stop-hit event remains active")
+    return base
+
+
+def _session_stop_label(report_ts: dt.datetime) -> str:
+    et = report_ts.astimezone(ET)
+    if dt.time(9, 30) <= et.time() <= dt.time(16, 0) and _session_day(et.date()):
+        return "STOP BREACHED — REGULAR SESSION"
+    return "STOP BREACHED — PRE-MARKET"
+
+
+def normalized_price_for_holding(ticker: str, pos: dict[str, Any], *, stop: float | None, report_ts: dt.datetime, stop_event: dict[str, Any] | None = None, db_path: str | None = None) -> dict[str, Any]:
+    ticker = str(ticker or "").upper()
+    pa = pos.get("price_authority") if isinstance(pos.get("price_authority"), dict) else {}
+    display_price = _num(pos.get("current_price") or pos.get("last_price") or pos.get("price"))
+    entry_price = _num(pos.get("entry_price") or pos.get("entry"))
+    fallback_price = display_price
+    if fallback_price is not None and entry_price is not None and abs(fallback_price - entry_price) < 0.005:
+        fallback_price = None
+    fallback_reason = None
+    source_label = str(pa.get("source_label") or pos.get("current_price_source") or "").upper()
+    pa_price = _num(pa.get("display_price") or pa.get("valuation_price"))
+    provider_verified = pa_price is not None and not pa.get("is_fallback") and "FALLBACK" not in source_label and "CACHE" not in source_label
+    event_lifecycle = resolve_stop_event_lifecycle(ticker, pos, stop_event, stop=stop, report_ts=report_ts, db_path=db_path)
+    active_event = event_lifecycle.get("state") == "ACTIVE_STOP_BREACH"
+    event_price = _event_price(stop_event)
+    event_stop = _event_stop(stop_event, stop)
+    if active_event:
+        provider_ts = _parse_dt(pa.get("timestamp") or pos.get("last_price_at"))
+        event_ts = _parse_dt(event_lifecycle.get("event_timestamp"))
+        # The exit_results stop-hit price may be copied into the position row as
+        # "intraday_cycle"; that is not an independent provider quote. Only a
+        # timestamped provider mark after the stop event may take current-display authority.
+        if source_label in {"", "INTRADAY_CYCLE"} or not provider_ts or (event_ts and provider_ts <= event_ts):
+            provider_verified = False
+    # Display authority: fresh provider quote wins for current display, but an active
+    # persisted breach still controls stop/final action until resolved/superseded.
+    if provider_verified:
+        price = pa_price; source = pa.get("source") or pa.get("source_label") or "verified current provider quote"; authority = "VERIFIED_CURRENT_PROVIDER_QUOTE"; fallback_used = False
+    elif active_event:
+        price = event_price; source = "PERSISTED STOP-HIT EVENT"; authority = "PERSISTED_STOP_HIT_EVENT"; fallback_used = False
+        if fallback_price == price:
+            fallback_price = _num(pos.get("entry_price") or pos.get("entry") or pos.get("price"))
+    elif pa.get("is_valuation_valid") and _num(pa.get("valuation_price")) is not None and "FALLBACK" not in source_label:
+        price = _num(pa.get("valuation_price")); source = pa.get("source_label") or "latest valid valuation mark"; authority = "LATEST_VALID_VALUATION_MARK"; fallback_used = False
+    else:
+        price = None; source = "N/A — no actionable current-session price"; authority = "PRICE_UNAVAILABLE"; fallback_used = True
+        fallback_reason = pa.get("reason") or "No actionable live/provider/stop-event price available"
+    stop_status = "UNKNOWN — NO ACTIONABLE PRICE"
+    actionable = not fallback_used and price is not None
+    if active_event:
+        stop_status = _session_stop_label(report_ts)
+    elif actionable and stop is not None:
+        if price <= stop:
+            stop_status = _session_stop_label(report_ts)
+        elif price <= stop * 1.015:
+            stop_status = "NEAR STOP"
+        else:
+            stop_status = "ABOVE STOP"
+    valuation_included = actionable and price is not None
+    return {
+        "ticker": ticker,
+        "price": price,
+        "timestamp": pa.get("timestamp") or pos.get("last_price_at") or event_lifecycle.get("event_timestamp"),
+        "session": current_trading_session(report_ts),
+        "source": source,
+        "freshness": "ACTIONABLE" if actionable else "FALLBACK_ONLY",
+        "authority": authority,
+        "fallback_used": bool(fallback_used),
+        "fallback_price": fallback_price if fallback_used or fallback_price != price else None,
+        "fallback_reason": fallback_reason,
+        "stop_status": stop_status,
+        "stop_event_lifecycle_state": event_lifecycle.get("state"),
+        "stop_event_lifecycle_reason": event_lifecycle.get("reason"),
+        "stop_event_id": event_lifecycle.get("event_id"),
+        "stop_event_trade_id": event_lifecycle.get("trade_id"),
+        "stop_event_lot_id": event_lifecycle.get("lot_id"),
+        "stop_event_price": event_price,
+        "stop_event_timestamp": event_lifecycle.get("event_timestamp"),
+        "valuation_included": bool(valuation_included),
+        "valuation_exclusion_reason": None if valuation_included else "No actionable price; fallback display excluded from valuation/stop logic",
+    }
+
+
+def build_packet(*, summary: dict[str, Any] | None = None, positions: list[dict[str, Any]] | None = None, db_path: str | None = None, report_ts: Any = None) -> dict[str, Any]:
+    summary = summary or {}
+    now = _report_now(summary, report_ts)
+    latest_session = latest_completed_session(now)
+    packet = load_holdings_packet(now, latest_session)
+    snapshot = latest_profit_snapshot()
+    provider, captured_at, pp_source = _snapshot_bars_by_ticker(snapshot)
+    pp_actions = _load_profit_actions(snapshot, db_path)
+    stop_events = _exit_events_by_ticker(summary)
+    guard_receipt = summary.get("stop_invariant_guard") or {}
+    guard_by_trade = {int(g.get("trade_id")): g for g in guard_receipt.get("lots", []) if g.get("trade_id") is not None}
+    details = []
+    for pos in positions or []:
+        ticker = _row_ticker(pos)
+        if not ticker:
+            continue
+        daily = (packet.get("positions") or {}).get(ticker) or {}
+        daily_action = _norm_action(daily.get("action")) if packet.get("status") == "FRESH" else "DATA INCOMPLETE"
+        pp = pp_actions.get(ticker) or {}
+        pf = profit_freshness_for_ticker(ticker, provider, captured_at, now, latest_session)
+        pp_action = _norm_action(pp.get("action")) if pf["state"] in {"FRESH_CURRENT_SESSION", "FRESH_LATEST_COMPLETED_SESSION"} else "DATA INCOMPLETE"
+        stop = _num(pos.get("stop_loss") or pos.get("stop"))
+        raw_event = stop_events.get(ticker)
+        execution_event = validate_execution_event(ticker, pos, raw_event, report_ts=now, db_path=db_path) if raw_event else None
+        price_obj = normalized_price_for_holding(ticker, pos, stop=stop, report_ts=now, stop_event=raw_event, db_path=db_path)
+        cur = _num(price_obj.get("price"))
+        stop_state = price_obj.get("stop_status") or "UNKNOWN — NO ACTIONABLE PRICE"
+        execution_reasons: list[str] = list((execution_event or {}).get("reason_codes") or [])
+        advisory_reasons: list[str] = []
+        packet_fresh = packet.get("status") == "FRESH"
+        if not packet_fresh:
+            advisory_reasons.append("HOLDINGS_PACKET_NOT_CURRENT")
+        if daily_action == "DATA INCOMPLETE":
+            advisory_reasons.append("DAILY_DATA_INCOMPLETE")
+        if pp_action == "DATA INCOMPLETE":
+            advisory_reasons.append("PROFIT_PROTECTION_DATA_INCOMPLETE")
+        candidate_execution = raw_event is not None
+        if raw_event and (execution_event or {}).get("valid"):
+            final = execution_event.get("action") or "DATA INCOMPLETE"
+            cur = _num(execution_event.get("price"))
+            price_obj = {
+                **price_obj,
+                "price": cur,
+                "source": execution_event.get("price_source"),
+                "timestamp": execution_event.get("timestamp"),
+                "session": execution_event.get("session"),
+                "authority": "VALIDATED_CURRENT_EXECUTION_EVENT",
+                "fallback_used": False,
+                "freshness": "ACTIONABLE",
+                "valuation_included": True,
+                "valuation_exclusion_reason": None,
+                "stop_status": _session_stop_label(now) if execution_event.get("kind") == "STOP" else "TARGET HIT — CURRENT SESSION",
+                "stop_event_lifecycle_state": "ACTIVE_STOP_BREACH" if execution_event.get("kind") == "STOP" else "ACTIVE_TARGET_HIT",
+                "stop_event_lifecycle_reason": "validated current-cycle execution event",
+                "stop_event_id": execution_event.get("event_id"),
+                "stop_event_trade_id": execution_event.get("trade_id"),
+                "stop_event_lot_id": execution_event.get("lot_id"),
+                "stop_event_price": cur,
+                "stop_event_timestamp": execution_event.get("timestamp"),
+            }
+            stop_state = price_obj["stop_status"]
+        elif candidate_execution:
+            final = "DATA INCOMPLETE"
+        elif not packet_fresh:
+            final = "DATA INCOMPLETE"
+        elif daily_action not in {"HOLD", "DATA INCOMPLETE"} or pp_action not in {"HOLD", "DATA INCOMPLETE"}:
+            execution_reasons.append("VALID_LIFECYCLE_EVENT_MISSING")
+            final = "DATA INCOMPLETE"
+        else:
+            final = strongest(daily_action, pp_action)
+        execution_reasons = sorted(set(execution_reasons))
+        advisory_reasons = sorted(set(advisory_reasons))
+        authority_reasons = sorted(set(execution_reasons + advisory_reasons))
+        owner_alert_required = final in {"SELL NOW", "EXIT REVIEW", "TRIM REVIEW"} and bool((execution_event or {}).get("valid"))
+        entry = _num(pos.get("entry_price") or pos.get("entry"))
+        shares = _num(pos.get("shares") or pos.get("quantity") or pos.get("qty")) or 0
+        pnl_pct = ((cur-entry)/entry*100.0) if cur is not None and entry else None
+        peak = None
+        try:
+            peak = daily.get("human_metrics", {}).get("peak_gain_pct") or daily.get("current_metrics", {}).get("mfe_pct")
+        except Exception:
+            peak = None
+        giveback = None
+        try:
+            giveback = daily.get("human_metrics", {}).get("profit_surrendered_pct")
+        except Exception:
+            giveback = None
+        broker_evidence = broker_confirmation_for_trade(db_path, _position_trade_id(pos)) if db_path and _position_trade_id(pos) else {"status": "NOT CONFIRMED"}
+        broker_status = broker_evidence.get("status") or "NOT CONFIRMED"
+        guard = guard_by_trade.get(int(_position_trade_id(pos) or -1))
+        if guard and guard.get("result") != "PASS":
+            final = daily_action = pp_action = "DATA INCOMPLETE"
+            stop_state = "UNKNOWN — STOP INVARIANT UNVERIFIED"
+            authority_reasons = sorted(set(authority_reasons + list(guard.get("reason_codes") or [])))
+        why = []
+        if final == daily_action and daily_action not in {"HOLD", "DATA INCOMPLETE"}:
+            why.append(f"Daily Re-Underwriting {daily_action}")
+        if final == pp_action and pp_action not in {"HOLD", "DATA INCOMPLETE"}:
+            why.append(f"Profit Protection {pp_action}")
+        if final == "SELL NOW" and execution_event:
+            level = stop if execution_event.get("kind") == "STOP" else _num(pos.get("target_price") or pos.get("target"))
+            why.append(f"validated current {str(execution_event.get('kind') or '').lower()} event {execution_event.get('event_id')} at {_money(execution_event.get('price'))} versus {_money(level)}")
+        if final == "DATA INCOMPLETE":
+            why = ["DATA INCOMPLETE — NO TRADE INSTRUCTION"]
+        if not why:
+            why.append("no stronger valid advisory action currently present")
+        details.append({
+            "ticker": ticker,
+            "final_action": final,
+            "owner_alert_required": owner_alert_required,
+            "authority_reason_codes": authority_reasons,
+            "execution_critical_reason_codes": execution_reasons,
+            "advisory_component_reason_codes": advisory_reasons,
+            "execution_event": execution_event,
+            "raw_exit_evidence": raw_event,
+            "daily_reunderwriting_action": daily_action,
+            "daily_reason_codes": daily.get("reason_codes") or [],
+            "daily_packet_status": packet.get("status"),
+            "profit_protection_action": pp_action,
+            "profit_protection_raw_action": pp.get("action"),
+            "profit_protection_freshness": pf,
+            "stop_status": stop_state,
+            "stop_event_id": price_obj.get("stop_event_id"),
+            "stop_event_trade_id": price_obj.get("stop_event_trade_id"),
+            "stop_event_lot_id": price_obj.get("stop_event_lot_id"),
+            "stop_event_lifecycle_state": price_obj.get("stop_event_lifecycle_state"),
+            "stop_event_lifecycle_reason": price_obj.get("stop_event_lifecycle_reason"),
+            "stop_event_price": price_obj.get("stop_event_price"),
+            "stop_event_timestamp": price_obj.get("stop_event_timestamp"),
+            "broker_status": broker_status,
+            "broker_confirmation_evidence": broker_evidence,
+            "entry": entry,
+            "current_price": cur,
+            "quantity": shares,
+            "current_price_source": price_obj.get("source"),
+            "authoritative_price": price_obj,
+            "price_authority": price_obj.get("authority"),
+            "price_source_timestamp": price_obj.get("timestamp"),
+            "fallback_price": price_obj.get("fallback_price"),
+            "fallback_reason": price_obj.get("fallback_reason"),
+            "session": current_trading_session(now),
+            "pnl_pct": pnl_pct,
+            "pnl_usd": ((cur-entry)*shares) if cur is not None and entry is not None else None,
+            "peak_gain_pct": peak,
+            "profit_surrendered_pct": giveback,
+            "canonical_stop": stop,
+            "canonical_target": _num(pos.get("target_price") or pos.get("target")),
+            "why_now": "; ".join(why),
+            "recheck_condition": ("Resolve stop invariant evidence: " + ", ".join(guard.get("reason_codes") or [])) if guard and guard.get("result") != "PASS" else (daily.get("recheck_condition") or pp.get("recheck_condition") or "next completed NYSE session or next intraday cycle if stop/price state changes"),
+            "stop_invariant_guard": guard,
+            "valuation_included": price_obj.get("valuation_included"),
+            "valuation_price": cur if price_obj.get("valuation_included") else None,
+            "valuation_exclusion_reason": price_obj.get("valuation_exclusion_reason"),
+            "data_freshness": {"holdings_packet": packet.get("freshness"), "profit_protection": pf["state"], "price_source": price_obj.get("source")},
+        })
+    out = {
+        "packet_version": "intraday_holdings_action_freshness.v1",
+        "report_timestamp": now.isoformat(),
+        "latest_completed_session": latest_session,
+        "current_trading_session": current_trading_session(now),
+        "holdings_packet": {k: packet.get(k) for k in ("status", "freshness", "source", "run_date", "created_at", "reason", "input_digest")},
+        "profit_protection_source": {"snapshot_path": pp_source, "captured_at": captured_at},
+        "holdings": details,
+        "broker_authority": "NO",
+        "automatic_trade_closure": "NO",
+    }
+    out["input_digest"] = _sha_json({"holdings_packet": out["holdings_packet"], "profit_source": out["profit_protection_source"], "holdings": details})
+    return out
+
+
+def render_action_sections(packet: dict[str, Any]) -> list[str]:
+    rows = packet.get("holdings") or []
+    lines = ["", "━━━ 🚨 ACTION REQUIRED NOW ━━━", ""]
+    sells = [r for r in rows if r["final_action"] == "SELL NOW"]
+    lines.append("SELL NOW")
+    if sells:
+        lines += [f"- {r['ticker']}: {r['why_now']}" for r in sells]
+    else:
+        lines.append("none")
+    for action in ("EXIT REVIEW", "TRIM REVIEW", "STOP BREACHED / URGENT STOP REVIEW", "DATA INCOMPLETE"):
+        items = [r for r in rows if r["final_action"] == action]
+        if items:
+            lines.append("")
+            lines.append(action if action != "DATA INCOMPLETE" else "DATA INCOMPLETE — NO TRADE INSTRUCTION")
+            lines += [f"- {r['ticker']}: {r['why_now']}" for r in items]
+    tight = [r for r in rows if r["final_action"] == "HOLD TIGHT"]
+    lines += ["", "━━━ ⚠️ HOLD TIGHT ━━━"]
+    lines += [f"- {r['ticker']}: {r['why_now']}" for r in tight] if tight else ["none"]
+    hold = [r for r in rows if r["final_action"] == "HOLD"]
+    lines += ["", "━━━ ✅ HOLD ━━━"]
+    lines += [f"- {r['ticker']}: no review action" for r in hold] if hold else ["none"]
+    return lines
+
+
+def render_holding_details(packet: dict[str, Any]) -> list[str]:
+    rows = packet.get("holdings") or []
+    lines = ["", f"━━━ 💼 HOLDING DETAIL ({len(rows)}) ━━━", ""]
+    for i, r in enumerate(rows, 1):
+        lines += [
+            f"{i}. {r['ticker']}",
+            f"   FINAL ACTION: {r['final_action']}",
+            f"   AUTHORITATIVE PRICE: {_money(r['current_price'])}",
+            f"   PRICE SOURCE: {r['current_price_source']}",
+            f"   Current price/session: {_money(r['current_price'])} ({r['current_price_source']}; session {r['session']})",
+            f"   Entry: {_money(r['entry'])}",
+            f"   Current gain/loss: {_pct(r['pnl_pct'])} ({'N/A' if r['pnl_usd'] is None else ('+' if r['pnl_usd'] >= 0 else '−') + '$' + format(abs(r['pnl_usd']), ',.0f')})",
+            f"   Peak gain: {_pct(r['peak_gain_pct'])}",
+            f"   Profit surrendered: {'N/A' if r['profit_surrendered_pct'] is None else format(abs(float(r['profit_surrendered_pct'])), '.1f') + ' percentage points'}",
+            f"   Canonical stop: {_money(r['canonical_stop'])}",
+            f"   Canonical target: {_money(r['canonical_target'])}",
+            f"   STOP STATUS: {r['stop_status']} ({r.get('stop_event_lifecycle_state') or 'UNKNOWN'})",
+            f"   DAILY RE-UNDERWRITING: {r['daily_reunderwriting_action']}",
+            f"   PROFIT PROTECTION: {r['profit_protection_action']} ({r['profit_protection_freshness']['readable']})",
+            f"   Why now: {r['why_now']}",
+            f"   Exact recheck condition: {r['recheck_condition']}",
+            f"   Broker confirmation: {r['broker_status']}",
+            f"   Data freshness: holdings packet {r['data_freshness']['holdings_packet']}; Profit Protection {r['data_freshness']['profit_protection']}",
+            "",
+        ]
+    return lines
+
+
+def render_packet(packet: dict[str, Any]) -> list[str]:
+    return render_action_sections(packet) + render_holding_details(packet)

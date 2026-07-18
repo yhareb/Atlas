@@ -1,0 +1,234 @@
+"""
+atlas_account.py  —  Account / equity layer for Atlas v2
+============================================================================
+
+WHY THIS EXISTS
+---------------
+The validated v2 strategy sizes every trade as 1% of *current account equity*.
+The original Atlas DB tracked signals, positions and trades, but had NO concept
+of cash / equity, so 1%-risk sizing was impossible. This module adds a tiny,
+additive `account` table (one row) and helpers to read/maintain equity.
+
+It is 100% NON-DESTRUCTIVE:
+  - It only CREATEs a new table IF NOT EXISTS.
+  - It never touches signals / positions / trades / handoff.
+  - It can be imported alongside the existing atlas_db without conflict.
+
+EQUITY MODEL
+------------
+    cash            = starting_cash + sum(realized_pnl) - sum(open cost basis) + sum(closed cost basis returned)
+We keep it simpler and robust:
+    invested        = sum(entry_price * quantity) over OPEN lots      (capital tied up)
+    realized_pnl    = sum(realized_pnl) over CLOSED lots              (from trades ledger)
+    cash            = starting_cash + realized_pnl - invested
+    equity (mark-to-mkt) = cash + sum(last_price * quantity) over OPEN lots
+For sizing we use equity. If live prices are unavailable we fall back to
+cost-basis equity (cash + invested), which equals starting_cash + realized_pnl.
+
+USAGE
+-----
+    import atlas_account as acct
+    acct.init_account(starting_cash=37000)      # run once; idempotent
+    acct.get_cash()                              # current free cash
+    acct.get_equity(price_lookup=fn)             # fn(ticker)->last price (optional)
+    acct.record_cash_change(+5000, "Deposit")    # user adds cash in hand
+"""
+
+import sqlite3
+from datetime import datetime
+
+DB_PATH = "/Users/yasser/scripts/atlas.db"
+
+
+def _conn():
+    return sqlite3.connect(DB_PATH)
+
+
+def _now():
+    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+
+# --------------------------------------------------------------------------- #
+# Schema (additive, idempotent)
+# --------------------------------------------------------------------------- #
+def init_account(starting_cash=37000.0):
+    """Create the account + cash_ledger tables if missing. Idempotent.
+
+    Seeds a single account row with `starting_cash` the FIRST time only.
+    Running this repeatedly never resets or duplicates anything.
+    """
+    conn = _conn()
+    c = conn.cursor()
+
+    # Single-row account state.
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS account (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            starting_cash REAL NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Audit trail of manual cash changes (deposits / withdrawals).
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS cash_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+            amount REAL NOT NULL,
+            reason TEXT,
+            balance_after REAL
+        )
+    ''')
+
+    # Seed the account row exactly once.
+    c.execute("SELECT COUNT(*) FROM account")
+    if c.fetchone()[0] == 0:
+        c.execute(
+            "INSERT INTO account (id, starting_cash, created_at, updated_at) VALUES (1, ?, ?, ?)",
+            (float(starting_cash), _now(), _now()),
+        )
+        c.execute(
+            "INSERT INTO cash_ledger (ts, amount, reason, balance_after) VALUES (?, ?, ?, ?)",
+            (_now(), float(starting_cash), "Initial funding", float(starting_cash)),
+        )
+
+    conn.commit()
+    conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Reads
+# --------------------------------------------------------------------------- #
+def _starting_cash(c):
+    c.execute("SELECT starting_cash FROM account WHERE id = 1")
+    row = c.fetchone()
+    return float(row[0]) if row else 0.0
+
+
+def _realized_pnl(c):
+    c.execute(
+        "SELECT COALESCE(SUM(realized_pnl), 0) FROM trades "
+        "WHERE status = 'CLOSED' AND realized_pnl IS NOT NULL"
+    )
+    return float(c.fetchone()[0] or 0.0)
+
+
+def _manual_cash_changes(c):
+    """Sum of manual deposits/withdrawals AFTER the initial funding row."""
+    c.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM cash_ledger WHERE reason != 'Initial funding'"
+    )
+    return float(c.fetchone()[0] or 0.0)
+
+
+def _open_lots(c):
+    c.execute(
+        "SELECT ticker, quantity, entry_price FROM trades WHERE status = 'OPEN'"
+    )
+    return [(r[0], float(r[1]), float(r[2])) for r in c.fetchall()]
+
+
+def get_open_invested():
+    """Capital currently tied up in open lots (sum of entry_price * qty)."""
+    conn = _conn()
+    c = conn.cursor()
+    invested = sum(p * q for (_t, q, p) in _open_lots(c))
+    conn.close()
+    return round(invested, 2)
+
+
+def get_cash():
+    """Free cash available to deploy.
+
+    cash_ledger.balance_after is the source of truth. It already reflects
+    every buy debit, sell credit, and manual correction recorded in Atlas.
+    """
+    conn = _conn()
+    c = conn.cursor()
+    c.execute("SELECT balance_after FROM cash_ledger ORDER BY id DESC LIMIT 1")
+    row = c.fetchone()
+    conn.close()
+    return round(float(row[0]), 2) if row and row[0] is not None else 0.0
+
+
+def get_equity(price_lookup=None):
+    """Total account equity.
+
+    equity = latest cash_ledger.balance_after + mark-to-market value of OPEN lots.
+    If price_lookup is omitted/unavailable for a ticker, fall back to cost basis.
+    """
+    cash = get_cash()
+    conn = _conn()
+    c = conn.cursor()
+    lots = _open_lots(c)
+    conn.close()
+
+    holdings_value = 0.0
+    for ticker, qty, entry in lots:
+        last = None
+        if price_lookup:
+            try:
+                last = price_lookup(ticker)
+            except Exception:
+                last = None
+        holdings_value += (float(last) if last else entry) * qty
+
+    return round(cash + holdings_value, 2)
+
+
+def get_account_summary(price_lookup=None):
+    conn = _conn()
+    c = conn.cursor()
+    summary = {
+        "starting_cash": _starting_cash(c),
+        "manual_cash_changes": _manual_cash_changes(c),
+        "realized_pnl": _realized_pnl(c),
+        "open_invested": round(sum(p * q for (_t, q, p) in _open_lots(c)), 2),
+    }
+    conn.close()
+    summary["cash"] = get_cash()
+    summary["equity"] = get_equity(price_lookup=price_lookup)
+    return summary
+
+
+# --------------------------------------------------------------------------- #
+# Writes
+# --------------------------------------------------------------------------- #
+def record_cash_change(amount, reason="Manual adjustment"):
+    """Record a manual deposit (+) or withdrawal (-) of cash in hand.
+
+    This is how the user 'updates Atlas on cash in hand additions'.
+    """
+    amount = float(amount)
+    conn = _conn()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM account")
+    if c.fetchone()[0] == 0:
+        conn.close()
+        raise RuntimeError("Account not initialized. Run init_account() first.")
+    conn.close()
+
+    new_cash = get_cash() + amount  # cash already reflects prior ledger rows
+    conn = _conn()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO cash_ledger (ts, amount, reason, balance_after) VALUES (?, ?, ?, ?)",
+        (_now(), amount, reason, round(new_cash, 2)),
+    )
+    c.execute("UPDATE account SET updated_at = ? WHERE id = 1", (_now(),))
+    conn.commit()
+    conn.close()
+    return round(new_cash, 2)
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) >= 2 and sys.argv[1] == "init":
+        start = float(sys.argv[2]) if len(sys.argv) >= 3 else 37000.0
+        init_account(start)
+        print(f"Account initialized with starting cash ${start:,.2f}")
+    else:
+        init_account()
+        import json
+        print(json.dumps(get_account_summary(), indent=2))
