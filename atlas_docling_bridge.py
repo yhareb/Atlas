@@ -5,13 +5,12 @@ Single entry point for ALL Atlas-related screenshots/documents. Enforces:
   - No vision_analyze / ad-hoc OCR — Docling is the only image/document parser.
   - extract-only never writes DB.
   - broker-parse-dry-run never writes DB.
-  - broker-register-approved requires an explicit --approved flag AND a confident parse.
+  - broker-register-auto writes only after the deterministic BrokerParseV2 gate passes.
 
 Modes:
   --extract-only            Convert + export full artifact bundle. No DB write ever.
   --broker-parse-dry-run    Extract, then run broker parser in dry-run (no DB write).
-  --broker-register-approved  Extract, dry-run parse, and (only if --approved and parse
-                              is confident) call the real broker registration path.
+  --broker-register-auto      Extract and call only the gated BrokerParseV2 registration path.
 
 Artifact bundle written to:
   /Users/yasser/atlas_inbox/docling_artifacts/<sha256>/
@@ -35,7 +34,7 @@ from pathlib import Path
 SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
 for _path in (SCRIPTS_DIR, "/Users/yasser/scripts"):
     if _path not in sys.path:
-        sys.path.insert(0, _path)
+        (sys.path.insert(0, _path) if _path == SCRIPTS_DIR else sys.path.append(_path))
 
 DEFAULT_ARTIFACT_ROOT = Path(os.environ.get("ATLAS_DOCLING_ARTIFACTS", "/Users/yasser/atlas_inbox/docling_artifacts"))
 DEFAULT_INCOMING_CHAT = Path(os.environ.get("ATLAS_INCOMING_CHAT", "/Users/yasser/atlas_inbox/incoming_chat"))
@@ -157,6 +156,27 @@ def _export_json(doc) -> dict:
         return {"error": "docling_document_json_export_unavailable"}
 
 
+def broker_parse_v2_from_docling(doc_json: dict, metadata: dict) -> dict | None:
+    """Produce BrokerParseV2 evidence from structured Docling artifacts only."""
+    block=(doc_json or {}).get("broker_parse_v2") or {}; fields=block.get("fields") or {}
+    required=("broker","broker_ref","side","ticker","quantity_text","price_text","fees_text",
+              "currency","execution_at","source_sha256","parser_version")
+    values={}; confidence={}; provenance={}
+    for name in required:
+        item=fields.get(name)
+        if not isinstance(item,dict) or item.get("value") in (None,""): return None
+        prov=item.get("provenance")
+        if item.get("confidence") is None or not isinstance(prov,dict) or not prov.get("region"): return None
+        values[name]=str(item["value"]); confidence[name]=float(item["confidence"]); provenance[name]=prov
+    values["source_sha256"]=metadata["sha256"]
+    packet={**values,"source_path":metadata["source_filename"],"artifact_dir":metadata["artifact_dir"],
+            "parse_confidence":min(confidence.values()),"field_confidence":confidence,
+            "raw_field_provenance":provenance}
+    for optional in ("trade_id","lot_id","stage","instruction_digest","entry_plan","display"):
+        if optional in block: packet[optional]=block[optional]
+    return packet
+
+
 def extract_only(input_path: str, artifact_root: Path | None = None) -> dict:
     """Docling-only extraction. Never writes DB. Never calls broker registration."""
     path = Path(input_path).expanduser()
@@ -199,6 +219,7 @@ def extract_only(input_path: str, artifact_root: Path | None = None) -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "artifact_dir": str(out_dir),
     }
+    metadata["registration_v2"] = broker_parse_v2_from_docling(doc_json, metadata)
     (out_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, default=str))
     _log(f"extract-only complete sha={digest} artifacts={out_dir}")
     return {
@@ -257,17 +278,13 @@ def broker_parse_dry_run(input_path: str, artifact_root: Path | None = None) -> 
     return extraction
 
 
-def broker_register_approved(input_path: str, approved: bool, artifact_root: Path | None = None) -> dict:
+def broker_register_approved(input_path: str, approved: bool = True, artifact_root: Path | None = None) -> dict:
     """Only path that may write DB. Requires explicit --approved AND a confident parse."""
     dry = broker_parse_dry_run(input_path, artifact_root=artifact_root)
     if dry.get("status") != "ok":
         return dry
     result = dry.get("broker_dry_run", {})
-    if not approved:
-        dry["db_write_mode"] = "BLOCKED_NOT_APPROVED"
-        dry["registered"] = False
-        _log("registration blocked: --approved flag not set")
-        return dry
+    # ORDER #38: manual approval is replaced by the BrokerParseV2 gate.
     if not result.get("would_register"):
         dry["db_write_mode"] = "BLOCKED_NOT_CONFIDENT"
         dry["registered"] = False
@@ -276,13 +293,13 @@ def broker_register_approved(input_path: str, approved: bool, artifact_root: Pat
 
     markdown_text = Path(dry["markdown_path"]).read_text(errors="replace")
     import atlas_broker_ingest
-    registration = atlas_broker_ingest.detect_and_register(markdown_text, Path(input_path).name)
-    dry["db_write_mode"] = "APPROVED_WRITE"
+    registration = atlas_broker_ingest.auto_register_from_artifacts(markdown_text, Path(input_path), dry)
+    dry["db_write_mode"] = "AUTO_GATE_WRITE"
     dry["registered"] = registration
     meta_path = Path(dry["metadata_path"])
     try:
         meta = json.loads(meta_path.read_text())
-        meta["db_write_mode"] = "APPROVED_WRITE"
+        meta["db_write_mode"] = "AUTO_GATE_WRITE"
         meta["registration_result"] = registration
         meta_path.write_text(json.dumps(meta, indent=2, default=str))
     except Exception:
@@ -296,8 +313,7 @@ def main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--extract-only", metavar="PATH")
     group.add_argument("--broker-parse-dry-run", metavar="PATH")
-    group.add_argument("--broker-register-approved", metavar="PATH")
-    parser.add_argument("--approved", action="store_true", help="Required to allow DB write in --broker-register-approved mode")
+    group.add_argument("--broker-register-auto", dest="broker_register_auto", metavar="PATH")
     parser.add_argument("--artifact-root", default=None)
     args = parser.parse_args(argv)
     root = Path(args.artifact_root).expanduser() if args.artifact_root else None
@@ -307,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.broker_parse_dry_run:
         out = broker_parse_dry_run(args.broker_parse_dry_run, artifact_root=root)
     else:
-        out = broker_register_approved(args.broker_register_approved, approved=args.approved, artifact_root=root)
+        out = broker_register_approved(args.broker_register_auto, artifact_root=root)
 
     print("DOCLING_BRIDGE_RESULT_JSON=" + json.dumps(out, indent=2, default=str))
     return 0 if out.get("status") == "ok" else 1

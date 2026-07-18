@@ -76,10 +76,15 @@ def migrate_exit_policy_schema(conn=None):
 def get_exit_policy_projection(trade_id, current_quantity=None):
     """Derive current ladder state from events instead of nonexistent trade fields."""
     conn = get_connection(); migrate_exit_policy_schema(conn)
-    rows = conn.execute("SELECT event_type,stage,payload_json FROM exit_policy_events WHERE trade_id=? ORDER BY id", (int(trade_id),)).fetchall()
+    rows = conn.execute("SELECT id,event_type,stage,payload_json,registration_id FROM exit_policy_events WHERE trade_id=? ORDER BY id", (int(trade_id),)).fetchall()
     conn.close()
-    original = Decimal(str(current_quantity or 0)); completed = set()
-    for typ, stage, raw in rows:
+    original = Decimal(str(current_quantity or 0)); completed = set(); reversed_regs=set()
+    for _id, typ, stage, raw, reg in rows:
+        if typ == "REVERSAL":
+            try: reversed_regs.add(json.loads(raw or "{}").get("reverses_registration"))
+            except Exception: pass
+    for _id, typ, stage, raw, reg in rows:
+        if typ == "REVERSAL" or reg in reversed_regs: continue
         try: payload = json.loads(raw or "{}")
         except Exception: payload = {}
         if typ in ("BROKER_PARTIAL_SELL_FILLED", "BROKER_SELL_FILLED"):

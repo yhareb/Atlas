@@ -269,3 +269,31 @@ def send_telegram(message, label="atlas", parse_mode="Markdown", print_fallback=
 def send_message(message, label="atlas", parse_mode="Markdown", print_fallback=True, chat_id=None, message_thread_id=None, route=None, report_type=None):
     """Compatibility alias for callers that expect send_message()."""
     return send_telegram(message, label=label, parse_mode=parse_mode, print_fallback=print_fallback, chat_id=chat_id, message_thread_id=message_thread_id, route=route, report_type=report_type)
+
+
+def send_professor_media(media_path, caption, *, sender=None):
+    """Send one Professor-DM image; receipts never contain routing values."""
+    if sender is not None:
+        ok = bool(sender(str(media_path), str(caption), route="professor_dm",
+                         report_type="broker_registration_review"))
+        return {"delivered": ok, "route": "professor_dm",
+                "routing_variable": "TELEGRAM_ADMIN_CHAT_ID", "mocked": True}
+    if _telegram_disabled() or _telegram_mocked():
+        return {"delivered": True, "route": "professor_dm",
+                "routing_variable": "TELEGRAM_ADMIN_CHAT_ID", "mocked": True}
+    token = _bot_token()
+    resolved = resolve_report_route("professor_dm", "broker_registration_review")
+    chat = str(resolved.get("chat_id") or "").strip()
+    if not token or not chat:
+        return {"delivered": False, "route": "professor_dm",
+                "routing_variable": "TELEGRAM_ADMIN_CHAT_ID", "error": "SEND_CREDENTIALS_UNAVAILABLE"}
+    try:
+        with open(media_path, "rb") as fh:
+            response = requests.post(f"https://api.telegram.org/bot{token}/sendPhoto",
+                data={"chat_id": chat, "caption": str(caption)[:1024]}, files={"photo": fh}, timeout=(5, 25))
+        ok = response.status_code == 200 and bool(response.json().get("ok"))
+        return {"delivered": ok, "route": "professor_dm",
+                "routing_variable": "TELEGRAM_ADMIN_CHAT_ID", "mocked": False}
+    except Exception as exc:
+        return {"delivered": False, "route": "professor_dm",
+                "routing_variable": "TELEGRAM_ADMIN_CHAT_ID", "error": type(exc).__name__}

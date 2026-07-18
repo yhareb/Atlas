@@ -198,13 +198,22 @@ def evaluate_cycle(*, db_path: str, cycle_id: str, current_atr14: Mapping[Any, A
         cols = {r[1] for r in con.execute("PRAGMA table_info(trades)")}
         if "entry_atr14" not in cols:
             raise RuntimeError("entry_atr14 schema unavailable")
-        trades = con.execute("SELECT id,ticker,quantity,entry_price,entry_at,stop_loss,entry_atr14,broker_ref FROM trades WHERE status='OPEN' ORDER BY ticker,id").fetchall()
+        registration_expr = "registration_id" if "registration_id" in cols else "NULL AS registration_id"
+        trades = con.execute(f"SELECT id,ticker,quantity,entry_price,entry_at,stop_loss,entry_atr14,broker_ref,{registration_expr} FROM trades WHERE status='OPEN' ORDER BY ticker,id").fetchall()
         counts = {r[0]: r[1] for r in con.execute("SELECT ticker,COUNT(*) FROM trades WHERE status='OPEN' GROUP BY ticker")}
         lots = []
         for trade in trades:
             reasons: list[str] = []
             violations: list[str] = []
             matched_event = None
+            if trade["registration_id"]:
+                reg = con.execute("SELECT audit_status FROM broker_registrations WHERE registration_id=?", (trade["registration_id"],)).fetchone()
+                if not reg or reg[0] not in ("MATCHED", "CONFIRMED_BY_PROF"):
+                    reasons.append("REGISTRATION_AUDIT_HOLD")
+            # A partial SELL keeps this parent OPEN; its audit hold must follow it.
+            holds = con.execute("SELECT 1 FROM broker_registrations WHERE side='SELL' AND trade_id=? AND audit_status NOT IN('MATCHED','CONFIRMED_BY_PROF','UNDONE','SUPERSEDED')", (trade["id"],)).fetchall()
+            if holds:
+                reasons.append("REGISTRATION_AUDIT_HOLD")
             try:
                 entry, stop = _dec(trade["entry_price"]), _dec(trade["stop_loss"])
                 if entry <= 0 or stop <= 0:

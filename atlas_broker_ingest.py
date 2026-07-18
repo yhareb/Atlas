@@ -15,10 +15,17 @@ from typing import Any
 SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
 for _path in (SCRIPTS_DIR, "/Users/yasser/scripts"):
     if _path not in sys.path:
-        sys.path.insert(0, _path)
+        # Keep this release unit ahead of the production fallback.  Inserting
+        # the fallback at index zero could silently import the legacy live
+        # module while a staging CLI/test is running.
+        (sys.path.insert(0, _path) if _path == SCRIPTS_DIR else sys.path.append(_path))
 
 import atlas_db  # noqa: E402
 from atlas_notify import send_telegram  # noqa: E402
+from atlas_registration_gate import BrokerParseV2, deterministic_gate, duplicate_projection
+from atlas_registration import migrate, register_buy_atomic, register_sell_atomic, apply_audit, wio_is_retired
+from atlas_registration_auditor import audit_image
+from atlas_notify import send_professor_media
 
 
 _EVENT_UNKNOWN = "UNKNOWN"
@@ -333,6 +340,44 @@ def detect_and_register(extracted_text: str, source_filename: str) -> dict:
         _log(f"error file={source_filename}: {type(exc).__name__}: {exc}")
         _notify(msg)
         return {"event": event, "status": "error", "error": f"{type(exc).__name__}: {exc}", "source": source_filename}
+
+
+def auto_register_from_artifacts(extracted_text: str, image_path, extraction: dict, *, auditor_runner=None, media_sender=None) -> dict:
+    """Fail closed unless Docling exported complete confidence/provenance V2 evidence."""
+    import json
+    from pathlib import Path
+    meta = json.loads(Path(extraction["metadata_path"]).read_text())
+    raw = meta.get("registration_v2")
+    if not isinstance(raw, dict):
+        return {"status": "gate_failed", "gate": {"status": "FAIL",
+                "failure_codes": ["REG_GATE_CONFIDENCE_MISSING:all",
+                                  "REG_GATE_PROVENANCE_MISSING:all"]},
+                "registered_row": False}
+    raw.setdefault("source_path", str(image_path)); raw.setdefault("artifact_dir", extraction["artifact_dir"])
+    raw.setdefault("source_sha256", extraction["sha256"])
+    packet = BrokerParseV2(**raw)
+    conn = atlas_db.get_connection(); migrate(conn)
+    duplicate = duplicate_projection(conn, packet)
+    receipt = deterministic_gate(packet, meta.get("market_evidence") or {}, duplicate=duplicate,
+                                 open_context=meta.get("open_context") or {},
+                                 wio_retired=wio_is_retired(conn))
+    if receipt["status"] == "IDEMPOTENT_ALREADY_REGISTERED":
+        conn.close(); return {"status": receipt["status"], "gate": receipt}
+    if receipt["status"] != "PASS":
+        conn.close(); return {"status": "gate_failed", "gate": receipt, "registered_row": False}
+    out = register_buy_atomic(conn, packet, receipt) if packet.side.upper() == "BUY" else register_sell_atomic(conn, packet, receipt)
+    audit=apply_audit(conn,out['registration_id'],audit_image(image_path,runner=auditor_runner))
+    media=None
+    if not audit['silent']:
+        caption='REGISTERED | VISION AUDIT '+audit['kind']+'\nRegistration: '+out['registration_id']
+        media=send_professor_media(image_path,caption,sender=media_sender)
+        if not media.get('delivered'):
+            conn.execute("INSERT INTO registration_alert_queue(alert_id,registration_id,media_path,message,status,attempts,last_error,created_at) VALUES(?,?,?,?, 'QUEUED',1,?,datetime('now'))",
+                         ('alert-'+__import__('uuid').uuid4().hex,out['registration_id'],str(image_path),caption,media.get('error','DELIVERY_FAILED'))); conn.commit()
+    pending=conn.execute("SELECT COUNT(*) FROM broker_registrations WHERE registration_id=? AND audit_status='PENDING_AUDIT'",(out['registration_id'],)).fetchone()[0]
+    conn.close()
+    if pending: raise RuntimeError('registration left PENDING_AUDIT')
+    return {"status": "registered_audited", "gate": receipt, "transaction": out,"audit":audit,"media":media}
 
 
 if __name__ == "__main__":
