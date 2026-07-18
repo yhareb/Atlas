@@ -332,19 +332,4 @@ __all__ = ["ACTIONS", "Advisory", "AdvisoryRouting", "MAX_AGE_MINUTES", "RVOL_MI
            "blockers", "build_advisory_routing", "canonical_signal", "earnings_wording", "naturalize",
            "regime", "signal_family", "top_picks"]
 
-# --- Quiver Dual-Output Final Integration v1 (staged) ---
-def apply_quiver_overlay(advisory, packet=None):
-    """Return presentation-only Quiver overlay for an Advisory.
 
-    Raw TFE fields/action_now remain preserved; this function is deterministic and
-    never mutates entries, stops, targets, sizing, DB rows, or broker state.
-    """
-    try:
-        from atlas_quiver_bridge import context_for_ticker, apply_to_decision
-        raw = dict(advisory.raw)
-        raw["ticker"] = advisory.ticker
-        raw["action"] = advisory.action_now
-        ctx = context_for_ticker(advisory.ticker, packet)
-        return apply_to_decision(raw, ctx)
-    except Exception as exc:
-        return {"ticker": getattr(advisory, "ticker", ""), "quiver_context": "DATA_UNAVAILABLE", "quiver_evidence": f"Quiver data unavailable: {type(exc).__name__}", "final_action": getattr(advisory, "action_now", "UNKNOWN"), "authority": "REVIEW_OVERLAY_ONLY"}

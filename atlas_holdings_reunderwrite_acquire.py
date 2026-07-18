@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Acquire real completed-session data for Daily Holdings Re-Underwriting v1.
 
-Read-only acquisition: atlas.db mode=ro, Massive/Benzinga/Perme/Quiver packets read-only.
+Read-only acquisition: atlas.db mode=ro plus Massive/Benzinga/Perme inputs.
 No atlas.db writes, no broker actions, no Telegram.
 """
 from __future__ import annotations
@@ -110,8 +110,7 @@ def acquire(db=DEFAULT_DB, out=None):
     for t in all_tickers:
         rows,m=massive_aggs(t,start,session,key,c['massive_base']); bars[t]=rows; meta[t]=m
     perme=load_json_if_fresh('/Users/yasser/atlas_inbox/latest_context.json')
-    quiver=load_json_if_fresh('/Users/yasser/atlas_inbox/quiver_engine_packet_v1.json')
-    packet={'packet_version':'holdings_reunderwrite_acquisition.v1','created_at':dt.datetime.utcnow().isoformat()+'Z','latest_completed_session':session,'market_session':session,'trades':trades,'tickers':tickers,'bars':bars,'provider_meta':meta,'sector_map':{t:SECTOR_ETF.get(t) for t in tickers},'external_context':{'perme':perme,'quiver':quiver},'provider':'Massive','authority':'READ_ONLY'}
+    packet={'packet_version':'holdings_reunderwrite_acquisition.v1','created_at':dt.datetime.utcnow().isoformat()+'Z','latest_completed_session':session,'market_session':session,'trades':trades,'tickers':tickers,'bars':bars,'provider_meta':meta,'sector_map':{t:SECTOR_ETF.get(t) for t in tickers},'external_context':{'perme':perme},'quiver_raw_evidence_digest':None,'provider':'Massive','authority':'READ_ONLY'}
     # add news separately, no secrets exposed
     packet['external_context']['benzinga_news']={t:benzinga_news(t,c.get('benzinga_key'),c['massive_base']) for t in tickers}
     packet['input_digest']=sha_obj(packet)

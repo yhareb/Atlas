@@ -293,13 +293,7 @@ def build_report(quiver_fixture=None) -> str:
         worst_line,
         f"Cash [LEDGER]: {_money(cash)}",
     ]
-    if quiver_fixture is not None:
-        raw, context = quiver_fixture
-        lines += _atlas_select_leaf(
-            "EOD_POSTMARKET_HOLDINGS",
-            lambda: quiver_consumer_decision_block(raw, context).splitlines(),
-            reference="atlas_eod_positions.quiver_consumer_decision_block",
-        )
+
     return "\n".join(lines)
 
 def main(argv: list[str] | None = None) -> int:
@@ -329,19 +323,6 @@ from atlas_holding_state_consumer_projection import select_leaf as _atlas_select
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-try:
-    from atlas_quiver_decision_envelope import render_decision_block as _quiver_render_decision_block, apply_quiver_review_overlay as _quiver_apply_overlay
-except Exception:
-    _quiver_render_decision_block = None
-    _quiver_apply_overlay = None
-
-
-def quiver_consumer_decision_block(raw_tfe_result, quiver_context):
-    """Shared consumer shim: render exactly the authoritative Quiver decision envelope."""
-    if not _quiver_apply_overlay or not _quiver_render_decision_block:
-        return "QUIVER DATA UNAVAILABLE"
-    return _quiver_render_decision_block(_quiver_apply_overlay(raw_tfe_result or {}, quiver_context or {}))
 
 
 # Daily Holdings Re-Underwriting final release hook (advisory-only, packet consumer).

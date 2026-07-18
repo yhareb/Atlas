@@ -24,7 +24,7 @@ from atlas_holdings_final_action import build_merged_packet, render_ticker_answe
 FRESH_TFE_REQUIRED = "FRESH_TFE_REQUIRED"
 HOLDINGS_PACKET_REQUIRED = "HOLDINGS_PACKET_REQUIRED"
 PERME_PACKET_REQUIRED = "PERME_PACKET_REQUIRED"
-QUIVER_PACKET_REQUIRED = "QUIVER_PACKET_REQUIRED"
+QUIVER_INTEGRATION_RETIRED = "QUIVER_INTEGRATION_RETIRED"
 FDA_CONTEXT_REQUIRED = "FDA_CONTEXT_REQUIRED"
 CONVERSATIONAL_CONFIRMATION = "CONVERSATIONAL_CONFIRMATION"
 FAIL_CLOSED = "FAIL_CLOSED"
@@ -184,7 +184,7 @@ def requested_fields(prompt: str) -> set[str]:
         "moving_averages": ["moving average", "ema", "sma", "ema10", "ema21", "ema50", "sma50", "sma200"],
         "reward_risk": ["reward/risk", "reward risk", "risk reward"],
         "catalyst_state": ["catalyst", "news"], "fda_context": ["fda"],
-        "perme_regime": ["perme"], "quiver_posture": ["quiver"],
+        "perme_regime": ["perme"],
         "holdings_action": ["sell", "hold", "holding", "valid holding", "exit review", "trim review"],
         "recheck_condition": ["recheck"],
         "profit": ["peak gain", "current gain", "profit surrendered", "giveback"],
@@ -204,7 +204,7 @@ def classify_intent(prompt: str, ticker: str, snapshot: Mapping[str, Any] | None
     if any(w in text for w in ["perme"]):
         return PERME_PACKET_REQUIRED, ()
     if any(w in text for w in ["quiver"]):
-        return QUIVER_PACKET_REQUIRED, ()
+        return QUIVER_INTEGRATION_RETIRED, ("quiver_integration_retired",)
     if "fda" in text:
         return FDA_CONTEXT_REQUIRED, ()
     if any(w in text for w in ["sell", "hold", "holding", "recheck", "valid holding", "exit review", "trim review"]):
@@ -287,27 +287,19 @@ def render_fda_context(ctx: Mapping[str, Any] | None) -> tuple[str, dict[str, An
     return f"FDA DATA UNAVAILABLE — {reason}", {"status":"FDA_DATA_UNAVAILABLE", "reason":reason, "authority":Authority.FDA_PACKET.value}
 
 
-def render_tfe(packet: Mapping[str, Any], fields: set[str], *, quiver_context: Mapping[str, Any] | None = None, fda_context: Mapping[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
+def render_tfe(packet: Mapping[str, Any], fields: set[str], *, fda_context: Mapping[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
     raw = normalize_raw_tfe(_value(packet, "raw_tfe_classification"))
-    qposture = str((quiver_context or {}).get("quiver_posture") or (quiver_context or {}).get("quiver_view") or "NO_USABLE_DATA").upper()
-    if raw == "AVOID":
-        final = "AVOID"
-    elif raw.upper().startswith("BUY") and qposture == "CAUTION":
-        final = "WAIT / REVIEW"
-    elif raw.upper().startswith("BUY") and qposture == "MIXED":
-        final = "REVIEW"
-    else:
-        final = raw if raw in {"BUY", "BUY Small", "AVOID"} else "REVIEW"
+
+    final = raw if raw in {"BUY", "BUY Small", "AVOID"} else "REVIEW"
     struct: dict[str, Any] = {
         "ticker": packet.get("ticker"),
         "raw_tfe_classification": {"value": raw, "authority": Authority.TFE_PACKET.value},
-        "final_advisory_action": {"value": final, "authority": Authority.TFE_PACKET.value if not quiver_context else Authority.QUIVER_PACKET.value},
+        "final_advisory_action": {"value": final, "authority": Authority.TFE_PACKET.value},
         "packet_digest": packet.get("packet_digest"),
         "source_labels": {},
     }
     lines=[f"ATLAS DETERMINISTIC ANSWER — {packet.get('ticker')}", f"RAW TFE CLASSIFICATION: {raw}"]
-    if quiver_context:
-        lines.append(f"QUIVER OVERLAY: {qposture}")
+
     lines.append(f"FINAL ADVISORY ACTION: {final}")
     def add(label: str, key: str, formatter=lambda x: str(x), digits: int | None = None):
         f = _field(packet, key)
@@ -390,16 +382,6 @@ def render_perme(ticker: str, packet: Mapping[str, Any] | None, *, now: datetime
     return line, {"ticker":ticker.upper(),"perme_regime":{"value":regime,"authority":Authority.PERME_PACKET.value},"severity":pkt.get("severity"),"direct_match":relevant}, "FRESH"
 
 
-def render_quiver(ticker: str, tfe_packet: Mapping[str, Any], quiver_packet: Mapping[str, Any] | None) -> tuple[str, dict[str, Any], str]:
-    from atlas_quiver_decision_envelope import context_from_packet, apply_quiver_review_overlay, render_decision_block
-    ctx = context_from_packet(ticker, dict(quiver_packet) if quiver_packet else None)
-    raw = {"ticker":ticker, "raw_tfe_classification": normalize_raw_tfe(_value(tfe_packet,"raw_tfe_classification")), "score": _value(tfe_packet,"score"), "pillars": _value(tfe_packet,"pillars"), "entry": _value(tfe_packet,"entry"), "stop": _value(tfe_packet,"stop"), "target": _value(tfe_packet,"target")}
-    env = apply_quiver_review_overlay(raw, ctx)
-    block = render_decision_block(env)
-    block += f"\nRAW TFE CLASSIFICATION: {env.get('raw_tfe_classification')}\nFINAL ADVISORY ACTION: {env.get('final_advisory_action')}\nPACKET DIGEST: {env.get('packet_digest')}"
-    return block, env, str(ctx.get("quiver_freshness") or "DATA_UNAVAILABLE")
-
-
 class ConversationRouter:
     def __init__(self, *, db_path: str | Path | None = None, tfe_runner: Callable[[str], Mapping[str, Any]] | None = None, timeout_seconds: float = 10.0, policy: RouterPolicy = RouterPolicy()):
         self.db_path = db_path
@@ -425,6 +407,9 @@ class ConversationRouter:
             route, reasons = classify_intent(prompt, ticker, snapshot, price_input=price_input, policy=self.policy, now=now, source_conflict=source_conflict)
         fields=requested_fields(prompt)
         fresh_run=False; source=""
+        if route == QUIVER_INTEGRATION_RETIRED:
+            struct = {"ticker":ticker,"authority":"RETIRED_PROVIDER","result":"DATA_INCOMPLETE","candidate_analysis_run":False}
+            return RouteResult(route,ticker,"retired provider",freeze_mapping({}),freeze_mapping(struct),"DATA INCOMPLETE — QUIVER INTEGRATION RETIRED","DATA_INCOMPLETE",reasons,False,time.perf_counter()-started)
         if route == HOLDINGS_PACKET_REQUIRED:
             ans, struct, freshness = _atlas_select_leaf("CONVERSATION_HOLDINGS",
                 lambda:render_holdings(ticker, holdings_packet, fields, now=now, policy=self.policy),
@@ -440,19 +425,13 @@ class ConversationRouter:
                 snapshot = immutable_tfe_packet(_bounded_call(self.tfe_runner, ticker, self.timeout_seconds)); fresh_run=True
             ans, struct = render_tfe(snapshot, fields | {"fda_context"}, fda_context=fda_context)
             return RouteResult(route,ticker,"FDA context + TFE packet",snapshot,freeze_mapping(struct),ans,"FRESH",reasons,fresh_run,time.perf_counter()-started)
-        if route in {FRESH_TFE_REQUIRED, CONVERSATIONAL_CONFIRMATION, QUIVER_PACKET_REQUIRED}:
+        if route in {FRESH_TFE_REQUIRED, CONVERSATIONAL_CONFIRMATION}:
             if route == FRESH_TFE_REQUIRED or snapshot is None:
                 if not self.tfe_runner: raise RouterError("FRESH_TFE_RESULT_UNAVAILABLE:NO_RUNNER_CONFIGURED")
                 snapshot = immutable_tfe_packet(_bounded_call(self.tfe_runner, ticker, self.timeout_seconds)); fresh_run=True; source="injected production-safe single-ticker TFE runner"
             else:
                 source="fresh immutable TFE/signal packet"
-            if route == QUIVER_PACKET_REQUIRED:
-                ans, struct, freshness = _atlas_select_leaf(
-                    "CONVERSATION_HOLDINGS",
-                    lambda:render_quiver(ticker, snapshot, quiver_packet),
-                    reference="atlas_conversation_router.render_quiver",
-                    projector=lambda p:("\n".join(p.lines),p.structured,str((p.structured.get('receipt') or {}).get('usability') or 'DATA_INCOMPLETE')))
-                return RouteResult(route,ticker,"Quiver packet + TFE packet",snapshot,freeze_mapping(struct),ans,freshness,reasons,fresh_run,time.perf_counter()-started)
+
             ans, struct = render_tfe(snapshot, fields, fda_context=fda_context)
             return RouteResult(route,ticker,source,snapshot,freeze_mapping(struct),ans,"FRESH",reasons,fresh_run,time.perf_counter()-started)
         raise RouterError("UNHANDLED_ROUTE")

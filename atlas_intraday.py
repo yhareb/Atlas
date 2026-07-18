@@ -2272,13 +2272,7 @@ def _build_report(summary):
     lines += _gates_lines(high)
     lines += _watch_lines(summary)
     lines += _intraday_diagnostic_lines(summary, before_scan_signal_id=before_scan_signal_id, high=high, buy_now_tickers=buy_now_tickers)
-    if summary.get("_quiver_fixture") is not None:
-        raw, context = summary["_quiver_fixture"]
-        lines += _atlas_select_leaf(
-            "INTRADAY_HOLDINGS",
-            lambda: quiver_consumer_decision_block(raw, context).splitlines(),
-            reference="atlas_intraday.quiver_consumer_decision_block",
-        )
+
     return _human_cleanup_report(_naturalize_report("\n".join(lines)))
 
 
@@ -2816,18 +2810,6 @@ from atlas_holding_state_feature_gate import mode as _atlas_mode
 if __name__ == "__main__":
     run_intraday()
 
-try:
-    from atlas_quiver_decision_envelope import render_decision_block as _quiver_render_decision_block, apply_quiver_review_overlay as _quiver_apply_overlay
-except Exception:
-    _quiver_render_decision_block = None
-    _quiver_apply_overlay = None
-
-
-def quiver_consumer_decision_block(raw_tfe_result, quiver_context):
-    """Shared consumer shim: render exactly the authoritative Quiver decision envelope."""
-    if not _quiver_apply_overlay or not _quiver_render_decision_block:
-        return "QUIVER DATA UNAVAILABLE"
-    return _quiver_render_decision_block(_quiver_apply_overlay(raw_tfe_result or {}, quiver_context or {}))
 
 
 # Daily Holdings Re-Underwriting final release hook (advisory-only, packet consumer).
