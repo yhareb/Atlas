@@ -150,14 +150,17 @@ def _watch_lines(data):
     open_tickers = {str(r.get("ticker") or "").upper() for r in atlas_db.get_open_positions()}
     return watch_list_block(watch_rows, open_tickers=open_tickers)
 
-def render_morning_briefing():
+def render_morning_briefing(gear_packet=None):
     market_day = current_et_market_date()
     today = market_day.strftime("%Y-%m-%d")
     data = _latest_handoff(market_day)
     handoff_date = data.get("date", "none") if isinstance(data, dict) else "none"
     now_et = datetime.now(ET).strftime("%-I:%M %p")
 
+    from atlas_market_gear import build_gear_packet, header_line
+    gear_packet = gear_packet or build_gear_packet()
     lines = [
+        header_line(gear_packet) + f" · digest {gear_packet.get('packet_digest')}",
         f"🦅 ATLAS MORNING — {now_et} ET",
         f"📅 Trading day {today} · handoff {handoff_date}",
         "📡 Open plan: exits first, then armed pullbacks, then fresh scan",

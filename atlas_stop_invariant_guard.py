@@ -22,7 +22,8 @@ PACKET_VERSION = "stop_invariant_guard.v1"
 ENGINE_SOURCE = "atlas_portfolio.py:trailing_stop"
 PP_SOURCE = "atlas_profit_protection_apply.py"
 ENGINE_REASONS = {
-    "PEAK_1R_BREAKEVEN", "PEAK_2R_LOCK_1R", "REGIME_RISK_OFF_BREAKEVEN"
+    "PEAK_1R_BREAKEVEN", "PEAK_2R_LOCK_1R", "REGIME_RISK_OFF_BREAKEVEN",
+    "BREAKEVEN_STOP_RAISED", "RUNNER_STOP_RAISED"
 }
 CENT = Decimal("0.01")
 

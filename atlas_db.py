@@ -58,6 +58,41 @@ def get_connection():
     return conn
 
 
+def migrate_exit_policy_schema(conn=None):
+    """Add ORDER #25 state/events without rewriting existing accounting rows."""
+    owned = conn is None
+    conn = conn or get_connection()
+    conn.execute("""CREATE TABLE IF NOT EXISTS exit_policy_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, event_type TEXT NOT NULL,
+        trade_id INTEGER NOT NULL, lot_id INTEGER, stage TEXT,
+        occurred_at TEXT NOT NULL, payload_json TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL UNIQUE, policy_version TEXT NOT NULL,
+        FOREIGN KEY(trade_id) REFERENCES trades(id), FOREIGN KEY(lot_id) REFERENCES position_lots(id))""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_exit_policy_trade ON exit_policy_events(trade_id,id)")
+    if owned:
+        conn.commit(); conn.close()
+
+
+def get_exit_policy_projection(trade_id, current_quantity=None):
+    """Derive current ladder state from events instead of nonexistent trade fields."""
+    conn = get_connection(); migrate_exit_policy_schema(conn)
+    rows = conn.execute("SELECT event_type,stage,payload_json FROM exit_policy_events WHERE trade_id=? ORDER BY id", (int(trade_id),)).fetchall()
+    conn.close()
+    original = Decimal(str(current_quantity or 0)); completed = set()
+    for typ, stage, raw in rows:
+        try: payload = json.loads(raw or "{}")
+        except Exception: payload = {}
+        if typ in ("BROKER_PARTIAL_SELL_FILLED", "BROKER_SELL_FILLED"):
+            original += Decimal(str(payload.get("filled_quantity") or 0))
+        if typ == "EXIT_STAGE_COMPLETED" and stage:
+            completed.add(str(stage))
+    return {"original_quantity": str(original),
+            "stage_1_state": "FILLED" if "STAGE_1" in completed else "PENDING",
+            "stage_2_state": "FILLED" if "STAGE_2" in completed else "PENDING",
+            "runner_state": "ACTIVE" if "STAGE_2" in completed else "INACTIVE",
+            "event_count": len(rows)}
+
+
 # --------------------------------------------------------------------------- #
 # P0L-9 STAGING-ONLY additive dual-write bookkeeping layer.
 #
@@ -830,88 +865,61 @@ def close_trade(ticker, exit_price, quantity=None, fees=0.0, exit_at=None):
 
 
 def close_trade_broker_confirmed(ticker, trade_id, exit_price, quantity, fees, broker_ref,
-                                 realized_pnl=None, realized_pnl_pct=None, exit_at=None):
-    """Close a specific OPEN trade lot from broker-confirmed execution data.
-
-    Unlike close_trade(), this targets one trade_id instead of FIFO. Broker-provided
-    realized P/L values are preserved when supplied; otherwise they are computed
-    from the stored entry, quantity, and fees.
-    """
-    ticker = (ticker or "").upper()
-    trade_id = int(trade_id)
-    exit_price_decimal = Decimal(str(exit_price))
-    quantity_decimal = Decimal(str(quantity))
-    fees_decimal = Decimal(str(fees or 0.0))
-    exit_price = float(exit_price_decimal)
-    quantity = float(quantity_decimal)
-    fees = float(fees_decimal)
-    broker_ref = str(broker_ref or "").strip() or None
-    exit_at = exit_at or _now()
-    if not ticker or trade_id <= 0 or exit_price <= 0 or quantity <= 0:
-        raise ValueError("close_trade_broker_confirmed requires ticker, trade_id, positive exit_price, positive quantity")
-
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT ticker, status, quantity, entry_price, entry_fees, notes
-        FROM trades WHERE id=?
-    ''', (trade_id,))
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        raise ValueError(f"Trade id {trade_id} not found")
-    db_ticker, status, open_qty, entry_price, entry_fees, notes = row
-    db_ticker = (db_ticker or "").upper()
-    if db_ticker != ticker:
-        conn.close()
-        raise ValueError(f"Trade id {trade_id} is {db_ticker}, not {ticker}")
-    if status != "OPEN":
-        conn.close()
-        raise ValueError(f"Trade id {trade_id} is {status}, not OPEN")
-    open_qty_decimal = Decimal(str(open_qty or 0.0))
-    if open_qty_decimal != quantity_decimal:
-        conn.close()
-        raise ValueError(f"Trade id {trade_id} quantity mismatch: open {open_qty}, broker {quantity}")
-
-    entry_price_decimal = Decimal(str(entry_price))
-    entry_fees_decimal = Decimal(str(entry_fees or 0.0))
-    entry_price = float(entry_price_decimal)
-    entry_fees = float(entry_fees_decimal)
-    if realized_pnl is None:
-        realized = float(((exit_price_decimal - entry_price_decimal) * quantity_decimal) - entry_fees_decimal - fees_decimal)
-    else:
-        realized = float(realized_pnl)
-    if realized_pnl_pct is None:
-        cost_basis_decimal = entry_price_decimal * quantity_decimal
-        realized_pct = float(Decimal(str(realized)) / cost_basis_decimal * Decimal("100")) if cost_basis_decimal else None
-    else:
-        realized_pct = float(realized_pnl_pct)
-    close_note = f"Broker confirmed close ref {broker_ref}" if broker_ref else "Broker confirmed close"
-    notes = (notes or "").rstrip()
-    notes = f"{notes} | {close_note}" if notes else close_note
-    cursor.execute('''
-        UPDATE trades
-           SET status='CLOSED', exit_price=?, exit_at=?, exit_fees=?, broker_ref=?,
-               realized_pnl=?, realized_pnl_pct=?, notes=?, updated_at=?
-         WHERE id=? AND status='OPEN'
-    ''', (exit_price, exit_at, fees, broker_ref, realized, realized_pct, notes, _now(), trade_id))
-    if cursor.rowcount != 1:
-        conn.rollback(); conn.close()
-        raise RuntimeError(f"Failed to close trade id {trade_id}")
-    credit_decimal = (exit_price_decimal * quantity_decimal) - fees_decimal
-    credit = float(credit_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-    _append_cash_ledger(cursor, credit, f"Broker sell {ticker} {broker_ref or ''}: {quantity} sh @ {exit_price} net credit {round(credit, 2)} fees {fees}".strip())
-    conn.commit()
-    _bk_cash_ledger_id = cursor.execute("SELECT id FROM cash_ledger ORDER BY id DESC LIMIT 1").fetchone()[0]
-    conn.close()
-    _audit_db_event("trades", "UPDATE", trade_id, ticker, "close_trade_broker_confirmed")
-
-    # P0L-9 STAGING dual-write: fires only after the legacy commit above.
-    # Never fatal -- failures here cannot undo or block the legacy write.
-    _bk_buy_cost_basis_cents = _bk_to_cents(entry_price_decimal * quantity_decimal + entry_fees_decimal)
-    _bk_safe(_dualwrite_sell_fill, trade_id, ticker, quantity, exit_price,
-             credit, _bk_cash_ledger_id, _bk_buy_cost_basis_cents, broker_ref=broker_ref)
-    return _fetch_trade_rows([trade_id])[0]
+                                 realized_pnl=None, realized_pnl_pct=None, exit_at=None, *, stage_id=None):
+    """Atomically apply an exact-lot full or partial broker-confirmed eToro fill."""
+    ticker, trade_id = (ticker or "").upper(), int(trade_id)
+    px, qty, fee = Decimal(str(exit_price)), Decimal(str(quantity)), Decimal(str(fees or 0))
+    broker_ref, exit_at = str(broker_ref or "").strip(), exit_at or _now()
+    if not ticker or trade_id <= 0 or px <= 0 or qty <= 0 or not broker_ref:
+        raise ValueError("ticker/trade/positive fill/broker_ref required")
+    con = get_connection(); cur = con.cursor()
+    try:
+        migrate_exit_policy_schema(con)
+        row = cur.execute("""SELECT ticker,status,quantity,entry_price,entry_at,entry_fees,stop_loss,
+          entry_atr14,risk_pct,target_price,manual_stop_lock,notes FROM trades WHERE id=?""", (trade_id,)).fetchone()
+        if not row: raise ValueError("trade not found")
+        dbticker,status,openq,entry,entry_at,entryfees,stop,atr,risk,target,lock,notes=row
+        openq, entry, total_entry_fee = Decimal(str(openq)), Decimal(str(entry)), Decimal(str(entryfees or 0))
+        if dbticker.upper()!=ticker or status!='OPEN': raise ValueError("explicit OPEN trade/ticker mismatch")
+        if qty > openq: raise ValueError("overfill")
+        idem=f"broker_sell:{trade_id}:{stage_id or 'FULL'}:{broker_ref}"
+        if cur.execute("SELECT 1 FROM exit_policy_events WHERE idempotency_key=?",(idem,)).fetchone(): raise ValueError("duplicate broker receipt")
+        lots=cur.execute("SELECT id,quantity_scale,cost_basis_cents,entry_event_id,entry_price_micros,entry_price_decimal_text,stop_loss_micros,stop_loss_decimal_text,target_price_micros,target_price_decimal_text FROM position_lots WHERE legacy_trades_id=? AND status='OPEN'",(trade_id,)).fetchall()
+        if len(lots)!=1: raise ValueError("position lot missing or ambiguous")
+        lot=lots[0]; lot_id=lot[0]
+        sold_entry_fee=total_entry_fee*qty/openq; remaining=openq-qty
+        computed=(px-entry)*qty-sold_entry_fee-fee
+        realized=Decimal(str(realized_pnl)) if realized_pnl is not None else computed
+        rpct=Decimal(str(realized_pnl_pct)) if realized_pnl_pct is not None else realized/(entry*qty)*100
+        note=((notes or "")+f" | Broker confirmed sell {broker_ref}").strip(" |")
+        partial=remaining>0
+        if partial:
+            cur.execute("UPDATE trades SET quantity=?,entry_fees=?,updated_at=? WHERE id=? AND status='OPEN'",(float(remaining),float(total_entry_fee-sold_entry_fee),_now(),trade_id))
+            cur.execute("""INSERT INTO trades(ticker,status,quantity,entry_price,entry_at,exit_price,exit_at,entry_fees,exit_fees,realized_pnl,realized_pnl_pct,parent_id,stop_loss,entry_atr14,risk_pct,target_price,broker_ref,manual_stop_lock,notes,updated_at)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(ticker,'CLOSED',float(qty),float(entry),entry_at,float(px),exit_at,float(sold_entry_fee),float(fee),float(realized),float(rpct),trade_id,stop,atr,risk,target,broker_ref,lock,note,_now()))
+            closed_id=cur.lastrowid
+        else:
+            cur.execute("UPDATE trades SET status='CLOSED',exit_price=?,exit_at=?,exit_fees=?,realized_pnl=?,realized_pnl_pct=?,broker_ref=?,notes=?,updated_at=? WHERE id=? AND status='OPEN'",(float(px),exit_at,float(fee),float(realized),float(rpct),broker_ref,note,_now(),trade_id)); closed_id=trade_id
+        credit=(px*qty-fee).quantize(Decimal('.01'),rounding=ROUND_HALF_UP)
+        _append_cash_ledger(cur,float(credit),f"Broker sell {ticker} {broker_ref}: {qty} @ {px}")
+        cash_id=cur.execute("SELECT last_insert_rowid()").fetchone()[0]
+        payload={"trade_id":trade_id,"closed_trade_id":closed_id,"stage":stage_id,"original_quantity":str(openq),"filled_quantity":str(qty),"remaining_quantity":str(remaining),"broker_ref":broker_ref}
+        semantic="BROKER_PARTIAL_SELL_FILLED" if partial else "BROKER_SELL_FILLED"
+        ev,_=_bk_emit_event(cur,"BROKER_SELL_FILLED",ticker=ticker,lot_id=lot_id,occurred_at=exit_at,payload={**payload,"semantic_event_type":semantic},source="atomic_exit_policy_fill",idempotency_key=idem,legacy_trades_id=closed_id,legacy_cash_ledger_id=cash_id)
+        cashc,basis=_bk_to_cents(credit),_bk_to_cents(entry*qty+sold_entry_fee); pnl=cashc-basis
+        _bk_emit_posting(cur,ev,"CASH","PRINCIPAL",cashc,"Confirmed sell",cash_id); _bk_emit_posting(cur,ev,f"POSITION:{ticker}","PRINCIPAL",-basis,"Cost basis",cash_id); _bk_emit_posting(cur,ev,"REALIZED_PNL","REALIZED_PNL",-pnl,"P/L",cash_id)
+        if partial:
+            scaled,text=_bk_to_quantity_scaled(remaining); cur.execute("UPDATE position_lots SET quantity_text=?,quantity_scaled=?,cost_basis_cents=?,last_rebuilt_at=? WHERE id=?",(text,scaled,lot[2]-basis,_now(),lot_id))
+            sscaled,stext=_bk_to_quantity_scaled(qty); pmic,ptext=_bk_to_price_micros(px)
+            cur.execute("""INSERT INTO position_lots(ticker,status,quantity_text,quantity_scaled,quantity_scale,quantity_source,entry_price_micros,entry_price_decimal_text,entry_event_id,exit_price_micros,exit_price_decimal_text,exit_event_id,stop_loss_micros,stop_loss_decimal_text,target_price_micros,target_price_decimal_text,cost_basis_cents,cost_basis_source,realized_pnl_cents,currency,legacy_trades_id,last_rebuilt_at) VALUES(?,'CLOSED',?,?,?,'broker_fill',?,?,?,?,?,?,?,?,?,?,?,?,?,'USD',?,?)""",(ticker,stext,sscaled,lot[1],lot[4],lot[5],lot[3],pmic,ptext,ev,lot[6],lot[7],lot[8],lot[9],basis,'broker_amount',pnl,closed_id,_now()))
+        else: cur.execute("UPDATE position_lots SET status='CLOSED',exit_event_id=?,realized_pnl_cents=?,last_rebuilt_at=? WHERE id=?",(ev,pnl,_now(),lot_id))
+        cur.execute("INSERT INTO exit_policy_events(event_type,trade_id,lot_id,stage,occurred_at,payload_json,idempotency_key,policy_version) VALUES(?,?,?,?,?,?,?,'atlas_exit_policy.v1')",(semantic,trade_id,lot_id,stage_id,exit_at,json.dumps(payload,sort_keys=True),idem))
+        if stage_id: cur.execute("INSERT INTO exit_policy_events(event_type,trade_id,lot_id,stage,occurred_at,payload_json,idempotency_key,policy_version) VALUES('EXIT_STAGE_COMPLETED',?,?,?,?,?,?,'atlas_exit_policy.v1')",(trade_id,lot_id,stage_id,exit_at,json.dumps(payload,sort_keys=True),f"completed:{idem}"))
+        con.commit()
+    except Exception:
+        con.rollback(); con.close(); raise
+    con.close()
+    return {"parent":_fetch_trade_rows([trade_id])[0],"closed":_fetch_trade_rows([closed_id])[0],"partial":partial,"event_id":ev,"remaining_quantity":str(remaining)}
 
 
 def get_trades(status=None, limit=500):
@@ -1064,7 +1072,7 @@ def update_trade_stop(trade_id, stop_loss):
 def update_trade_stop_with_event(trade_id, stop_loss, *, trail_reason, cycle_id,
                                  calculation_timestamp=None):
     """Atomically raise an OPEN lot stop and append its authorizing event."""
-    allowed = {"PEAK_1R_BREAKEVEN", "PEAK_2R_LOCK_1R", "REGIME_RISK_OFF_BREAKEVEN"}
+    allowed = {"PEAK_1R_BREAKEVEN", "PEAK_2R_LOCK_1R", "REGIME_RISK_OFF_BREAKEVEN", "BREAKEVEN_STOP_RAISED", "RUNNER_STOP_RAISED"}
     if trail_reason not in allowed:
         raise ValueError("unapproved trailing-stop reason")
     conn = get_connection(); cursor = conn.cursor()

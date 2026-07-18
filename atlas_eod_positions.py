@@ -239,7 +239,7 @@ def _profit_protection_v2_lines() -> list[str]:
     return ([""] + block.splitlines() + [""]) if block else []
 
 
-def build_report(quiver_fixture=None) -> str:
+def build_report(quiver_fixture=None, gear_packet=None, exit_packet=None, holding_packet=None, broker_state=None) -> str:
     market_day = datetime.now(ET_TZ).strftime("%B %-d, %Y")
     trades = _open_trades()
     cash = _cash_balance()
@@ -268,7 +268,10 @@ def build_report(quiver_fixture=None) -> str:
     roi = (total_unrealized / total_entry_cost * 100.0) if total_entry_cost else 0.0
     excluded = valuation_excluded_tickers(rows)
     equity = cash + total_value
+    from atlas_market_gear import build_gear_packet, header_line
+    gear_packet = gear_packet or build_gear_packet()
     lines = [
+        header_line(gear_packet) + f" · digest {gear_packet.get('packet_digest')}",
         f"━━━ 📊 EOD POSITIONS — {market_day} ━━━",
         "",
         f"💰 Equity {SOURCE_RENDER_CALC} {_money(equity)} · Cash [LEDGER] {_money(cash)} · {len(rows)} positions · ROI {SOURCE_RENDER_CALC} {_fmt_pct(roi)}" + (f" · Valuation PARTIAL excl {','.join(excluded)}" if excluded else ""),
@@ -278,6 +281,12 @@ def build_report(quiver_fixture=None) -> str:
         render_portfolio_visibility_block(normalize_open_position_rows(rows), atlas_db.get_pending_broker_confirmation_trades())
         + _holdings_final_action_lines() + _profit_protection_v2_lines(),
         reference="atlas_eod_positions.holding_leaf"))
+    try:
+        from atlas_holdings_final_action import build_broker_sync_sheet, render_broker_sync_sheet
+        sheet = build_broker_sync_sheet(exit_packet or {"decisions": []}, holding_packet or {"positions": rows}, broker_state)
+        lines += [""] + render_broker_sync_sheet(sheet) + [""]
+    except Exception as exc:
+        lines += ["", "━━━ ETORO BROKER SYNC ━━━", f"DATA INCOMPLETE — {type(exc).__name__}", ""]
     if rows:
         valued_rows = [r for r in rows if r.get("unrealized_pl_pct") is not None]
         best = max(valued_rows, key=lambda r: r["unrealized_pl_pct"]) if valued_rows else None

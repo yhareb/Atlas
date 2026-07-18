@@ -1533,6 +1533,14 @@ def check_fda_calendar(ticker, fundamentals=None, holding=False):
     }
 
 
+def _parse_earnings_date(value):
+    """Parse a Benzinga earnings date as ISO YYYY-MM-DD; malformed values are absent."""
+    try:
+        return datetime.date.fromisoformat(str(value)[:10])
+    except Exception:
+        return None
+
+
 def _earnings_rows(ticker, start_day, end_day, limit=10):
     """Return Benzinga earnings rows with a 4-hour per-ticker in-memory cache.
 

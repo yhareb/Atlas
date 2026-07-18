@@ -47,6 +47,9 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__)))
 
 import atlas_db
+from atlas_exit_policy import evaluate_exit_ladder, completed_sessions, preceding_session
+from atlas_market_gear import gate_candidate
+import atlas_nyse_calendar
 import atlas_corporate_action_gate as corporate_action_gate
 import atlas_account as acct
 from atlas_time import current_et_market_date, add_trading_days
@@ -344,6 +347,11 @@ def size_position_for_risk(equity, entry, stop, risk_pct):
     if shares * entry > max_value:
         shares = math.floor(max_value / entry)
     return max(shares, 0)
+
+
+def _gear_gate(signal, packet, route, base_risk):
+    packet = packet or {"gear": None, "packet_digest": None, "macro_event_gate": "DATA_INCOMPLETE"}
+    return gate_candidate(signal, packet, route=route, base_risk_budget=base_risk)
 
 
 # --------------------------------------------------------------------------- #
@@ -713,7 +721,7 @@ def _revalidate_pullback_fill(ticker, row, now=None):
     }
 
 
-def evaluate_pending_pullback(ticker, dry_run=True, regime=None, pending=None, reserved_cash=0.0):
+def evaluate_pending_pullback(ticker, dry_run=True, regime=None, pending=None, reserved_cash=0.0, gear_packet=None):
     """Evaluate one persisted WAITING pullback. Returns None if none exists."""
     ticker = (ticker or "").upper()
     row = atlas_db.get_pending_pullback(ticker)
@@ -787,12 +795,16 @@ def evaluate_pending_pullback(ticker, dry_run=True, regime=None, pending=None, r
         sig = row.get("signal_result") or {}
         sig.setdefault("ticker", ticker)
         sig.setdefault("score", row.get("score") or "3/4 Pillars")
+        gate = _gear_gate(sig, gear_packet, "pullback", RISK_PCT_FULL)
+        if not gate["allowed"]:
+            return {"ticker":ticker,"action":"BLOCK","score":sig.get("score"),
+                    "reason":"GEAR GATE: "+",".join(gate["reason_codes"]),"gear_gate":gate}
         decision = consider_buy(
             sig, dry_run=dry_run, regime=regime, pending=pending,
             reserved_cash=reserved_cash, pullback_override_entry=round(trigger, 2),
             pullback_override_reason=(f"Pulled back to armed 10-EMA limit {trigger:.2f} "
                                       f"(last {state['last_close']:.2f})"),
-            manage_pending=False,
+            manage_pending=False, gear_packet=gear_packet, entry_route="pullback",
         )
         decision["pending_id"] = row.get("id")
         decision["from_pending_pullback"] = True
@@ -933,13 +945,9 @@ def evaluate_exit(lot, dry_run=True, regime=None, macro_context_v1=None):
     stop = hard_stop
     manual_stop_locked = bool(int(lot.get("manual_stop_lock") or 0))
     trail_note = "manual stop locked" if manual_stop_locked else "persisted decision stop"
-    if not manual_stop_locked:
-        if peak_R >= 2.0:
-            stop = max(stop, entry + risk)
-            trail_note = "peak +2R reached -> stop locked at +1R"
-        elif peak_R >= 1.0:
-            stop = max(stop, entry)
-            trail_note = "peak +1R reached -> stop at breakeven"
+    if not manual_stop_locked and high_water >= entry * 1.05:
+        stop = max(stop, entry)
+        trail_note = "high-water +5% reached -> stop at breakeven"
 
     regime_ok, regime_detail = regime if regime is not None else check_regime()
     earnings_ctx = check_earnings_context(ticker)
@@ -1047,10 +1055,8 @@ def evaluate_exit(lot, dry_run=True, regime=None, macro_context_v1=None):
     if not dry_run and lot.get("id") and stop > hard_stop:
         if risk_off_tightened:
             trail_reason = "REGIME_RISK_OFF_BREAKEVEN"
-        elif peak_R >= 2.0:
-            trail_reason = "PEAK_2R_LOCK_1R"
         else:
-            trail_reason = "PEAK_1R_BREAKEVEN"
+            trail_reason = "BREAKEVEN_STOP_RAISED"
         atlas_db.update_trade_stop_with_event(
             lot.get("id"), round(stop, 2), trail_reason=trail_reason,
             cycle_id=os.environ.get("ATLAS_CYCLE_ID") or datetime.now(timezone.utc).isoformat(),
@@ -1079,14 +1085,41 @@ def evaluate_exit(lot, dry_run=True, regime=None, macro_context_v1=None):
             "fda_warning": fda_calendar.get("holding_warning_note") if isinstance(fda_calendar, dict) and fda_calendar.get("holding_warning") else None,
         }
 
-    if last >= target:
-        action, reason, price = "SELL", f"2R target hit; last {last:.2f} >= target {target:.2f}", round(last, 2)
-    elif last <= hard_stop:
+    # Current deterministic context is adapted here; trade rows intentionally have no
+    # synthetic sessions/stage/earnings columns.
+    projection = atlas_db.get_exit_policy_projection(lot.get("id"), lot["quantity"])
+    evaluated_at = datetime.now(timezone.utc)
+    held_sessions, calendar_error = completed_sessions(_parse_dt(entry_at), evaluated_at, atlas_nyse_calendar.session_schedule_governed)
+    evaluation_session = evaluated_at.astimezone(ZoneInfo("America/New_York")).date().isoformat()
+    schedule_today = atlas_nyse_calendar.session_schedule_governed(date.fromisoformat(evaluation_session))
+    calendar_digest = None if calendar_error else schedule_today.get("calendar_digest")
+    earnings_date = earnings_status = preceding_earnings_session = None
+    nxt = earnings_ctx.get("next") if isinstance(earnings_ctx, dict) else None
+    if isinstance(nxt, dict):
+        candidate_status = str(nxt.get("date_status") or "").lower()
+        candidate_date = str(nxt.get("date") or "")[:10]
+        if candidate_status in {"confirmed", "projected"} and candidate_date:
+            earnings_status, earnings_date = candidate_status, candidate_date
+            if candidate_status == "confirmed":
+                prev, _ = preceding_session(date.fromisoformat(candidate_date), atlas_nyse_calendar.session_schedule_governed)
+                preceding_earnings_session = prev.isoformat() if prev else None
+    ladder = evaluate_exit_ladder(
+        entry_price=entry, current_price=last, high_water=high_water,
+        original_quantity=projection["original_quantity"], remaining_quantity=lot["quantity"],
+        stage1_state=projection["stage_1_state"], stage2_state=projection["stage_2_state"],
+        runner_state=projection["runner_state"], current_stop=hard_stop,
+        manual_stop_lock=manual_stop_locked, completed_sessions_held=held_sessions,
+        gear=int((regime or (True, ""))[0] is False) + 1, official_close=last,
+        earnings_date=earnings_date, earnings_status=earnings_status,
+        evaluation_session=evaluation_session, preceding_earnings_session=preceding_earnings_session,
+        calendar_digest=calendar_digest)
+    if last <= hard_stop:
         action, reason, price = "SELL", f"Persisted stop hit; last {last:.2f} <= stop {hard_stop:.2f}", round(last, 2)
+    elif ladder.get("action") == "SELL":
+        action, reason, price = "SELL", ", ".join(ladder.get("reason_codes") or []), round(last, 2)
+        qty = ladder.get("sell_quantity") or qty
     elif last <= stop and not (risk_off_tightened and last < entry):
         action, reason, price = "SELL", f"Stop hit ({trail_note}); last {last:.2f} <= stop {stop:.2f}", round(last, 2)
-    elif days > MAX_HOLD_DAYS:
-        action, reason, price = "SELL", f"Time exit (> {MAX_HOLD_DAYS} days open)", round(last, 2)
     else:
         result = {
             "ticker": ticker, "action": "HOLD", "qty": qty, "entry": round(entry, 2),
@@ -1276,7 +1309,7 @@ def _recent_gap_catalyst(ticker, now=None):
     return False, None
 
 
-def consider_gap_up_breakout(signal_result, dry_run=True, regime=None, pending=None, reserved_cash=0.0, now=None):
+def consider_gap_up_breakout(signal_result, dry_run=True, regime=None, pending=None, reserved_cash=0.0, now=None, gear_packet=None):
     ticker = signal_result["ticker"].upper()
     score = signal_result.get("score", "0/4 Pillars")
     try:
@@ -1287,6 +1320,9 @@ def consider_gap_up_breakout(signal_result, dry_run=True, regime=None, pending=N
         return {"ticker": ticker, "action": "SKIP", "reason": "GAP_BREAKOUT_WINDOW_CLOSED"}
     if pillars < 3:
         return {"ticker": ticker, "action": "SKIP", "reason": "GAP_BREAKOUT_SCORE_LT_3"}
+    gear_gate = _gear_gate(signal_result, gear_packet, "gap", RISK_PCT_GAP_BREAKOUT)
+    if not gear_gate["allowed"]:
+        return {"ticker": ticker, "action": "BLOCK", "reason": "GEAR GATE: " + ",".join(gear_gate["reason_codes"]), "gear_gate": gear_gate}
     allowed, why = check_admission(ticker, regime=regime, pending=pending)
     if not allowed:
         return {"ticker": ticker, "action": "BLOCK", "reason": why}
@@ -1313,7 +1349,7 @@ def consider_gap_up_breakout(signal_result, dry_run=True, regime=None, pending=N
     stop = round(entry * 0.95, 2)
     target = round(entry + (2 * (entry - stop)), 2)
     equity = acct.get_equity(price_lookup=_price_lookup)
-    shares = size_position_for_risk(equity, entry, stop, RISK_PCT_GAP_BREAKOUT)
+    shares = size_position_for_risk(equity, entry, stop, float(gear_gate["risk_budget"]))
     if shares <= 0:
         return {"ticker": ticker, "action": "SKIP", "reason": "GAP_BREAKOUT_SIZED_TO_ZERO"}
     cost = round(shares * entry, 2)
@@ -1329,7 +1365,7 @@ def consider_gap_up_breakout(signal_result, dry_run=True, regime=None, pending=N
         "reason": f"GAP-UP BREAKOUT: gap +{gap_pct:.1f}%, RVOL {rvol:.1f}x, catalyst: {catalyst_note}",
         "entry": round(entry, 2), "stop": stop, "target": target,
         "shares": shares, "cost": cost,
-        "risk_pct": RISK_PCT_GAP_BREAKOUT * 100,
+        "risk_pct": float(gear_gate["risk_budget"]) * 100, "gear_gate": gear_gate,
         "score": score, "signal": signal_result.get("signal", ""),
         "entry_type": "GAP_UP_BREAKOUT",
         "gap_pct": round(gap_pct, 2), "gap_rvol": round(rvol, 2),
@@ -1654,7 +1690,7 @@ def sector_catalyst_sweep_trigger(signal_result, now=None):
 
 
 def consider_sector_catalyst_peer_breakout(signal_result, trigger_meta, dry_run=True, regime=None, pending=None,
-                                           reserved_cash=0.0, now=None):
+                                           reserved_cash=0.0, now=None, gear_packet=None):
     ticker = str((signal_result or {}).get("ticker") or "").upper()
     if not ticker or not _sector_sweep_window_open(now=now):
         return {"ticker": ticker, "action": "SKIP", "reason": "SECTOR_SWEEP_WINDOW_CLOSED"}
@@ -1665,6 +1701,9 @@ def consider_sector_catalyst_peer_breakout(signal_result, trigger_meta, dry_run=
         pillars = 0
     if pillars < 3:
         return {"ticker": ticker, "action": "SKIP", "reason": "SECTOR_SWEEP_SCORE_LT_3"}
+    gear_gate = _gear_gate(signal_result, gear_packet, "sector-peer", RISK_PCT_INTRADAY_BREAKOUT)
+    if not gear_gate["allowed"]:
+        return {"ticker": ticker, "action": "BLOCK", "reason": "GEAR GATE: " + ",".join(gear_gate["reason_codes"]), "gear_gate": gear_gate}
     if atlas_db.get_pending_pullback(ticker):
         return {"ticker": ticker, "action": "SKIP", "reason": "SECTOR_SWEEP_ALREADY_WAITING_FOR_DIP"}
     allowed, why = check_admission(ticker, regime=regime, pending=pending)
@@ -1693,7 +1732,7 @@ def consider_sector_catalyst_peer_breakout(signal_result, trigger_meta, dry_run=
     stop = round(float(stop_base) * 0.98, 2)
     target = round(entry + (2 * (entry - stop)), 2)
     equity = acct.get_equity(price_lookup=_price_lookup)
-    shares = size_position_for_risk(equity, entry, stop, RISK_PCT_INTRADAY_BREAKOUT)
+    shares = size_position_for_risk(equity, entry, stop, float(gear_gate["risk_budget"]))
     cost = round(shares * entry, 2) if shares else 0.0
     trigger = (trigger_meta or {}).get("trigger")
     decision = {
@@ -1702,7 +1741,7 @@ def consider_sector_catalyst_peer_breakout(signal_result, trigger_meta, dry_run=
         "reason": f"SECTOR CATALYST SWEEP: {trigger} sympathy breakout candidate, {score}, RVOL {float(rv):.1f}x",
         "entry": entry, "stop": stop, "target": target,
         "shares": shares, "cost": cost,
-        "risk_pct": RISK_PCT_INTRADAY_BREAKOUT * 100,
+        "risk_pct": float(gear_gate["risk_budget"]) * 100, "gear_gate": gear_gate,
         "score": score, "signal": signal_result.get("signal", ""),
         "entry_type": "INTRADAY_BREAKOUT_CONTINUATION",
         "sector_sweep": True,
@@ -1718,7 +1757,7 @@ def consider_sector_catalyst_peer_breakout(signal_result, trigger_meta, dry_run=
 
 
 def consider_intraday_breakout_continuation(signal_result, dry_run=True, regime=None, pending=None,
-                                             reserved_cash=0.0, now=None):
+                                             reserved_cash=0.0, now=None, gear_packet=None):
     """Mid-morning continuation: 5m close above prior-day high on extreme volume."""
     ticker = signal_result["ticker"].upper()
     score = signal_result.get("score", "0/4 Pillars")
@@ -1730,6 +1769,9 @@ def consider_intraday_breakout_continuation(signal_result, dry_run=True, regime=
         return {"ticker": ticker, "action": "SKIP", "reason": "INTRADAY_BREAKOUT_WINDOW_CLOSED"}
     if pillars < 3:
         return {"ticker": ticker, "action": "SKIP", "reason": "INTRADAY_BREAKOUT_SCORE_LT_3"}
+    gear_gate = _gear_gate(signal_result, gear_packet, "intraday", RISK_PCT_INTRADAY_BREAKOUT)
+    if not gear_gate["allowed"]:
+        return {"ticker": ticker, "action": "BLOCK", "reason": "GEAR GATE: " + ",".join(gear_gate["reason_codes"]), "gear_gate": gear_gate}
     if atlas_db.get_pending_pullback(ticker):
         return {"ticker": ticker, "action": "SKIP", "reason": "INTRADAY_BREAKOUT_ALREADY_WAITING_FOR_DIP"}
     allowed, why = check_admission(ticker, regime=regime, pending=pending)
@@ -1760,7 +1802,7 @@ def consider_intraday_breakout_continuation(signal_result, dry_run=True, regime=
     stop = round(float(prior_high) * 0.98, 2)
     target = round(entry + (2 * (entry - stop)), 2)
     equity = acct.get_equity(price_lookup=_price_lookup)
-    shares = size_position_for_risk(equity, entry, stop, RISK_PCT_INTRADAY_BREAKOUT)
+    shares = size_position_for_risk(equity, entry, stop, float(gear_gate["risk_budget"]))
     if shares <= 0:
         return {"ticker": ticker, "action": "SKIP", "reason": "INTRADAY_BREAKOUT_SIZED_TO_ZERO"}
     cost = round(shares * entry, 2)
@@ -1775,7 +1817,7 @@ def consider_intraday_breakout_continuation(signal_result, dry_run=True, regime=
         "reason": f"INTRADAY BREAKOUT CONTINUATION: 5m close {entry:.2f} > prior high {breakout_level:.2f}, RVOL {rvol:.1f}x, catalyst: {catalyst_note}",
         "entry": entry, "stop": stop, "target": target,
         "shares": shares, "cost": cost,
-        "risk_pct": RISK_PCT_INTRADAY_BREAKOUT * 100,
+        "risk_pct": float(gear_gate["risk_budget"]) * 100, "gear_gate": gear_gate,
         "score": score, "signal": signal_result.get("signal", ""),
         "entry_type": "INTRADAY_BREAKOUT_CONTINUATION",
         "breakout_level": breakout_level,
@@ -1802,7 +1844,8 @@ def consider_intraday_breakout_continuation(signal_result, dry_run=True, regime=
 # Entry pipeline: turn a scored signal into a sized, admitted, triggered order
 # --------------------------------------------------------------------------- #
 def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserved_cash=0.0,
-                 pullback_override_entry=None, pullback_override_reason=None, manage_pending=True):
+                 pullback_override_entry=None, pullback_override_reason=None, manage_pending=True,
+                 gear_packet=None, entry_route=None):
     """Given a result dict from atlas_engine.analyze_ticker, decide whether to
     open a position, and how big. Returns a decision dict.
 
@@ -1818,6 +1861,11 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
     catalyst_override_entry = bool(
         pillars == 2 and isinstance(catalyst_override_meta, dict) and catalyst_override_meta.get("qualifies")
     )
+    route = entry_route or ("override" if catalyst_override_entry else "ordinary")
+    initial_base = RISK_PCT_HALF if (pillars == 3 or catalyst_override_entry) else RISK_PCT_FULL
+    gear_gate = _gear_gate(signal_result, gear_packet, route, initial_base)
+    if not gear_gate["allowed"]:
+        return {"ticker": ticker, "action": "BLOCK", "reason": "GEAR GATE: " + ",".join(gear_gate["reason_codes"]), "gear_gate": gear_gate}
 
     if pillars < 3 and not catalyst_override_entry:
         return {"ticker": ticker, "action": "SKIP", "reason": f"Score {score} (need 3/4 or 4/4)"}
@@ -1988,7 +2036,9 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
     cautious = ("WEAK" in regime_detail.upper() or "UNKNOWN" in regime_detail.upper()
                 or "UNAVAILABLE" in regime_detail.upper() or bool((macro_ctx or {}).get("cautious")))
     half = (pillars == 3) or cautious or catalyst_override_entry
-    shares = size_position(equity, fill, stop, half=half)
+    base_risk = RISK_PCT_HALF if half else RISK_PCT_FULL
+    gear_gate = _gear_gate(signal_result, gear_packet, route, base_risk)
+    shares = size_position_for_risk(equity, fill, stop, float(gear_gate["risk_budget"]))
     if shares <= 0:
         return {"ticker": ticker, "action": "SKIP", "reason": "Sized to 0 shares (risk/cap/cash)"}
 
@@ -2012,7 +2062,7 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
     decision = {
         "ticker": ticker, "action": "BUY", "reason": trig_detail,
         "entry": fill, "stop": stop, "target": target, "shares": shares, "cost": cost,
-        "risk_pct": (RISK_PCT_HALF if half else RISK_PCT_FULL) * 100,
+        "risk_pct": float(gear_gate["risk_budget"]) * 100, "gear_gate": gear_gate,
         "cautious_mode": cautious,
         "score": score,
         "signal": signal_result.get("signal", ""),

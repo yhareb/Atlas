@@ -1352,7 +1352,10 @@ def generate_wavef_pre_market_brief(send=False, market_day=None):
     if macro:
         sentiment += "; macro events on deck"
 
+    from atlas_market_gear import build_gear_packet, header_line
+    gear_packet = results.get("gear_packet") or build_gear_packet()
     lines = [
+        header_line(gear_packet) + f" · digest {gear_packet.get('packet_digest')}",
         f"🦅 ATLAS PRE-MARKET BRIEF — {date_label} · SPY {spy.get('source') or SOURCE_PROVIDER} {_fmt_price(spy.get('price'))} ({SOURCE_RENDER_CALC} {_fmt_pct(spy.get('pct'))}) | QQQ {qqq.get('source') or SOURCE_PROVIDER} {_fmt_price(qqq.get('price'))} ({SOURCE_RENDER_CALC} {_fmt_pct(qqq.get('pct'))}) | VIX {vix.get('source') or SOURCE_FALLBACK} {_fmt_price(vix.get('price'))} ({SOURCE_RENDER_CALC} {_fmt_pct(vix.get('pct'))}) · {sentiment}",
         "",
         _section("MACRO BRIEFING"),

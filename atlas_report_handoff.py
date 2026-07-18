@@ -79,13 +79,20 @@ def _date_label(day):
     return day.strftime("%B %-d").upper()
 
 
-def _header(report_date=None):
+def _header(report_date=None, gear_packet=None):
     day = report_date or current_et_market_date()
     nxt = add_trading_days(day, 1)
+    try:
+        from atlas_market_gear import build_gear_packet, header_line
+        packet = gear_packet or build_gear_packet(spy_close=None, perme_valid=False)
+        gear = header_line(packet) + f" · digest {packet['packet_digest']}"
+    except Exception:
+        gear = "GEAR DATA INCOMPLETE — NEW POSITIONS BLOCKED"
     return [
         SEP,
         f"🤖 ATLAS HANDOFF — {_date_label(day)} → {nxt.day}, {nxt.year}",
         DOUBLE,
+        gear,
         "",
     ]
 
@@ -308,7 +315,8 @@ def build_atlas_handoff_report(context=None, report_date=None):
     data = _latest_handoff(day)
     print(f"[handoff timing] latest_handoff={_time.perf_counter() - stage:.2f}s")
     stage = _time.perf_counter()
-    lines = _header(day)
+    context = context or {}
+    lines = _header(day, context.get("gear_packet"))
     print(f"[handoff timing] header={_time.perf_counter() - stage:.2f}s")
     stage = _time.perf_counter()
     open_lines, open_count = _open_position_lines()
@@ -321,6 +329,13 @@ def build_atlas_handoff_report(context=None, report_date=None):
     print(f"[handoff timing] watch_list_lines={_time.perf_counter() - stage:.2f}s")
     stage = _time.perf_counter()
     lines += open_lines
+    try:
+        from atlas_holdings_final_action import build_broker_sync_sheet, render_broker_sync_sheet
+        sheet = build_broker_sync_sheet(context.get("exit_packet") or {"decisions": context.get("exit_results") or []},
+            context.get("holding_packet") or {"positions": context.get("positions") or []}, context.get("broker_state"))
+        lines += [""] + render_broker_sync_sheet(sheet) + [""]
+    except Exception as exc:
+        lines += ["", "━━━ ETORO BROKER SYNC ━━━", f"DATA INCOMPLETE — {type(exc).__name__}", ""]
     lines += [SEP, ""]
     lines += armed_lines
     lines += [SEP, ""]

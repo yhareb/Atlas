@@ -1,6 +1,11 @@
 """Governed NYSE calendar evidence interface; no network access."""
 from __future__ import annotations
-from atlas_holding_state_schema import digest
+try:
+ from atlas_holding_state_schema import digest
+except ImportError:
+ def digest(value):
+  import hashlib, json
+  return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),default=str).encode()).hexdigest()
 def calendar_evidence(session,status='OPEN',overrides=()):
  value={'session':str(session),'status':status,'overrides':list(overrides)};value['digest']=digest(value);return value
 

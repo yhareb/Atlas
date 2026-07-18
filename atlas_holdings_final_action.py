@@ -283,6 +283,24 @@ def render_ticker_answer(ticker: str, packet: Mapping[str, Any] | None) -> tuple
     return "\n".join(lines), struct, str(row.get("freshness_states", {}).get("daily_packet") or "UNKNOWN")
 
 
+def build_broker_sync_sheet(exit_packet: Mapping[str, Any], holding_packet: Mapping[str, Any], broker_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Human-executable eToro KEEP/CHANGE/SELL projection; never proof of a fill."""
+    broker_state = broker_state or {}; rows=[]
+    exits={str(x.get("ticker") or "").upper():x for x in (exit_packet.get("positions") or exit_packet.get("decisions") or [])}
+    for h in holding_packet.get("positions",[]):
+        ticker=str(h.get("ticker") or "").upper(); ex=exits.get(ticker,{})
+        action="SELL" if ex.get("action")=="SELL" else ("CHANGE" if ex.get("stop_change") else "KEEP")
+        changed=["sell_quantity"] if action=="SELL" else (["stop","target"] if action=="CHANGE" else [])
+        rows.append({"ticker":ticker,"action":action,"stop":"CHANGE" if ex.get("stop_change") else "KEEP","stop_before":ex.get("stop_before"),"stop_after":ex.get("stop_after"),"target":"CHANGE → N/A (LADDER ACTIVE)" if action=="CHANGE" else "KEEP","sell_quantity":ex.get("sell_quantity") or "0","stage":ex.get("stage"),"reason_codes":ex.get("reason_codes") or [],"broker":broker_state.get(ticker,"NOT SUBMITTED"),"gear":ex.get("gear"),"gear_digest":ex.get("gear_packet_digest"),"exit_digest":ex.get("packet_digest"),"highlighted_fields":changed})
+    out={"schema_version":"atlas_broker_sync_sheet.v1","broker":"eToro","authority":"HUMAN_EXECUTABLE_ADVISORY_ONLY","rows":rows}; out["packet_digest"]=sha_json(out); return out
+
+
+def render_broker_sync_sheet(sheet: Mapping[str, Any]) -> list[str]:
+    lines=["━━━ ETORO BROKER SYNC — HUMAN EXECUTION REQUIRED ━━━"]
+    for r in sheet.get("rows",[]): lines += [f"{r['ticker']} — BROKER SYNC",f"ACTION: {r['action']}",f"STOP: {r['stop']} {r.get('stop_before')} → {r.get('stop_after')}",f"TARGET: {r['target']}",f"SELL: {r['sell_quantity']} · {r.get('stage') or 'NONE'}",f"BROKER: {r['broker']} | GEAR {r.get('gear')}"]
+    return lines
+
+
 def load_or_build_merged_packet(path: str | Path | None = None, daily_path: str | Path | None = None) -> dict[str, Any] | None:
     import os
     path = path or os.environ.get('ATLAS_HOLDINGS_MERGED_PACKET_PATH') or DEFAULT_MERGED_PACKET

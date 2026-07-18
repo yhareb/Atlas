@@ -746,7 +746,10 @@ def _header_lines(summary, hold_count):
     except Exception:
         roi = None
         positions_note = ""
+    from atlas_market_gear import build_gear_packet, header_line
+    gear_packet = summary.get("gear_packet") or build_gear_packet()
     lines = [
+        header_line(gear_packet) + f" · digest {gear_packet.get('packet_digest')}",
         f"🦅 ATLAS INTRADAY — {now_et} ET",
         f"📡 {regime} · SPY {spy}{macro_note}",
         f"💰 Equity {_money(account.get('equity'))} · Cash {_money(account.get('cash'))} · {positions} positions · ROI {'N/A' if roi is None else _fmt_pct(roi, signed=True, decimals=1)}{positions_note}",

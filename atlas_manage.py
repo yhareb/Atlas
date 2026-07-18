@@ -52,6 +52,7 @@ from atlas_symbol_meta import company_name
 from atlas_time import current_et_market_date_str
 from atlas_engine import analyze_ticker, check_regime, check_macro_context, get_macro_sentiment
 from atlas_macro_context_v1 import load_context, adapt_existing_gates
+from atlas_market_gear import build_gear_packet, header_line
 try:
     import atlas_fda_calendar
 except Exception:
@@ -124,6 +125,21 @@ def _run_parallel_pillar_checks(tickers, regime, max_workers=8):
 
 def _hdr(title):
     print(f"\n{LINE}\n  {title}\n{LINE}")
+
+
+def _empty_exit_inventory_message(open_lots, guard_receipt):
+    """Distinguish an empty book from OPEN lots excluded by the stop guard."""
+    open_lots = list(open_lots or [])
+    if not open_lots:
+        return "  No open positions."
+    verdicts = {int(row.get("trade_id")): row for row in (guard_receipt or {}).get("lots", [])}
+    excluded = []
+    for lot in open_lots:
+        row = verdicts.get(int(lot.get("id"))) or {}
+        if row.get("result") != "PASS":
+            excluded.append(f"{str(lot.get('ticker') or '?').upper()}={row.get('result') or 'DATA_INCOMPLETE'}")
+    detail = ", ".join(excluded) if excluded else "UNKNOWN"
+    return f"  Open positions: {len(open_lots)} (0 exit-eligible — stop-guard excluded: {detail})"
 
 
 def load_candidates(args):
@@ -411,7 +427,7 @@ def _catalyst_reason(res):
             return "Recent news"
     return None
 
-def run(args):
+def run(args, gear_packet=None):
     global LAST_RUN_SUMMARY
     live = args.live
     mode = "LIVE — orders WILL be written" if live else "DRY-RUN — no writes"
@@ -438,6 +454,19 @@ def run(args):
     # V1.2 is opt-in. Missing/rejected context preserves the legacy path.
     _macro_load = load_context(os.environ.get("ATLAS_MACRO_CONTEXT_V1_PATH"), consumer="atlas_manage")
     _macro_legacy, _macro_receipt = adapt_existing_gates(_macro_load.context, consumer="atlas_manage")
+    # Exactly one immutable packet is shared by all entry routes and receipts.
+    if gear_packet is None:
+        try:
+            spy_rows = port.get_massive_aggs("SPY", days=120) or []
+            closes = [r.get("c") for r in spy_rows if r.get("c") is not None]
+            completed = datetime.fromtimestamp(float(spy_rows[-1]["t"])/1000, tz=timezone.utc).date().isoformat() if spy_rows and spy_rows[-1].get("t") else None
+            gear_packet = build_gear_packet(spy_close=closes[-1] if closes else None, spy_closes=closes,
+                spy_completed_session=completed, perme_regime=_macro_legacy.get("perme_regime"),
+                perme_valid=_macro_load.context is not None, perme_packet_digest=(_macro_receipt or {}).get("digest"),
+                macro_event_gate=_macro_legacy.get("macro_event_gate") or "CLEAR", computed_at=datetime.now(timezone.utc).isoformat())
+        except Exception:
+            gear_packet = build_gear_packet()
+    LAST_RUN_SUMMARY["gear_packet"] = gear_packet
     # No legacy latest_context fallback: only the single validated object may
     # reach existing regime/event gates.
     perme_overlay = {
@@ -458,6 +487,7 @@ def run(args):
     print(LINE)
     print(f"  ATLAS v2 DAILY MANAGER   {datetime.now():%Y-%m-%d %H:%M}")
     print(f"  Mode: {mode}")
+    print(f"  {header_line(gear_packet)} · digest {gear_packet.get('packet_digest')}")
     print(LINE)
 
     # 1. ACCOUNT ------------------------------------------------------------
@@ -498,7 +528,7 @@ def run(args):
     sells = [r for r in exit_results if r.get("action") == "SELL"]
     LAST_RUN_SUMMARY.update({"exit_results": exit_results, "sells": sells})
     if not exit_results:
-        print("  No open positions.")
+        print(_empty_exit_inventory_message(open_lots, guard_receipt))
     for r in exit_results:
         if r["action"] == "SELL":
             print(f"  SELL  {r['ticker']:<6} x{r.get('qty','?'):<5} @ {r.get('price')}  — {r['reason']}")
@@ -595,7 +625,7 @@ def run(args):
         _timing_log("pending_pullback", "start", ticker=tkr)
         pending_decision = port.evaluate_pending_pullback(
             tkr, dry_run=not live, regime=entry_regime,
-            pending=pending, reserved_cash=reserved_cash,
+            pending=pending, reserved_cash=reserved_cash, gear_packet=gear_packet,
         )
         _timing_log("pending_pullback", "end", pending_pullback_start, tkr)
         if pending_decision:
@@ -760,7 +790,7 @@ def run(args):
             try:
                 gap_decision = port.consider_gap_up_breakout(
                     res, dry_run=not live, regime=entry_regime,
-                    pending=pending, reserved_cash=reserved_cash,
+                    pending=pending, reserved_cash=reserved_cash, gear_packet=gear_packet,
                 )
             except Exception as e:
                 gap_decision = {"ticker": tkr.upper(), "action": "ERROR", "reason": f"gap-up breakout check failed: {e}"}
@@ -792,7 +822,7 @@ def run(args):
             try:
                 intraday_breakout_decision = port.consider_intraday_breakout_continuation(
                     res, dry_run=not live, regime=entry_regime,
-                    pending=pending, reserved_cash=reserved_cash,
+                    pending=pending, reserved_cash=reserved_cash, gear_packet=gear_packet,
                 )
             except Exception as e:
                 intraday_breakout_decision = {"ticker": tkr.upper(), "action": "ERROR", "reason": f"intraday breakout check failed: {e}"}
@@ -825,7 +855,7 @@ def run(args):
             try:
                 sector_peer_decision = port.consider_sector_catalyst_peer_breakout(
                     res, sector_sweep_context.get(tkr.upper()), dry_run=not live, regime=entry_regime,
-                    pending=pending, reserved_cash=reserved_cash,
+                    pending=pending, reserved_cash=reserved_cash, gear_packet=gear_packet,
                 )
             except Exception as e:
                 sector_peer_decision = {"ticker": tkr.upper(), "action": "ERROR", "reason": f"sector catalyst peer check failed: {e}"}
@@ -909,7 +939,7 @@ def run(args):
 
         decision = port.consider_buy(
             res, dry_run=not live, regime=entry_regime,
-            pending=pending, reserved_cash=reserved_cash,
+            pending=pending, reserved_cash=reserved_cash, gear_packet=gear_packet,
         )
         decision.setdefault("score", score)
         decision.setdefault("rvol", res.get("rvol"))
