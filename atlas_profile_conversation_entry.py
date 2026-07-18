@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-import argparse, json
+import argparse, json, sqlite3
 
 from atlas_conversation_router import ConversationRouter, dispatch_atlas_trading_question, RouteResult
 from atlas_single_ticker_tfe_runner import ProductionSafeTFERunner
+from atlas_holdings_final_action import load_latest_daily_packet
 
 REQUIRED_PROFILE_PHRASES = [
     "DETERMINISTIC CONVERSATION DISPATCHER — PRODUCTION",
@@ -37,6 +38,21 @@ def build_production_router(*, scripts_dir: str | Path = "/Users/yasser/scripts"
         allow_test_override=allow_test_override,
     )
     return ConversationRouter(db_path=None, tfe_runner=runner, timeout_seconds=total_timeout_seconds)
+
+
+def load_conversation_context(source_db: str | Path) -> tuple[set[str], dict[str, Any] | None, bool]:
+    try:
+        db_path = Path(source_db).resolve()
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            con.execute("PRAGMA query_only=ON")
+            rows = con.execute("SELECT DISTINCT UPPER(ticker) FROM trades WHERE UPPER(status)='OPEN'").fetchall()
+            open_position_tickers = {str(row[0]).upper() for row in rows if row and row[0]}
+        finally:
+            con.close()
+    except Exception:
+        return set(), None, False
+    return open_position_tickers, load_latest_daily_packet(), True
 
 
 class AtlasProfileConversationSimulator:
@@ -81,7 +97,15 @@ def main(argv: list[str] | None = None) -> int:
         total_timeout_seconds=args.total_timeout_seconds,
         allow_test_override=args.allow_test_override,
     )
-    result = dispatch_atlas_trading_question(args.question, args.ticker, router=router)
+    open_position_tickers, holdings_packet, membership_available = load_conversation_context(args.source_db)
+    result = dispatch_atlas_trading_question(
+        args.question,
+        args.ticker,
+        router=router,
+        open_position_tickers=open_position_tickers,
+        holdings_packet=holdings_packet,
+        membership_available=membership_available,
+    )
     print(json.dumps({
         "route_selected": result.route,
         "authoritative_source": result.source,

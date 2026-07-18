@@ -227,6 +227,34 @@ def classify_intent(prompt: str, ticker: str, snapshot: Mapping[str, Any] | None
     return (FRESH_TFE_REQUIRED, tuple(dict.fromkeys(reasons))) if reasons else (CONVERSATIONAL_CONFIRMATION, ())
 
 
+def _holding_framed(prompt: str) -> bool:
+    text = str(prompt or "").lower()
+    patterns = (
+        r"\b(?:my|our)\s+(?:open\s+)?position\b",
+        r"\bportfolio\s+position\b",
+        r"\b(?:my\s+)?holding\b",
+        r"\bshares\s+(?:i|we)\s+hold\b",
+        r"\b(?:i|we)\s+own\b",
+        r"\bposition\b",
+    )
+    return any(re.search(pattern, text) for pattern in patterns)
+
+
+def _held_advice_framed(prompt: str) -> bool:
+    text = str(prompt or "").lower()
+    patterns = (
+        r"\bwhat\s+should\s+i\s+do\b",
+        r"\bshould\s+i\b",
+        r"\bwait\s+for\s+(?:the\s+)?target\b",
+        r"\btarget\s+on\b",
+        r"\bwhat\s+do\s+you\s+(?:personally\s+)?think\b",
+        r"\bpersonally\s+think\b",
+        r"\bignore\s+the\s+packet\b",
+        r"\bgive\s+me\s+your\s+own\s+target\b",
+    )
+    return any(re.search(pattern, text) for pattern in patterns)
+
+
 def compute_reward_risk(packet: Mapping[str, Any]) -> SourceField | None:
     explicit = _field(packet, "reward_risk")
     if explicit and explicit.value is not None:
@@ -326,7 +354,10 @@ def render_tfe(packet: Mapping[str, Any], fields: set[str], *, quiver_context: M
 
 
 def render_holdings(ticker: str, holdings_packet: Mapping[str, Any] | None, fields: set[str], *, now: datetime | None, policy: RouterPolicy) -> tuple[str, dict[str, Any], str]:
-    packet_version = (holdings_packet or {}).get("packet_version")
+    if not holdings_packet:
+        struct = {"ticker":str(ticker or "").upper(),"error":"HOLDINGS_PACKET_MISSING","authority":"HOLDINGS_REUNDERWRITE_PACKET"}
+        return "DATA INCOMPLETE — HOLDINGS PACKET MISSING", struct, "DATA_INCOMPLETE"
+    packet_version = holdings_packet.get("packet_version")
     if packet_version == "intraday_holdings_action_freshness.v1":
         row = next((dict(p) for p in ((holdings_packet or {}).get("holdings") or []) if str((p or {}).get("ticker") or "").upper() == str(ticker or "").upper()), None)
         if not row:
@@ -376,11 +407,22 @@ class ConversationRouter:
         self.timeout_seconds = timeout_seconds
         self.policy = policy
 
-    def route(self, prompt: str, ticker: str, *, envelope: Mapping[str, Any] | None = None, price_input: PriceInput | None = None, holdings_packet: Mapping[str, Any] | None = None, perme_packet: Mapping[str, Any] | None = None, quiver_packet: Mapping[str, Any] | None = None, fda_context: Mapping[str, Any] | None = None, now: datetime | None = None, source_conflict: bool=False) -> RouteResult:
+    def route(self, prompt: str, ticker: str, *, envelope: Mapping[str, Any] | None = None, price_input: PriceInput | None = None, holdings_packet: Mapping[str, Any] | None = None, open_position_tickers: set[str] | tuple[str, ...] | list[str] | None = None, membership_available: bool = True, perme_packet: Mapping[str, Any] | None = None, quiver_packet: Mapping[str, Any] | None = None, fda_context: Mapping[str, Any] | None = None, now: datetime | None = None, source_conflict: bool=False) -> RouteResult:
         started=time.perf_counter(); ticker=str(ticker or "").strip().upper(); now=now or datetime.now(timezone.utc)
         if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", ticker): raise RouterError("INVALID_TICKER")
         snapshot = immutable_tfe_packet(envelope) if envelope is not None else (read_latest_snapshot(self.db_path, ticker) if self.db_path else None)
-        route, reasons = classify_intent(prompt, ticker, snapshot, price_input=price_input, policy=self.policy, now=now, source_conflict=source_conflict)
+        holding_framed = _holding_framed(prompt)
+        if holding_framed and not membership_available:
+            struct = {"ticker":ticker,"authority":"CANONICAL_OPEN_POSITION_MEMBERSHIP","membership":"UNAVAILABLE","result":"DATA_INCOMPLETE","candidate_analysis_run":False}
+            return RouteResult(FAIL_CLOSED,ticker,"open position membership",freeze_mapping({}),freeze_mapping(struct),"DATA INCOMPLETE — OPEN POSITION MEMBERSHIP UNAVAILABLE","DATA_INCOMPLETE",("open_position_membership_unavailable",),False,time.perf_counter()-started)
+        held = ticker in {str(t).upper() for t in (open_position_tickers or [])}
+        if holding_framed and not held:
+            struct = {"ticker":ticker,"authority":"CANONICAL_OPEN_POSITION_MEMBERSHIP","membership":"NOT_HELD","result":"NO_OPEN_POSITION","candidate_analysis_run":False}
+            return RouteResult(HOLDINGS_PACKET_REQUIRED,ticker,"open position membership",freeze_mapping({}),freeze_mapping(struct),f"NO OPEN POSITION IN {ticker}","CURRENT",("false_holding_premise",),False,time.perf_counter()-started)
+        if held and (holding_framed or _held_advice_framed(prompt)):
+            route, reasons = HOLDINGS_PACKET_REQUIRED, ("open_position_advice",)
+        else:
+            route, reasons = classify_intent(prompt, ticker, snapshot, price_input=price_input, policy=self.policy, now=now, source_conflict=source_conflict)
         fields=requested_fields(prompt)
         fresh_run=False; source=""
         if route == HOLDINGS_PACKET_REQUIRED:
