@@ -146,8 +146,24 @@ def broker_status_label(value: Any) -> str:
     return text
 
 
-def merge_position(daily_position: Mapping[str, Any], *, daily_valid: bool, daily_freshness: str, profit_protection: Any = None, stop_status: Any = None, broker_status: Any = None) -> dict[str, Any]:
+def merge_position(daily_position: Mapping[str, Any], *, daily_valid: bool, daily_freshness: str, profit_protection: Any = None, stop_status: Any = None, broker_status: Any = None, stop_invariant_guard: Mapping[str, Any] | None = None) -> dict[str, Any]:
     ticker = str(daily_position.get("ticker") or "").upper()
+    guard = dict(stop_invariant_guard or {})
+    if guard and guard.get("result") != "PASS":
+        codes = sorted(set(list(daily_position.get("reason_codes") or []) + list(guard.get("reason_codes") or [])))
+        return {
+            "ticker": ticker, "trade_id": daily_position.get("trade_id") or guard.get("trade_id"),
+            "daily_action": "DATA INCOMPLETE", "profit_protection_action": "DATA INCOMPLETE",
+            "profit_protection_freshness": "NOT_EVALUATED_GUARD_VETO",
+            "stop_status": "UNKNOWN — STOP INVARIANT UNVERIFIED",
+            "broker_status": broker_status_label(broker_status), "final_action": "DATA INCOMPLETE",
+            "final_reason_codes": codes, "daily_reason_codes": list(daily_position.get("reason_codes") or []),
+            "source_timestamps": {"daily_packet_position_as_of": daily_position.get("as_of")},
+            "freshness_states": {"daily_packet": daily_freshness, "profit_protection": "NOT_EVALUATED_GUARD_VETO"},
+            "recheck_condition": "Resolve stop invariant evidence: " + ", ".join(codes),
+            "stop_invariant_guard": guard,
+            "input_digest": sha_json({"daily": daily_position, "stop_invariant_guard": guard}),
+        }
     if not daily_valid:
         daily_action = "DATA INCOMPLETE"
         final_action = "DATA INCOMPLETE"
@@ -196,12 +212,14 @@ def merge_position(daily_position: Mapping[str, Any], *, daily_valid: bool, dail
     }
 
 
-def build_merged_packet(daily_packet: Mapping[str, Any] | None, *, profit_protection_by_ticker: Mapping[str, Any] | None = None, stop_status_by_ticker: Mapping[str, Any] | None = None, broker_status_by_ticker: Mapping[str, Any] | None = None, now: dt.datetime | None = None, ttl_seconds: int = 36 * 3600, expected_session: str | None = None) -> dict[str, Any]:
+def build_merged_packet(daily_packet: Mapping[str, Any] | None, *, profit_protection_by_ticker: Mapping[str, Any] | None = None, stop_status_by_ticker: Mapping[str, Any] | None = None, broker_status_by_ticker: Mapping[str, Any] | None = None, stop_invariant_guard: Mapping[str, Any] | None = None, now: dt.datetime | None = None, ttl_seconds: int = 36 * 3600, expected_session: str | None = None) -> dict[str, Any]:
     ok, freshness = validate_daily_packet(daily_packet, now=now, ttl_seconds=ttl_seconds, expected_session=expected_session)
     positions = []
+    guards = (stop_invariant_guard or {}).get("lots") or []
     for pos in ((daily_packet or {}).get("positions") or []):
         ticker = str(pos.get("ticker") or "").upper()
-        positions.append(merge_position(pos, daily_valid=ok, daily_freshness=freshness, profit_protection=(profit_protection_by_ticker or {}).get(ticker), stop_status=(stop_status_by_ticker or {}).get(ticker), broker_status=(broker_status_by_ticker or {}).get(ticker)))
+        guard = next((g for g in guards if int(g.get("trade_id") or -1) == int(pos.get("trade_id") or -2)), None)
+        positions.append(merge_position(pos, daily_valid=ok, daily_freshness=freshness, profit_protection=(profit_protection_by_ticker or {}).get(ticker), stop_status=(stop_status_by_ticker or {}).get(ticker), broker_status=(broker_status_by_ticker or {}).get(ticker), stop_invariant_guard=guard))
     packet = {
         "packet_version": PACKET_VERSION,
         "created_at": ((now or dt.datetime.utcnow()).replace(microsecond=0).isoformat() + ("Z" if (now or dt.datetime.utcnow()).tzinfo is None else "")),
@@ -213,7 +231,8 @@ def build_merged_packet(daily_packet: Mapping[str, Any] | None, *, profit_protec
         "authority": {"broker_authority": "NO", "automatic_trade_closure": "NO", "trading_authority": "ADVISORY_ONLY"},
         "precedence": ["SELL NOW", "EXIT REVIEW", "TRIM REVIEW", "STOP BREACHED / URGENT STOP REVIEW", "HOLD TIGHT", "HOLD", "DATA INCOMPLETE"],
     }
-    packet["input_digest"] = sha_json({"daily_packet": daily_packet, "pp": profit_protection_by_ticker, "stop": stop_status_by_ticker, "broker": broker_status_by_ticker})
+    packet["stop_invariant_guard_digest"] = (stop_invariant_guard or {}).get("digest")
+    packet["input_digest"] = sha_json({"daily_packet": daily_packet, "pp": profit_protection_by_ticker, "stop": stop_status_by_ticker, "broker": broker_status_by_ticker, "stop_invariant_guard": stop_invariant_guard})
     packet["packet_digest"] = sha_json(packet)
     return packet
 

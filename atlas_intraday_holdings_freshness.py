@@ -653,6 +653,8 @@ def build_packet(*, summary: dict[str, Any] | None = None, positions: list[dict[
     provider, captured_at, pp_source = _snapshot_bars_by_ticker(snapshot)
     pp_actions = _load_profit_actions(snapshot, db_path)
     stop_events = _exit_events_by_ticker(summary)
+    guard_receipt = summary.get("stop_invariant_guard") or {}
+    guard_by_trade = {int(g.get("trade_id")): g for g in guard_receipt.get("lots", []) if g.get("trade_id") is not None}
     details = []
     for pos in positions or []:
         ticker = _row_ticker(pos)
@@ -731,6 +733,11 @@ def build_packet(*, summary: dict[str, Any] | None = None, positions: list[dict[
             giveback = None
         broker_evidence = broker_confirmation_for_trade(db_path, _position_trade_id(pos)) if db_path and _position_trade_id(pos) else {"status": "NOT CONFIRMED"}
         broker_status = broker_evidence.get("status") or "NOT CONFIRMED"
+        guard = guard_by_trade.get(int(_position_trade_id(pos) or -1))
+        if guard and guard.get("result") != "PASS":
+            final = daily_action = pp_action = "DATA INCOMPLETE"
+            stop_state = "UNKNOWN — STOP INVARIANT UNVERIFIED"
+            authority_reasons = sorted(set(authority_reasons + list(guard.get("reason_codes") or [])))
         why = []
         if final == daily_action and daily_action not in {"HOLD", "DATA INCOMPLETE"}:
             why.append(f"Daily Re-Underwriting {daily_action}")
@@ -785,7 +792,8 @@ def build_packet(*, summary: dict[str, Any] | None = None, positions: list[dict[
             "canonical_stop": stop,
             "canonical_target": _num(pos.get("target_price") or pos.get("target")),
             "why_now": "; ".join(why),
-            "recheck_condition": daily.get("recheck_condition") or pp.get("recheck_condition") or "next completed NYSE session or next intraday cycle if stop/price state changes",
+            "recheck_condition": ("Resolve stop invariant evidence: " + ", ".join(guard.get("reason_codes") or [])) if guard and guard.get("result") != "PASS" else (daily.get("recheck_condition") or pp.get("recheck_condition") or "next completed NYSE session or next intraday cycle if stop/price state changes"),
+            "stop_invariant_guard": guard,
             "valuation_included": price_obj.get("valuation_included"),
             "valuation_price": cur if price_obj.get("valuation_included") else None,
             "valuation_exclusion_reason": price_obj.get("valuation_exclusion_reason"),

@@ -2,6 +2,7 @@ import sqlite3
 import json
 import os
 import re
+import hashlib
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime
 
@@ -42,7 +43,7 @@ def _fetch_trade_rows(ids):
         SELECT id, ticker, status, quantity, entry_price, entry_at,
                exit_price, exit_at, entry_fees, exit_fees,
                realized_pnl, realized_pnl_pct, parent_id,
-               stop_loss, risk_pct, target_price, manual_stop_lock, notes, updated_at
+               stop_loss, entry_atr14, risk_pct, target_price, manual_stop_lock, notes, updated_at
         FROM trades WHERE id IN ({placeholders})
     ''', ids)
     cols = [d[0] for d in cursor.description]
@@ -491,6 +492,7 @@ def init_db():
     _trade_cols = {row[1] for row in cursor.fetchall()}
     for _col, _ddl in {
         "stop_loss": "ALTER TABLE trades ADD COLUMN stop_loss REAL",
+        "entry_atr14": "ALTER TABLE trades ADD COLUMN entry_atr14 REAL",
         "risk_pct": "ALTER TABLE trades ADD COLUMN risk_pct REAL",
         "target_price": "ALTER TABLE trades ADD COLUMN target_price REAL",
         "broker_ref": "ALTER TABLE trades ADD COLUMN broker_ref TEXT DEFAULT NULL",
@@ -562,7 +564,8 @@ def _now():
 
 
 def open_trade(ticker, entry_price, quantity, fees=0.0, notes=None, entry_at=None,
-               stop_loss=None, risk_pct=None, target_price=None, status="PENDING_FILL"):
+               stop_loss=None, risk_pct=None, target_price=None, status="PENDING_FILL",
+               entry_atr14=None):
     """Open a new lot. Returns the new trade id."""
     ticker = (ticker or "").upper()
     quantity = int(quantity or 0)
@@ -580,10 +583,11 @@ def open_trade(ticker, entry_price, quantity, fees=0.0, notes=None, entry_at=Non
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO trades (ticker, status, quantity, entry_price, entry_at,
-                            entry_fees, stop_loss, risk_pct, target_price, manual_stop_lock, notes, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            entry_fees, stop_loss, entry_atr14, risk_pct, target_price, manual_stop_lock, notes, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (ticker, status, quantity, entry_price, entry_at or _now(), float(fees or 0),
           None if stop_loss is None else float(stop_loss),
+          None if entry_atr14 is None else float(entry_atr14),
           None if risk_pct is None else float(risk_pct),
           None if target_price is None else float(target_price), 0, notes, _now()))
     trade_id = cursor.lastrowid
@@ -919,7 +923,7 @@ def get_trades(status=None, limit=500):
             SELECT id, ticker, status, quantity, entry_price, entry_at,
                    exit_price, exit_at, entry_fees, exit_fees,
                    realized_pnl, realized_pnl_pct, parent_id,
-                   stop_loss, risk_pct, target_price, manual_stop_lock, notes, updated_at
+                   stop_loss, entry_atr14, risk_pct, target_price, manual_stop_lock, notes, updated_at
             FROM trades WHERE status = ?
             ORDER BY COALESCE(exit_at, entry_at) DESC, id DESC LIMIT ?
         ''', (status.upper(), limit))
@@ -928,7 +932,7 @@ def get_trades(status=None, limit=500):
             SELECT id, ticker, status, quantity, entry_price, entry_at,
                    exit_price, exit_at, entry_fees, exit_fees,
                    realized_pnl, realized_pnl_pct, parent_id,
-                   stop_loss, risk_pct, target_price, manual_stop_lock, notes, updated_at
+                   stop_loss, entry_atr14, risk_pct, target_price, manual_stop_lock, notes, updated_at
             FROM trades
             ORDER BY COALESCE(exit_at, entry_at) DESC, id DESC LIMIT ?
         ''', (limit,))
@@ -1055,6 +1059,47 @@ def update_trade_stop(trade_id, stop_loss):
     if changed:
         _audit_db_event("trades", "UPDATE", int(trade_id), None, "update_trade_stop")
     return changed
+
+
+def update_trade_stop_with_event(trade_id, stop_loss, *, trail_reason, cycle_id,
+                                 calculation_timestamp=None):
+    """Atomically raise an OPEN lot stop and append its authorizing event."""
+    allowed = {"PEAK_1R_BREAKEVEN", "PEAK_2R_LOCK_1R", "REGIME_RISK_OFF_BREAKEVEN"}
+    if trail_reason not in allowed:
+        raise ValueError("unapproved trailing-stop reason")
+    conn = get_connection(); cursor = conn.cursor()
+    ticker = None
+    try:
+        cursor.execute("BEGIN IMMEDIATE")
+        row = cursor.execute("SELECT ticker,entry_price,stop_loss FROM trades WHERE id=? AND status='OPEN'", (int(trade_id),)).fetchone()
+        if not row:
+            conn.rollback(); return 0
+        ticker, entry_price, old_stop = row
+        new_stop = round(float(stop_loss), 2)
+        if old_stop is None or round(float(old_stop), 2) >= new_stop:
+            conn.rollback(); return 0
+        stamp = calculation_timestamp or _now()
+        payload = {"trade_id": int(trade_id), "ticker": str(ticker).upper(),
+                   "old_stop": round(float(old_stop), 2), "new_stop": new_stop,
+                   "trail_reason": trail_reason, "entry_price": float(entry_price),
+                   "calculation_timestamp": stamp, "cycle_id": str(cycle_id)}
+        material = f"{trade_id}|{payload['old_stop']:.2f}|{new_stop:.2f}|{trail_reason}|{cycle_id}"
+        key = "trailing-stop:" + hashlib.sha256(material.encode()).hexdigest()
+        cursor.execute("UPDATE trades SET stop_loss=?,updated_at=? WHERE id=? AND status='OPEN' AND stop_loss=?",
+                       (new_stop, _now(), int(trade_id), old_stop))
+        if cursor.rowcount != 1:
+            raise RuntimeError("concurrent stop update")
+        _bk_emit_event(cursor, "MANUAL_CORRECTION", ticker=ticker, occurred_at=stamp,
+                       effective_at=stamp, payload=payload,
+                       source="atlas_portfolio.py:trailing_stop", prof_approved=0,
+                       idempotency_key=key, legacy_trades_id=int(trade_id))
+        conn.commit()
+    except Exception:
+        conn.rollback(); raise
+    finally:
+        conn.close()
+    _audit_db_event("trades", "UPDATE", int(trade_id), ticker, "update_trade_stop_with_event")
+    return 1
 
 
 def set_manual_stop_lock(trade_id, locked=True):

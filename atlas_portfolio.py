@@ -44,7 +44,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, date, timedelta, time
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, os.environ.get("ATLAS_SCRIPTS_DIR", "/Users/yasser/scripts"))
+sys.path.insert(0, os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__)))
 
 import atlas_db
 import atlas_corporate_action_gate as corporate_action_gate
@@ -1045,7 +1045,17 @@ def evaluate_exit(lot, dry_run=True, regime=None, macro_context_v1=None):
     # ── End macro-stress block ─────────────────────────────────────────────────
 
     if not dry_run and lot.get("id") and stop > hard_stop:
-        atlas_db.update_trade_stop(lot.get("id"), round(stop, 2))
+        if risk_off_tightened:
+            trail_reason = "REGIME_RISK_OFF_BREAKEVEN"
+        elif peak_R >= 2.0:
+            trail_reason = "PEAK_2R_LOCK_1R"
+        else:
+            trail_reason = "PEAK_1R_BREAKEVEN"
+        atlas_db.update_trade_stop_with_event(
+            lot.get("id"), round(stop, 2), trail_reason=trail_reason,
+            cycle_id=os.environ.get("ATLAS_CYCLE_ID") or datetime.now(timezone.utc).isoformat(),
+            calculation_timestamp=datetime.now(timezone.utc).isoformat(),
+        )
 
     days = _days_open(entry_at)
 
@@ -1123,11 +1133,26 @@ def _compute_rvol(aggs, lookback=20):
     return round(current_vol / avg_vol, 2) if avg_vol > 0 else None
 
 
-def run_exits(dry_run=True, macro_context_v1=None):
+def current_atr14_for_open_lots(lots=None):
+    """Refresh ATR14 once for guard input; failures remain explicit None."""
+    out = {}
+    for lot in lots if lots is not None else _open_positions():
+        try:
+            bars = _normalize_price_bars(lot["ticker"], get_massive_aggs(lot["ticker"], days=90))
+            out[int(lot["id"])] = calculate_atr(bars) if bars else None
+        except Exception:
+            out[int(lot["id"])] = None
+    return out
+
+
+def run_exits(dry_run=True, macro_context_v1=None, eligible_trade_ids=None):
     """Evaluate every open lot for an exit. Returns list of decisions."""
     results = []
     regime = check_regime()
+    eligible = None if eligible_trade_ids is None else {int(x) for x in eligible_trade_ids}
     for lot in _open_positions():
+        if eligible is not None and int(lot.get("id")) not in eligible:
+            continue
         results.append(evaluate_exit(lot, dry_run=dry_run, regime=regime, macro_context_v1=macro_context_v1))
     return results
 
@@ -1316,6 +1341,7 @@ def consider_gap_up_breakout(signal_result, dry_run=True, regime=None, pending=N
             corporate_action_gate.enforce_automatic_write(ticker)
             atlas_db.open_trade(
                 ticker, round(entry, 2), shares, stop_loss=stop, risk_pct=decision["risk_pct"], target_price=target,
+                entry_atr14=None,
                 status="PENDING_FILL",
                 notes=f"Atlas gap-up breakout: gap +{gap_pct:.1f}%, RVOL {rvol:.1f}x; catalyst {catalyst_note}; stop {stop}; target {target}; 0.25% risk on equity ${equity:,.0f}",
             )
@@ -1762,6 +1788,7 @@ def consider_intraday_breakout_continuation(signal_result, dry_run=True, regime=
             corporate_action_gate.enforce_automatic_write(ticker)
             atlas_db.open_trade(
                 ticker, entry, shares, stop_loss=stop, risk_pct=decision["risk_pct"], target_price=target,
+                entry_atr14=None,
                 status="PENDING_FILL",
                 notes=f"Atlas intraday breakout continuation: break {breakout_level}; entry {entry}; RVOL {rvol:.1f}x; catalyst {catalyst_note}; stop {stop}; target {target}; 0.25% risk on equity ${equity:,.0f}",
             )
@@ -1937,7 +1964,9 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
 
     # Stop from the engine's risk card if present, else recompute.
     stop = None
+    entry_atr14 = None
     rc = signal_result.get("risk_card") or {}
+    risk_card_atr14 = rc.get("daily_volatility_atr")
     if catalyst_override_stop is not None:
         stop = catalyst_override_stop
     elif breakout_stop is not None:
@@ -1947,10 +1976,12 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
         entry_ref = signal_result.get("entry_price", fill)
         risk_ref = entry_ref - rc["stop_loss"]
         stop = round(fill - risk_ref, 2) if risk_ref > 0 else None
+        entry_atr14 = risk_card_atr14
     if stop is None:
         aggs = get_massive_aggs(ticker, days=60)
         atr = calculate_atr(aggs) if aggs else None
         stop = round(fill - ATR_STOP_MULT * atr, 2) if atr else round(fill * 0.95, 2)
+        entry_atr14 = atr
 
     equity = acct.get_equity(price_lookup=_price_lookup)
     regime_detail = str((regime or (True, ""))[1])
@@ -2018,6 +2049,7 @@ def consider_buy(signal_result, dry_run=True, regime=None, pending=None, reserve
             atlas_db.open_trade(
                 ticker, fill, shares,
                 stop_loss=stop, risk_pct=decision["risk_pct"], target_price=target,
+                entry_atr14=entry_atr14,
                 status="PENDING_FILL",
                 notes=f"Atlas v2 entry: {trig_detail}; score {score}; signal {signal_result.get('signal', '')}; stop {stop}; target {target}; "
                       f"{'0.5%' if half else '1%'} risk on equity ${equity:,.0f}"

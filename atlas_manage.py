@@ -47,6 +47,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 import atlas_db
 import atlas_account as acct
 import atlas_portfolio as port
+import atlas_stop_invariant_guard as stop_guard
 from atlas_symbol_meta import company_name
 from atlas_time import current_et_market_date_str
 from atlas_engine import analyze_ticker, check_regime, check_macro_context, get_macro_sentiment
@@ -523,9 +524,26 @@ def run(args):
     print(f"  Realized P&L   : ${summary['realized_pnl']:,.2f}")
     print(f"  Equity (MTM)   : ${summary['equity']:,.2f}")
 
+    # Order #3: fail-closed stop invariant guard, after inventory/account and
+    # strictly before any exit evaluator can observe a persisted stop.
+    open_lots = atlas_db.get_trades(status="OPEN")
+    atr14_by_trade = port.current_atr14_for_open_lots(open_lots)
+    guard_now = datetime.now(timezone.utc)
+    guard_sessions = stop_guard.allowed_session_dates(guard_now)
+    guard_receipt = stop_guard.evaluate_cycle(
+        db_path=atlas_db.DB_PATH, cycle_id=run_id, current_atr14=atr14_by_trade,
+        allowed_broker_session_dates=guard_sessions, cycle_started_at=guard_now,
+        deployment_mode="production",
+    )
+    LAST_RUN_SUMMARY["stop_invariant_guard"] = guard_receipt
+    eligible_trade_ids = [x["trade_id"] for x in guard_receipt.get("lots", []) if x.get("result") == "PASS"]
+    if live:
+        stop_guard.alert_hard_violations(guard_receipt)
+
     # 2. EXITS FIRST --------------------------------------------------------
     _hdr("EXITS  (evaluated before any new buys)")
-    exit_results = port.run_exits(dry_run=not live, macro_context_v1=_macro_legacy if _macro_load.context is not None else None)
+    exit_results = port.run_exits(dry_run=not live, macro_context_v1=_macro_legacy if _macro_load.context is not None else None,
+                                  eligible_trade_ids=eligible_trade_ids)
     sells = [r for r in exit_results if r.get("action") == "SELL"]
     LAST_RUN_SUMMARY.update({"exit_results": exit_results, "sells": sells})
     if not exit_results:
