@@ -1,0 +1,34 @@
+{
+  "compile": "PASS",
+  "db": {
+    "foreign_key_errors": 0,
+    "integrity": "ok",
+    "isolation_equal": true
+  },
+  "manifests": [
+    "output/deployable_source.sha256",
+    "output/dependency_manifest.sha256",
+    "output/acceptance_evidence.sha256"
+  ],
+  "order32": {
+    "failed": 0,
+    "passed": 7,
+    "total": 7
+  },
+  "plist_lint": {
+    "passed": 3,
+    "total": 3
+  },
+  "production_freeze": {
+    "all_equal": true,
+    "manifest_count": 16,
+    "production_writes": 0
+  },
+  "receipt_count": 7,
+  "regression": {
+    "failed": 0,
+    "passed": 53,
+    "total": 53
+  },
+  "schema": "order32.seal.v1"
+}

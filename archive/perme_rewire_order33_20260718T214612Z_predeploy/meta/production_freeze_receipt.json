@@ -1,0 +1,136 @@
+{
+  "all_equal": true,
+  "files": [
+    {
+      "after_sha256": "348408bf64738ef6f96bbbbccbe9f37263f7406afe919c45921230c82628e2cb",
+      "before_sha256": "348408bf64738ef6f96bbbbccbe9f37263f7406afe919c45921230c82628e2cb",
+      "before_source": "staging_preimage",
+      "equal": true,
+      "live_path": "/Users/yasser/scripts/atlas_perme.py",
+      "path": "atlas_perme.py"
+    },
+    {
+      "after_sha256": null,
+      "before_sha256": null,
+      "before_source": "absent_preimage",
+      "equal": true,
+      "live_path": "/Users/yasser/scripts/atlas_perme_strict.py",
+      "path": "atlas_perme_strict.py"
+    },
+    {
+      "after_sha256": "87b003d70a4b3b916cffc988e2ee1c7ef99995544e5b48045d77e6a191d88d44",
+      "before_sha256": "87b003d70a4b3b916cffc988e2ee1c7ef99995544e5b48045d77e6a191d88d44",
+      "before_source": "staging_preimage",
+      "equal": true,
+      "live_path": "/Users/yasser/scripts/atlas_macro_context_v1.py",
+      "path": "atlas_macro_context_v1.py"
+    },
+    {
+      "after_sha256": "ab123f04fcf0fbc5f28ba3a8786f3f9bf198158ee8a52e712da478c14b1d975e",
+      "before_sha256": "ab123f04fcf0fbc5f28ba3a8786f3f9bf198158ee8a52e712da478c14b1d975e",
+      "before_source": "staging_preimage",
+      "equal": true,
+      "live_path": "/Users/yasser/scripts/atlas_manage.py",
+      "path": "atlas_manage.py"
+    },
+    {
+      "after_sha256": "f693fa663a3fee474ff2dfa9f85a7f635bac556e1b2e4973812abadc97c89ddd",
+      "before_sha256": "f693fa663a3fee474ff2dfa9f85a7f635bac556e1b2e4973812abadc97c89ddd",
+      "before_source": "staging_preimage",
+      "equal": true,
+      "live_path": "/Users/yasser/scripts/atlas_portfolio.py",
+      "path": "atlas_portfolio.py"
+    },
+    {
+      "after_sha256": "6940b1b340a5b3d292b20d3fa31550badea197146673a5d629f65db5fef3c281",
+      "before_sha256": "6940b1b340a5b3d292b20d3fa31550badea197146673a5d629f65db5fef3c281",
+      "before_source": "staging_preimage",
+      "equal": true,
+      "live_path": "/Users/yasser/scripts/atlas_holdings_reunderwrite.py",
+      "path": "atlas_holdings_reunderwrite.py"
+    },
+    {
+      "after_sha256": "03758c677681a267e404d39cda11482b1cb7fe4769071f4f0e80ac9ecb59a4e8",
+      "before_sha256": "03758c677681a267e404d39cda11482b1cb7fe4769071f4f0e80ac9ecb59a4e8",
+      "before_source": "staging_preimage",
+      "equal": true,
+      "live_path": "/Users/yasser/scripts/atlas_holdings_reunderwrite_runner.py",
+      "path": "atlas_holdings_reunderwrite_runner.py"
+    },
+    {
+      "after_sha256": "bd8e6f4270385c966e0b9fc7d9e8f931bb8fa44407b5fb7af87035406c29edc5",
+      "before_sha256": "bd8e6f4270385c966e0b9fc7d9e8f931bb8fa44407b5fb7af87035406c29edc5",
+      "before_source": "staging_preimage",
+      "equal": true,
+      "live_path": "/Users/yasser/scripts/run_holdings_reunderwrite.sh",
+      "path": "run_holdings_reunderwrite.sh"
+    },
+    {
+      "after_sha256": "c16b5f2bf2ea7f2bf3b3d8136a689246d517f0f39e77b5ea5aa2be6b114b6482",
+      "before_sha256": "c16b5f2bf2ea7f2bf3b3d8136a689246d517f0f39e77b5ea5aa2be6b114b6482",
+      "before_source": "staging_preimage",
+      "equal": true,
+      "live_path": "/Users/yasser/scripts/atlas_cycle_receipts.py",
+      "path": "atlas_cycle_receipts.py"
+    },
+    {
+      "after_sha256": "0f7f32f2e139fddac676d78ed3a1ba52fc49ed60a353babcda317d0d85763e91",
+      "before_sha256": "0f7f32f2e139fddac676d78ed3a1ba52fc49ed60a353babcda317d0d85763e91",
+      "before_source": "staging_preimage",
+      "equal": true,
+      "live_path": "/Users/yasser/scripts/atlas_intraday_receipt_wrapper.py",
+      "path": "atlas_intraday_receipt_wrapper.py"
+    },
+    {
+      "after_sha256": "cf3f28884c70a0f61689b85d50a7727fab30c01598de34d8655890aa4e8badfa",
+      "before_sha256": "cf3f28884c70a0f61689b85d50a7727fab30c01598de34d8655890aa4e8badfa",
+      "before_source": "pre_run_production_manifest",
+      "equal": true,
+      "live_path": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/build.py",
+      "path": "perme_context_v1_2/perme_v1/perme_context_v1/build.py"
+    },
+    {
+      "after_sha256": "da829f6a732851a690405d47f7ba026b8526e5c15f1cded244c411ebe8a16301",
+      "before_sha256": "da829f6a732851a690405d47f7ba026b8526e5c15f1cded244c411ebe8a16301",
+      "before_source": "pre_run_production_manifest",
+      "equal": true,
+      "live_path": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/validation.py",
+      "path": "perme_context_v1_2/perme_v1/perme_context_v1/validation.py"
+    },
+    {
+      "after_sha256": "717b304f998d7bfc40a738610f3ebfeb9723e02fa494ba6fcb798f53fe6663a7",
+      "before_sha256": "717b304f998d7bfc40a738610f3ebfeb9723e02fa494ba6fcb798f53fe6663a7",
+      "before_source": "staging_preimage",
+      "equal": true,
+      "live_path": "/Users/yasser/scripts/atlas.db",
+      "path": "atlas.db"
+    },
+    {
+      "after_sha256": "8289c6c34fac48e3ff493bef32271618ce8570c5a7cce1b9d0c2904fa846adf0",
+      "before_sha256": "8289c6c34fac48e3ff493bef32271618ce8570c5a7cce1b9d0c2904fa846adf0",
+      "before_source": "staging_preimage",
+      "equal": true,
+      "live_path": "/Users/yasser/Library/LaunchAgents/com.atlas.perme.plist",
+      "path": "com.atlas.perme.plist"
+    },
+    {
+      "after_sha256": "2a24f2378224fb21625bcd7362979ef5580c10c67dd7747e61efff8da4b5cf45",
+      "before_sha256": "2a24f2378224fb21625bcd7362979ef5580c10c67dd7747e61efff8da4b5cf45",
+      "before_source": "staging_preimage",
+      "equal": true,
+      "live_path": "/Users/yasser/Library/LaunchAgents/com.atlas.intraday.plist",
+      "path": "com.atlas.intraday.plist"
+    },
+    {
+      "after_sha256": "9d71dd83985ae8d54404c9e918e646663a55a7f55b2be76b0a0861ea39ff0c27",
+      "before_sha256": "9d71dd83985ae8d54404c9e918e646663a55a7f55b2be76b0a0861ea39ff0c27",
+      "before_source": "staging_preimage",
+      "equal": true,
+      "live_path": "/Users/yasser/Library/LaunchAgents/com.atlas.holdings_reunderwrite.plist",
+      "path": "com.atlas.holdings_reunderwrite.plist"
+    }
+  ],
+  "manifest_count": 16,
+  "production_writes": 0,
+  "schema": "order32.production_freeze.v2"
+}

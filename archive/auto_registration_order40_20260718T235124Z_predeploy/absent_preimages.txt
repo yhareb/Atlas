@@ -1,0 +1,4 @@
+ABSENT atlas_registration.py
+ABSENT atlas_registration_auditor.py
+ABSENT atlas_registration_gate.py
+ABSENT profile atlas-registration-auditor

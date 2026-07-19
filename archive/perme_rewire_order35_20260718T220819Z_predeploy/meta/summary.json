@@ -1,0 +1,58 @@
+{
+  "blockers": [],
+  "compile": "PASS",
+  "confidence_normalization": {
+    "direct_observation_meaning": "structurally valid direct provider record availability; not truth or prediction",
+    "direct_observation_value": 1.0,
+    "methods": {
+      "direct_observation": 15
+    },
+    "prose_or_rag_derivation": false,
+    "rows_by_source": {
+      "benzinga_news": 4,
+      "massive_sector_etfs": 11
+    },
+    "rows_normalized": 15,
+    "schema": "perme.confidence_normalization.v1"
+  },
+  "lint": "PASS",
+  "manifests": [
+    "output/deployable_source.sha256",
+    "output/dependency_manifest.sha256",
+    "output/acceptance_evidence.sha256"
+  ],
+  "order25": {
+    "failed": 0,
+    "passed": 53,
+    "total": 53
+  },
+  "order32": {
+    "failed": 0,
+    "passed": 7,
+    "total": 7
+  },
+  "production": {
+    "all_match": true,
+    "db_foreign_key_errors": 0,
+    "db_integrity": "ok",
+    "db_unchanged": true,
+    "entry_count": 16,
+    "production_writes": 0,
+    "strict_producer_absent": true
+  },
+  "production_shaped": {
+    "acceptance_status": "ACCEPTED",
+    "envelope_sha256": "e6c3fe535781ee93f53167a64b8cdb7f86748561fd2a445cd0d273e985671265",
+    "failed": 0,
+    "fixture_sha256": "5b3b2da75ce9b176cd8412171d98153762eaf48ee6d135a9e6a191405057a96a",
+    "passed": 1,
+    "payload_sha256": "7708caf395d1123d37414019005e0ed508e320b113fec9913e819d431afd0b81",
+    "total": 1,
+    "ttl_minutes": 240
+  },
+  "production_writes": 0,
+  "schema": "order34.summary.v1",
+  "scope": "retained staging only",
+  "staging_db_unchanged": true,
+  "validators_byte_identical": true
+}

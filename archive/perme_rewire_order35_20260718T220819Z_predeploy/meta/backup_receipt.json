@@ -1,0 +1,168 @@
+{
+  "all_equal": true,
+  "archive": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy",
+  "count": 16,
+  "rows": [
+    {
+      "backup": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy/files/atlas_perme.py",
+      "equal": true,
+      "live": "/Users/yasser/scripts/atlas_perme.py",
+      "mode_backup": "0o755",
+      "mode_live": "0o755",
+      "preexisting": true,
+      "sha_backup": "348408bf64738ef6f96bbbbccbe9f37263f7406afe919c45921230c82628e2cb",
+      "sha_live": "348408bf64738ef6f96bbbbccbe9f37263f7406afe919c45921230c82628e2cb"
+    },
+    {
+      "backup": null,
+      "equal": true,
+      "live": "/Users/yasser/scripts/atlas_perme_strict.py",
+      "mode_backup": null,
+      "mode_live": null,
+      "preexisting": false,
+      "sha_backup": null,
+      "sha_live": null
+    },
+    {
+      "backup": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy/files/atlas_macro_context_v1.py",
+      "equal": true,
+      "live": "/Users/yasser/scripts/atlas_macro_context_v1.py",
+      "mode_backup": "0o600",
+      "mode_live": "0o600",
+      "preexisting": true,
+      "sha_backup": "87b003d70a4b3b916cffc988e2ee1c7ef99995544e5b48045d77e6a191d88d44",
+      "sha_live": "87b003d70a4b3b916cffc988e2ee1c7ef99995544e5b48045d77e6a191d88d44"
+    },
+    {
+      "backup": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy/files/atlas_manage.py",
+      "equal": true,
+      "live": "/Users/yasser/scripts/atlas_manage.py",
+      "mode_backup": "0o644",
+      "mode_live": "0o644",
+      "preexisting": true,
+      "sha_backup": "ab123f04fcf0fbc5f28ba3a8786f3f9bf198158ee8a52e712da478c14b1d975e",
+      "sha_live": "ab123f04fcf0fbc5f28ba3a8786f3f9bf198158ee8a52e712da478c14b1d975e"
+    },
+    {
+      "backup": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy/files/atlas_portfolio.py",
+      "equal": true,
+      "live": "/Users/yasser/scripts/atlas_portfolio.py",
+      "mode_backup": "0o644",
+      "mode_live": "0o644",
+      "preexisting": true,
+      "sha_backup": "f693fa663a3fee474ff2dfa9f85a7f635bac556e1b2e4973812abadc97c89ddd",
+      "sha_live": "f693fa663a3fee474ff2dfa9f85a7f635bac556e1b2e4973812abadc97c89ddd"
+    },
+    {
+      "backup": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy/files/atlas_holdings_reunderwrite.py",
+      "equal": true,
+      "live": "/Users/yasser/scripts/atlas_holdings_reunderwrite.py",
+      "mode_backup": "0o644",
+      "mode_live": "0o644",
+      "preexisting": true,
+      "sha_backup": "6940b1b340a5b3d292b20d3fa31550badea197146673a5d629f65db5fef3c281",
+      "sha_live": "6940b1b340a5b3d292b20d3fa31550badea197146673a5d629f65db5fef3c281"
+    },
+    {
+      "backup": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy/files/atlas_holdings_reunderwrite_runner.py",
+      "equal": true,
+      "live": "/Users/yasser/scripts/atlas_holdings_reunderwrite_runner.py",
+      "mode_backup": "0o644",
+      "mode_live": "0o644",
+      "preexisting": true,
+      "sha_backup": "03758c677681a267e404d39cda11482b1cb7fe4769071f4f0e80ac9ecb59a4e8",
+      "sha_live": "03758c677681a267e404d39cda11482b1cb7fe4769071f4f0e80ac9ecb59a4e8"
+    },
+    {
+      "backup": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy/files/run_holdings_reunderwrite.sh",
+      "equal": true,
+      "live": "/Users/yasser/scripts/run_holdings_reunderwrite.sh",
+      "mode_backup": "0o755",
+      "mode_live": "0o755",
+      "preexisting": true,
+      "sha_backup": "bd8e6f4270385c966e0b9fc7d9e8f931bb8fa44407b5fb7af87035406c29edc5",
+      "sha_live": "bd8e6f4270385c966e0b9fc7d9e8f931bb8fa44407b5fb7af87035406c29edc5"
+    },
+    {
+      "backup": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy/files/atlas_cycle_receipts.py",
+      "equal": true,
+      "live": "/Users/yasser/scripts/atlas_cycle_receipts.py",
+      "mode_backup": "0o755",
+      "mode_live": "0o755",
+      "preexisting": true,
+      "sha_backup": "c16b5f2bf2ea7f2bf3b3d8136a689246d517f0f39e77b5ea5aa2be6b114b6482",
+      "sha_live": "c16b5f2bf2ea7f2bf3b3d8136a689246d517f0f39e77b5ea5aa2be6b114b6482"
+    },
+    {
+      "backup": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy/files/atlas_intraday_receipt_wrapper.py",
+      "equal": true,
+      "live": "/Users/yasser/scripts/atlas_intraday_receipt_wrapper.py",
+      "mode_backup": "0o755",
+      "mode_live": "0o755",
+      "preexisting": true,
+      "sha_backup": "0f7f32f2e139fddac676d78ed3a1ba52fc49ed60a353babcda317d0d85763e91",
+      "sha_live": "0f7f32f2e139fddac676d78ed3a1ba52fc49ed60a353babcda317d0d85763e91"
+    },
+    {
+      "backup": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy/files/perme_context_v1_2/perme_v1/perme_context_v1/build.py",
+      "equal": true,
+      "live": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/build.py",
+      "mode_backup": "0o600",
+      "mode_live": "0o600",
+      "preexisting": true,
+      "sha_backup": "cf3f28884c70a0f61689b85d50a7727fab30c01598de34d8655890aa4e8badfa",
+      "sha_live": "cf3f28884c70a0f61689b85d50a7727fab30c01598de34d8655890aa4e8badfa"
+    },
+    {
+      "backup": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy/files/perme_context_v1_2/perme_v1/perme_context_v1/validation.py",
+      "equal": true,
+      "live": "/Users/yasser/scripts/perme_context_v1_2/perme_v1/perme_context_v1/validation.py",
+      "mode_backup": "0o600",
+      "mode_live": "0o600",
+      "preexisting": true,
+      "sha_backup": "da829f6a732851a690405d47f7ba026b8526e5c15f1cded244c411ebe8a16301",
+      "sha_live": "da829f6a732851a690405d47f7ba026b8526e5c15f1cded244c411ebe8a16301"
+    },
+    {
+      "backup": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy/files/atlas.db",
+      "equal": true,
+      "live": "/Users/yasser/scripts/atlas.db",
+      "mode_backup": "0o644",
+      "mode_live": "0o644",
+      "preexisting": true,
+      "sha_backup": "717b304f998d7bfc40a738610f3ebfeb9723e02fa494ba6fcb798f53fe6663a7",
+      "sha_live": "717b304f998d7bfc40a738610f3ebfeb9723e02fa494ba6fcb798f53fe6663a7"
+    },
+    {
+      "backup": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy/plists/com.atlas.perme.plist",
+      "equal": true,
+      "live": "/Users/yasser/Library/LaunchAgents/com.atlas.perme.plist",
+      "mode_backup": "0o600",
+      "mode_live": "0o600",
+      "preexisting": true,
+      "sha_backup": "8289c6c34fac48e3ff493bef32271618ce8570c5a7cce1b9d0c2904fa846adf0",
+      "sha_live": "8289c6c34fac48e3ff493bef32271618ce8570c5a7cce1b9d0c2904fa846adf0"
+    },
+    {
+      "backup": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy/plists/com.atlas.intraday.plist",
+      "equal": true,
+      "live": "/Users/yasser/Library/LaunchAgents/com.atlas.intraday.plist",
+      "mode_backup": "0o600",
+      "mode_live": "0o600",
+      "preexisting": true,
+      "sha_backup": "2a24f2378224fb21625bcd7362979ef5580c10c67dd7747e61efff8da4b5cf45",
+      "sha_live": "2a24f2378224fb21625bcd7362979ef5580c10c67dd7747e61efff8da4b5cf45"
+    },
+    {
+      "backup": "/Users/yasser/scripts/archive/perme_rewire_order35_20260718T220819Z_predeploy/plists/com.atlas.holdings_reunderwrite.plist",
+      "equal": true,
+      "live": "/Users/yasser/Library/LaunchAgents/com.atlas.holdings_reunderwrite.plist",
+      "mode_backup": "0o644",
+      "mode_live": "0o644",
+      "preexisting": true,
+      "sha_backup": "9d71dd83985ae8d54404c9e918e646663a55a7f55b2be76b0a0861ea39ff0c27",
+      "sha_live": "9d71dd83985ae8d54404c9e918e646663a55a7f55b2be76b0a0861ea39ff0c27"
+    }
+  ],
+  "schema": "order35.backup.v1"
+}

@@ -1,0 +1,8 @@
+atlas_rag/
+atlas_rag/chroma_db/
+atlas_rag/chroma_db/chroma.sqlite3
+atlas_rag/chroma_db/accdd886-e6fd-4fa9-b0b4-12be488e80b4/
+atlas_rag/chroma_db/accdd886-e6fd-4fa9-b0b4-12be488e80b4/data_level0.bin
+atlas_rag/chroma_db/accdd886-e6fd-4fa9-b0b4-12be488e80b4/length.bin
+atlas_rag/chroma_db/accdd886-e6fd-4fa9-b0b4-12be488e80b4/link_lists.bin
+atlas_rag/chroma_db/accdd886-e6fd-4fa9-b0b4-12be488e80b4/header.bin

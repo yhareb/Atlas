@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.atlas.perme</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/yasser/.hermes/hermes-agent/venv/bin/python</string>
+    <string>/Users/yasser/scripts/atlas_perme.py</string>
+    <string>--routine</string>
+    <string>auto</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HERMES_HOME</key>
+    <string>/Users/yasser/.hermes/profiles/perme</string>
+    <key>PATH</key>
+    <string>/Users/yasser/.hermes/hermes-agent/venv/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PERME_OUTBOX</key>
+    <string>/Users/yasser/atlas_inbox</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/yasser/scripts</string>
+
+  <key>StandardOutPath</key>
+  <string>/Users/yasser/scripts/atlas_perme.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/yasser/scripts/atlas_perme.err.log</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- Host timezone is +04. These StartCalendarInterval entries map requested ET schedules to local wall-clock during EDT. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <!-- Monday trading 06:30 ET pre-market = Monday 14:30 +04 -->
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>30</integer></dict>
+    <!-- Monday trading 10:00 ET mid-morning = Monday 18:00 +04 -->
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    <!-- Monday trading 13:00 ET midday = Monday 21:00 +04 -->
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+    <!-- Tuesday trading 06:30 ET pre-market = Tuesday 14:30 +04 -->
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>30</integer></dict>
+    <!-- Tuesday trading 10:00 ET mid-morning = Tuesday 18:00 +04 -->
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    <!-- Tuesday trading 13:00 ET midday = Tuesday 21:00 +04 -->
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+    <!-- Wednesday trading 06:30 ET pre-market = Wednesday 14:30 +04 -->
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>30</integer></dict>
+    <!-- Wednesday trading 10:00 ET mid-morning = Wednesday 18:00 +04 -->
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    <!-- Wednesday trading 13:00 ET midday = Wednesday 21:00 +04 -->
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+    <!-- Thursday trading 06:30 ET pre-market = Thursday 14:30 +04 -->
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>30</integer></dict>
+    <!-- Thursday trading 10:00 ET mid-morning = Thursday 18:00 +04 -->
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    <!-- Thursday trading 13:00 ET midday = Thursday 21:00 +04 -->
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+    <!-- Friday trading 06:30 ET pre-market = Friday 14:30 +04 -->
+    <dict><key>Weekday</key><integer>6</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>30</integer></dict>
+    <!-- Friday trading 10:00 ET mid-morning = Friday 18:00 +04 -->
+    <dict><key>Weekday</key><integer>6</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    <!-- Friday trading 13:00 ET midday = Friday 21:00 +04 -->
+    <dict><key>Weekday</key><integer>6</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+    <!-- Monday trading 16:30 ET post-market = Tuesday 00:30 +04 -->
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>0</integer><key>Minute</key><integer>30</integer></dict>
+    <!-- Tuesday trading 16:30 ET post-market = Wednesday 00:30 +04 -->
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>0</integer><key>Minute</key><integer>30</integer></dict>
+    <!-- Wednesday trading 16:30 ET post-market = Thursday 00:30 +04 -->
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>0</integer><key>Minute</key><integer>30</integer></dict>
+    <!-- Thursday trading 16:30 ET post-market = Friday 00:30 +04 -->
+    <dict><key>Weekday</key><integer>6</integer><key>Hour</key><integer>0</integer><key>Minute</key><integer>30</integer></dict>
+    <!-- Friday trading 16:30 ET post-market = Saturday 00:30 +04 -->
+    <dict><key>Weekday</key><integer>7</integer><key>Hour</key><integer>0</integer><key>Minute</key><integer>30</integer></dict>
+                  </array>
+</dict>
+</plist>
