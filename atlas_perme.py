@@ -2226,15 +2226,7 @@ def main(argv: list[str] | None = None) -> int:
             context, strict_outbox, os.environ.get("ATLAS_DB", "/Users/yasser/scripts/atlas.db"), generated_at,
             {"success": bool(str(briefing).strip()), "provider": "openrouter", "model": "moonshotai/kimi-k3"},
         )
-    if args.dry_run:
-        print("[atlas_rag] dry-run: indexer suppressed")
-    else:
-        try:
-            from atlas_rag_indexer import index_perme_briefs as index_new_briefs
-            _rag_summary = index_new_briefs()
-            print(f"[atlas_rag] INDEXED_NEW={_rag_summary.get('indexed_new')} TOTAL_AFTER={_rag_summary.get('total_after')}")
-        except Exception as e:
-            print(f"[atlas_rag] indexer error (non-fatal): {e}")
+    print("[atlas_rag] indexer retired (ORDER #43): perme_briefs transport superseded by strict envelope")
     routine = str(context.get("routine") or args.routine)
     telegram_message = format_telegram_brief(briefing, routine, generated_at, context=context)
     if args.dry_run:
