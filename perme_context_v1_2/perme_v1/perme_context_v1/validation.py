@@ -6,6 +6,10 @@ from zoneinfo import ZoneInfo
 from .build import NUMERIC_KEYS, TRADE_WORDS, _confidence, _freshness, _importance, _iso, _number, _scheduled, _source_timestamp, _tickers
 
 ET=ZoneInfo("America/New_York")
+# Canonical V1 has no generated instruction-capable prose fields today. Raw
+# evidence and deterministic headlines are facts and must never be scanned as
+# instructions. Add future generated prose fields here explicitly before use.
+_INSTRUCTION_SCAN_FIELDS: tuple[str, ...] = ()
 TOP={"schema","generated_at","expires_at","freshness","mode","routine","sources","evidence","macro_regime","events","open_holdings","trading_instructions"}
 SOURCE={"source_id","kind","locator","observed_at","read_only","status","completeness"}
 EVIDENCE={"evidence_id","source_id","source_record_type","observed_at","source_timestamp","freshness_status","raw_record"}
@@ -47,7 +51,12 @@ def validate_context(packet:dict[str,Any],now:datetime|None=None)->dict[str,Any]
     ttl=packet["freshness"]["ttl_minutes"]
     if not isinstance(ttl,int) or ttl<1: raise ValidationError("ttl")
     if now>expires or packet["freshness"]["status"]!="FRESH": raise ValidationError("stale packet")
-    if packet["trading_instructions"]!=[] or any(TRADE_WORDS.search(t) for t in _text(packet)): raise ValidationError("trading instructions")
+    if packet["trading_instructions"]!=[]: raise ValidationError("trading instructions")
+    if any(
+        TRADE_WORDS.search(text)
+        for field in _INSTRUCTION_SCAN_FIELDS
+        for text in _text(packet.get(field))
+    ): raise ValidationError("trading instructions")
     sources={}
     for source in packet["sources"]:
         _exact(source,SOURCE,"source")
