@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 
 warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL.*")
 import requests
+from atlas_llm_invocation_ledger import record as _record_llm_invocation
 
 SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
@@ -487,6 +488,7 @@ def llm_narrative(ctx: dict) -> str | None:
         + json.dumps(ctx, default=str)[:12000]
     )
     try:
+        _record_llm_invocation("macro_premarket_openai", "atlas_macro_premarket.llm_narrative", "HUMAN_REPORT_ONLY")
         r = requests.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
