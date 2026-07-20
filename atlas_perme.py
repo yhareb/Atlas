@@ -444,8 +444,6 @@ def build_prompt(context: dict[str, Any]) -> str:
 
 
 def run_perme(prompt: str, timeout: int = 180) -> str:
-    from atlas_llm_invocation_ledger import record as _record_llm_invocation
-    _record_llm_invocation("perme_hermes_profile", "atlas_perme.run_perme", "CONTEXT_PROSE_ONLY")
     env = os.environ.copy()
     env.setdefault("HERMES_HOME", HERMES_HOME)
     proc = subprocess.run(

@@ -21,8 +21,6 @@ def audit_image(image_path, runner=None):
 
 def hermes_cli_runner(path,prompt,profile,model,timeout):
     """Exact staged Hermes CLI: staged home, image, provider/model, 90s, no tools."""
-    from atlas_llm_invocation_ledger import record as _record_llm_invocation
-    _record_llm_invocation("registration_image_auditor", "atlas_registration_auditor.hermes_cli_runner", "POST_REGISTRATION_AUDIT")
     home=str(Path(__file__).parents[1]/'config'/profile)
     cmd=['hermes','chat','-Q','--provider',PROVIDER,'-m',model,'--image',str(path),'-q',prompt]
     env={**os.environ,'HERMES_HOME':home,'HERMES_TOOLS':'none'}
