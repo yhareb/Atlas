@@ -1182,9 +1182,11 @@ def _parse_signal_timestamp(value):
     try:
         text = str(value).strip().replace("Z", "+00:00")
         parsed = datetime.datetime.fromisoformat(text)
-        if parsed.tzinfo is not None:
-            return parsed.astimezone().replace(tzinfo=None)
-        return parsed
+        # SQLite signal timestamps are UTC even though legacy rows are naive.
+        # Normalize both legacy-naive and aware values onto one UTC-aware basis.
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=datetime.timezone.utc)
+        return parsed.astimezone(datetime.timezone.utc)
     except Exception:
         return None
 
@@ -1193,7 +1195,11 @@ def _buy_now_signal_is_fresh(row, now=None, max_age_minutes=BUY_NOW_MAX_SIGNAL_A
     ts = _parse_signal_timestamp((row or {}).get("timestamp") or (row or {}).get("signal_timestamp"))
     if ts is None:
         return False
-    now = now or datetime.datetime.now()
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=datetime.timezone.utc)
+    else:
+        now = now.astimezone(datetime.timezone.utc)
     age = (now - ts).total_seconds() / 60.0
     return 0 <= age <= float(max_age_minutes)
 
@@ -1278,8 +1284,11 @@ def _advisory_now(summary):
 def _report_gates(row, sig, now):
     """Construct report gates only from renderer-known facts; no DB schema field."""
     ts = _parse_signal_timestamp(row.get("timestamp") or row.get("signal_timestamp"))
-    now_naive = now.astimezone().replace(tzinfo=None) if now.tzinfo else now
-    age = (now_naive - ts).total_seconds() / 60.0 if ts else None
+    if now.tzinfo is None:
+        now_utc = now.replace(tzinfo=datetime.timezone.utc)
+    else:
+        now_utc = now.astimezone(datetime.timezone.utc)
+    age = (now_utc - ts).total_seconds() / 60.0 if ts else None
     rvol = getattr(sig, "rvol", None) if sig else _rvol_value(row)
     trigger = sig.trigger_price if sig else _num(row.get("trigger_price") or row.get("entry_price"), 0)
     current = sig.current_price if sig else _num(row.get("current_price") or row.get("price"), 0)
