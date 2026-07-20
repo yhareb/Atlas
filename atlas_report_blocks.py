@@ -363,6 +363,10 @@ def pullback_block(pullback_data: Iterable[Any] | None) -> list[str]:
         fundamentals_ok = bool(_row_value(row, "fundamentals_ok", default=False))
         momentum_weak = bool(_row_value(row, "momentum_weak", default=False))
         no_earnings = bool(_row_value(row, "no_earnings", default=False))
+        earnings_context = _row_value(row, "earnings_context", default=None)
+        earnings_text = _row_value(row, "earnings_text", "earnings_note", default=None)
+        earnings_present = earnings_context not in (None, {}) or earnings_text not in (None, "")
+        earnings_line = str(earnings_text) if earnings_text not in (None, "") else ("Earnings context available" if earnings_present else "Earnings information missing")
         lines += [
             f"{i}. {label}",
             f"   💵 Entry {SOURCE_DB}/{SOURCE_TFE} {_price(trigger)}",
@@ -371,7 +375,7 @@ def pullback_block(pullback_data: Iterable[Any] | None) -> list[str]:
             f"   {_signal_pillar_text(row)}",
             f"   📉 RSI {_num(rsi):.0f}" if rsi is not None else "   📉 RSI N/A",
             f"   📈 MACD+ · {_num(macd_hist):.1f}" if macd_hist is not None else "   📈 MACD+ · N/A",
-            "   ✅ Fundamentals" if fundamentals_ok else "   ⚠️ Momentum Weak" if momentum_weak else "   No earnings catalyst reported by source" if no_earnings else "   Earnings information missing",
+            f"   {earnings_line}" if earnings_present else "   ✅ Fundamentals" if fundamentals_ok else "   ⚠️ Momentum Weak" if momentum_weak else "   No earnings catalyst reported by source" if no_earnings else "   Earnings information missing",
             "",
         ]
     return lines

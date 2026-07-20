@@ -1126,6 +1126,8 @@ def _signal_from_row(row, high_map=None):
     indicator = _normalize_indicator_payload(indicator)
     fundamentals = row.get("fundamentals") or payload.get("fundamentals") or {}
     ftag = str((fundamentals.get("tag") if isinstance(fundamentals, dict) else fundamentals) or "")
+    earnings_context = row.get("earnings_context") or payload.get("earnings_context")
+    earnings_note = row.get("earnings_warning") or row.get("earnings_note") or payload.get("earnings_warning") or payload.get("earnings_note")
     reason = f"{row.get('reason','')} {row.get('signal','')} {row.get('signal_json','')} {scan.get('reason','')} {scan.get('signal','')}"
     action = str(row.get("action") or scan.get("action") or "").upper()
     pct = scan.get("pct_over_ema") if scan.get("pct_over_ema") not in (None, "") else row.get("pct_over_ema")
@@ -1154,6 +1156,8 @@ def _signal_from_row(row, high_map=None):
             pct_over_ema=pct_float,
         )
         object.__setattr__(sig, "rvol", _rvol_value(row) if _rvol_value(row) is not None else _rvol_value(scan))
+        object.__setattr__(sig, "earnings_context", earnings_context)
+        object.__setattr__(sig, "earnings_note", earnings_note)
         return sig
     except Exception:
         return None
@@ -2077,8 +2081,11 @@ def _waiting_lines(high, suppress_tickers=None, summary=None):
                 "fundamentals_ok": sig.fundamentals_ok,
                 "momentum_weak": sig.momentum_weak,
                 "no_earnings": sig.no_earnings,
+                "earnings_context": getattr(sig, "earnings_context", None),
+                "earnings_note": getattr(sig, "earnings_note", None),
                 "rvol": _rvol_value(row),
             })
+            row["earnings_text"] = _earnings_tag(row)
         else:
             row.setdefault("current_price", row.get("price") or row.get("reference_price"))
         rows.append(row)
