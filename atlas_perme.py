@@ -2219,13 +2219,25 @@ def main(argv: list[str] | None = None) -> int:
     latest_context_path = write_latest_context(briefing, path.parent, generated_at)
     engine_packet_path = write_engine_packet(context, path.parent, generated_at)
     strict_receipt = None
+    strict_status = "NOT_CONFIGURED"
     strict_outbox = os.environ.get("PERME_STRICT_OUTBOX")
     if strict_outbox and not args.dry_run:
         from atlas_perme_strict import publish as publish_strict
-        strict_receipt = publish_strict(
-            context, strict_outbox, os.environ.get("ATLAS_DB", "/Users/yasser/scripts/atlas.db"), generated_at,
-            {"success": bool(str(briefing).strip()), "provider": "openrouter", "model": "moonshotai/kimi-k3"},
-        )
+        from perme_context_v1_2.perme_v1.perme_context_v1.validation import ValidationError
+        try:
+            strict_receipt = publish_strict(
+                context, strict_outbox, os.environ.get("ATLAS_DB", "/Users/yasser/scripts/atlas.db"), generated_at,
+                {"success": bool(str(briefing).strip()), "provider": "openrouter", "model": "moonshotai/kimi-k3"},
+            )
+            strict_status = "PUBLISHED"
+        except ValidationError as exc:
+            strict_status = "REJECTED"
+            reason = str(exc)
+            print(f"PERME STRICT REJECTED — DATA INCOMPLETE: {reason}")
+            deliver_telegram_brief(
+                f"PERME STRICT REJECTED — DATA INCOMPLETE: {reason}",
+                dry_run=False,
+            )
     print("[atlas_rag] indexer retired (ORDER #43): perme_briefs transport superseded by strict envelope")
     routine = str(context.get("routine") or args.routine)
     telegram_message = format_telegram_brief(briefing, routine, generated_at, context=context)
@@ -2244,6 +2256,7 @@ def main(argv: list[str] | None = None) -> int:
         "earnings_count": len(context.get("benzinga_earnings") or []),
         "economic_events_count": len(context.get("eodhd_economic_calendar") or []),
         "sector_count": len(context.get("massive_sector_etfs") or []),
+        "strict": strict_status,
     }, sort_keys=True))
     if args.dry_run:
         print("PERME_BRIEF_BEGIN")
