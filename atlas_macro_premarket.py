@@ -201,6 +201,8 @@ def _section(title: str) -> str:
 
 NO_RELEVANT_HEADLINES = "No relevant market-moving headlines found."
 NO_VERIFIED_CALENDAR = "No verified calendar source available."
+NO_EARNINGS_BEFORE_OPEN = "No earnings scheduled before open."
+FED_SPEAKER_FEED_NOT_WIRED = "Fed speaker feed not wired."
 
 _MARKET_MOVING_TERMS = {
     "tariff", "sanction", "export control", "rate", "yield", "fed", "fomc", "inflation",
@@ -429,6 +431,8 @@ def deterministic_narrative(ctx: dict) -> str:
     econ        = (events_ctx.get("economic_events")    or [])[:6]
     earnings    = (events_ctx.get("earnings_before_open") or [])[:3]
     fed         = (events_ctx.get("fed_speakers")        or [])[:3]
+    earnings_status = events_ctx.get("earnings_source_status")
+    fed_status = events_ctx.get("fed_source_status")
     if econ:
         for item in econ:
             lines.append(f"🗓 {item[:180]}")
@@ -438,12 +442,16 @@ def deterministic_narrative(ctx: dict) -> str:
     if earnings:
         for item in earnings:
             lines.append(f"   🗓 {item[:160]}")
+    elif earnings_status == "QUERIED_EMPTY":
+        lines.append(f"   {NO_EARNINGS_BEFORE_OPEN}")
     else:
         lines.append(f"   {NO_VERIFIED_CALENDAR}")
     lines.append("Fed speakers:")
     if fed:
         for item in fed:
             lines.append(f"   🎙 {item[:160]}")
+    elif fed_status == "NOT_WIRED":
+        lines.append(f"   {FED_SPEAKER_FEED_NOT_WIRED}")
     else:
         lines.append(f"   {NO_VERIFIED_CALENDAR}")
 
@@ -811,6 +819,55 @@ def global_markets_snapshot() -> dict:
     }
 
 
+def _benzinga_earnings_before_open(today_et) -> tuple[list[str], str, int, int | None]:
+    """Fetch today's BMO earnings; request shape mirrors atlas_perme.fetch_benzinga_earnings."""
+    if not BENZINGA_API_KEY:
+        return [], "FETCH_FAILED", 0, None
+    try:
+        response = requests.get(
+            "https://api.benzinga.com/api/v2.1/calendar/earnings",
+            params={
+                "token": BENZINGA_API_KEY,
+                "parameters[date_from]": today_et.isoformat(),
+                "parameters[date_to]": today_et.isoformat(),
+                "pagesize": 50,
+            },
+            timeout=12,
+            headers={"Accept": "application/json"},
+        )
+        status = response.status_code
+        response.raise_for_status()
+        data = response.json()
+        rows = (data or {}).get("earnings") if isinstance(data, dict) else data
+        rows = rows or []
+        before_open = []
+        for row in rows:
+            timing = str(row.get("time") or "").strip().upper()
+            if timing not in {"BMO", "BEFORE MARKET", "BEFORE OPEN", "PRE-MARKET", "PREMARKET"}:
+                continue
+            ticker = _clean_text(row.get("ticker") or row.get("symbol") or "")
+            if not ticker:
+                continue
+            detail = f"{ticker} — before open"
+            eps_est = row.get("eps_est")
+            if eps_est is not None:
+                detail += f" · EPS est {eps_est}"
+            before_open.append(detail)
+        print(f"[macro_premarket] Benzinga earnings HTTP status={status} rows={len(rows)} before_open={len(before_open)}")
+        return before_open[:10], ("QUERIED_ROWS" if before_open else "QUERIED_EMPTY"), len(rows), status
+    except Exception as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        print(f"[macro_premarket] Benzinga earnings fetch failed: {type(exc).__name__} HTTP status={status if status is not None else 'N/A'} rows=0")
+        return [], "FETCH_FAILED", 0, status
+
+
+def _is_fed_speaker_event(name: str) -> bool:
+    text = str(name or "").lower()
+    has_fed = any(term in text for term in ("federal reserve", "fed ", "fomc"))
+    has_speaker = any(term in text for term in ("speaker", "speaks", "speech", "remarks", "testimony", "testifies", "address"))
+    return has_fed and has_speaker
+
+
 def scheduled_events_snapshot() -> dict:
     import datetime as _dt_mod
     import dateutil.parser as _dp
@@ -824,6 +881,7 @@ def scheduled_events_snapshot() -> dict:
         "limit": 50,
     })
     events = []
+    fed = []
     if isinstance(macro, list):
         for item in macro:
             raw_date = item.get("date") or item.get("datetime") or ""
@@ -847,10 +905,20 @@ def scheduled_events_snapshot() -> dict:
                 detail = f"{time_str} — {detail}"
             if detail.strip():
                 events.append(detail.strip())
+                if _is_fed_speaker_event(name):
+                    fed.append(detail.strip())
         events = events[:10]
-    earnings = []
-    fed = []
-    return {"economic_events": events, "earnings_before_open": earnings, "fed_speakers": fed}
+    earnings, earnings_status, earnings_rows, earnings_http_status = _benzinga_earnings_before_open(today_et)
+    fed_status = "WIRED_ROWS" if fed else ("NOT_WIRED" if isinstance(macro, list) else "FETCH_FAILED")
+    return {
+        "economic_events": events,
+        "earnings_before_open": earnings,
+        "earnings_source_status": earnings_status,
+        "earnings_source_row_count": earnings_rows,
+        "earnings_http_status": earnings_http_status,
+        "fed_speakers": fed[:10],
+        "fed_source_status": fed_status,
+    }
 
 
 def collect_raw_context() -> dict:
