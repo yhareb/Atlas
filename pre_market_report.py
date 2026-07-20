@@ -1442,6 +1442,8 @@ def _llm_brief(futures, gainers, losers, buy_lines, watch_lines, headlines):
         + "\n\n".join(facts)
     )
     try:
+        from atlas_llm_invocation_ledger import record as _record_llm_invocation
+        _record_llm_invocation("premarket_brief_openai", "pre_market_report._llm_brief", "HUMAN_REPORT_ONLY")
         r = requests.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},

@@ -6,7 +6,9 @@ from pathlib import Path
 
 SCHEMA="atlas.machine_cycle_receipt.v1"
 ROOT=Path(os.environ.get("ATLAS_CYCLE_RECEIPT_ROOT","/Users/yasser/.hermes/profiles/atlasops/acceptance/machine_cycles"))
-KINDS={"holdings_price","holdings_health","perme_strict","corporate_action","candidate_accounting","child_completion"}
+KINDS={"holdings_price","holdings_health","perme_strict","corporate_action","candidate_accounting","child_completion","authority"}
+AUTHORITY_SCHEMA="atlas.machine_authority_receipt.v1"
+AUTHORITY_FLAGS=("holdings_price_healthy","holdings_reevaluation_healthy","perme_strict","ca_active_complete","tfe_sole_authority","llm_trading_authority_false","no_p0_p1")
 
 def canon(o): return json.dumps(o,sort_keys=True,separators=(",",":"),ensure_ascii=True,allow_nan=False,default=str).encode()
 def sha_bytes(b): return hashlib.sha256(b).hexdigest()
@@ -95,7 +97,74 @@ def db_health(path):
   c=sqlite3.connect(f"file:{path}?mode=ro",uri=True); x={"integrity":c.execute("pragma integrity_check").fetchone()[0],"fk_errors":len(c.execute("pragma foreign_key_check").fetchall()),"sha256":sha_file(path)}; c.close(); return x
  except Exception as e: return {"integrity":"ERROR","fk_errors":None,"error":type(e).__name__}
 
-def verify_cycle(cid,require_envelope=False):
+def _load_receipt(d,kind):
+ p=d/f"{kind}.json"
+ try:
+  o=json.loads(p.read_text()); supplied=o.pop("receipt_sha256")
+  if o.get("schema")!=SCHEMA or o.get("cycle_id")!=d.name or o.get("kind")!=kind or supplied!=sha_bytes(canon(o)): return None
+  o["receipt_sha256"]=supplied; return o
+ except Exception: return None
+
+def _manifest_attestation(path):
+ try:
+  p=Path(path); o=json.loads(p.read_text()); expected=o.get("source_sha256") or {}
+  required=set(o.get("sole_trade_instruction_authority_paths") or [])|set(o.get("deterministic_orchestration_paths") or [])
+  match=bool(required) and required==set(expected) and all(Path(x).is_file() and sha_file(x)==expected[x] for x in required)
+  policy=o.get("policy")=="TFE_SOLE_TRADE_INSTRUCTION_AUTHORITY" and o.get("llm_trading_authority_allowed") is False
+  inventory=Path(o.get("llm_boundary_inventory_path") or "")
+  if not inventory.is_file(): inventory=p.parent/inventory.name
+  inventory_sha=sha_file(inventory) if inventory.is_file() else None; inv={}
+  try: inv=json.loads(inventory.read_text()); inventory_complete=inv.get("schema")=="atlas.llm_boundary_inventory.v1" and inv.get("unproven_boundaries")==[]
+  except Exception: inventory_complete=False
+  inventory_match=inventory_sha==o.get("llm_boundary_inventory_sha256")
+  return {"manifest_sha256":sha_file(p),"source_sha256":expected,"active_code_shas_match":match,"policy_valid":policy,"inventory_sha256":inventory_sha,"inventory_match":inventory_match,"inventory_complete":inventory_complete,"inventory":inv if inventory_complete else {}}
+ except Exception: return {"manifest_sha256":None,"source_sha256":{},"active_code_shas_match":False,"policy_valid":False,"inventory_sha256":None,"inventory_match":False,"inventory_complete":False,"inventory":{}}
+
+def _incident_attestation(path):
+ unresolved=[]
+ try:
+  p=Path(path)
+  for i,line in enumerate(p.read_text().splitlines(),1):
+   if not line.strip(): continue
+   o=json.loads(line); sev=str(o.get("severity") or "").upper(); status=str(o.get("status") or "").upper()
+   if sev in {"P0","P1"} and status not in {"RESOLVED","CLOSED"}: unresolved.append(o.get("incident_id") or f"line:{i}")
+  return {"register_sha256":sha_file(p),"unresolved_p0_p1":unresolved,"append_only_format":"JSONL"}
+ except Exception: return {"register_sha256":None,"unresolved_p0_p1":["REGISTER_INVALID"],"append_only_format":"JSONL"}
+
+def _llm_window_attestation(path,start_utc,end_utc,cid,manifest):
+ rows=[]; errors=[]
+ try:
+  start=dt.datetime.fromisoformat(str(start_utc).replace("Z","+00:00")); end=dt.datetime.fromisoformat(str(end_utc).replace("Z","+00:00")); p=Path(path)
+  if not p.is_file(): raise FileNotFoundError
+  for line in p.read_text().splitlines():
+   if not line.strip(): continue
+   o=json.loads(line); ts=dt.datetime.fromisoformat(str(o.get("ts")).replace("Z","+00:00"))
+   if start<=ts<=end and o.get("cycle_id") in (None,cid): rows.append(o)
+ except Exception as exc: errors.append("LLM_LEDGER_"+type(exc).__name__.upper())
+ boundary_map={x.get("boundary"):x for x in (manifest.get("inventory") or {}).get("boundaries",[])}
+ unclassified=[x for x in rows if x.get("boundary") not in boundary_map]
+ trading=[x for x in rows if (boundary_map.get(x.get("boundary")) or {}).get("trading_authority_capable") is not False]
+ return {"ledger_sha256":sha_file(path) if Path(path).is_file() else None,"cycle_window_start_utc":str(start_utc),"cycle_window_end_utc":str(end_utc),"cycle_rows":rows,"unclassified":unclassified,"trading_authority_capable_invocations":trading,"errors":errors}
+
+def emit_authority_receipt(source_envelope_sha256,manifest_path,incident_register_path,llm_ledger_path,start_utc,end_utc,cid=None):
+ """Derive seven authority booleans from validated receipts; false remains explicit and fail-closed."""
+ cid=cid or cycle_id(); d=cycle_dir(cid); receipts={k:_load_receipt(d,k) for k in ("holdings_price","holdings_health","perme_strict","candidate_accounting","child_completion")}
+ hp=(receipts.get("holdings_price") or {}).get("payload") or {}; hh=(receipts.get("holdings_health") or {}).get("payload") or {}; ps=(receipts.get("perme_strict") or {}).get("payload") or {}; ca=(receipts.get("candidate_accounting") or {}).get("payload") or {}
+ manifest=_manifest_attestation(manifest_path); incidents=_incident_attestation(incident_register_path); llm=_llm_window_attestation(llm_ledger_path,start_utc,end_utc,cid,manifest)
+ flags={
+  "holdings_price_healthy":bool(receipts.get("holdings_price") and hp.get("packet_sha256") and hp.get("packet_sha256")==hp.get("header_packet_sha256")==hp.get("detail_packet_sha256")),
+  "holdings_reevaluation_healthy":bool(receipts.get("holdings_health") and hh.get("missing") is False and hh.get("duplicate") is False and hh.get("sidecar_integrity")=="ok" and hh.get("packet_sha256")),
+  "perme_strict":bool(receipts.get("perme_strict") and ps.get("status")=="ACCEPTED" and ps.get("accepted") is True and ps.get("rejected") is False and {"$.macro_regime","$.event_risks"}.issubset(set(ps.get("consumed_paths") or []))),
+  "ca_active_complete":bool(receipts.get("candidate_accounting") and ca.get("equation_holds") is True and ca.get("ca_receipt_count")==len(list(d.glob("corporate_action.*.json"))) and ca.get("admission_receipt_count")<=ca.get("ca_receipt_count")),
+  "tfe_sole_authority":bool(manifest["policy_valid"] and manifest["active_code_shas_match"] and manifest["inventory_match"] and manifest["inventory_complete"]),
+  "llm_trading_authority_false":bool(receipts.get("child_completion") and manifest["active_code_shas_match"] and manifest["policy_valid"] and manifest["inventory_match"] and manifest["inventory_complete"] and not llm["errors"] and not llm["unclassified"] and not llm["trading_authority_capable_invocations"]),
+  "no_p0_p1":not incidents["unresolved_p0_p1"],
+ }
+ derivation={"holdings_price_healthy":(receipts.get("holdings_price") or {}).get("receipt_sha256"),"holdings_reevaluation_healthy":(receipts.get("holdings_health") or {}).get("receipt_sha256"),"perme_strict":(receipts.get("perme_strict") or {}).get("receipt_sha256"),"ca_active_complete":(receipts.get("candidate_accounting") or {}).get("receipt_sha256"),"tfe_sole_authority":manifest["manifest_sha256"],"llm_trading_authority_false":(receipts.get("child_completion") or {}).get("receipt_sha256"),"no_p0_p1":incidents["register_sha256"]}
+ body={"schema":AUTHORITY_SCHEMA,"cycle_id":cid,"source_envelope_sha256":source_envelope_sha256,**flags,"derivation_receipts":derivation,"runtime_attestation":{"manifest_sha256":manifest["manifest_sha256"],"inventory_sha256":manifest["inventory_sha256"],"active_code_shas":manifest["source_sha256"],"active_code_shas_match":manifest["active_code_shas_match"],"llm_window":llm},"incident_attestation":incidents}
+ body["receipt_sha256"]=sha_bytes(canon(body)); atomic_json(d/"authority.json",body); return body
+
+def verify_cycle(cid,require_envelope=False,require_authority=False):
  d=cycle_dir(cid); errors=[]; objs={}
  for k in ("holdings_price","holdings_health","perme_strict","candidate_accounting","child_completion"):
   p=d/f"{k}.json"
@@ -136,5 +205,13 @@ def verify_cycle(cid,require_envelope=False):
   generated=dt.datetime.fromisoformat(str(perme.get("generated_at")).replace("Z","+00:00")); ttl=int(perme.get("ttl_minutes")); now=dt.datetime.now(dt.timezone.utc)
   if generated.tzinfo is None or now>generated.astimezone(dt.timezone.utc)+dt.timedelta(minutes=ttl): errors.append("PERME_STALE")
  except Exception: errors.append("PERME_FRESHNESS_INVALID")
+ if require_authority:
+  p=d/"authority.json"
+  try:
+   auth=json.loads(p.read_text()); supplied=auth.pop("receipt_sha256")
+   if auth.get("schema")!=AUTHORITY_SCHEMA or auth.get("cycle_id")!=cid or supplied!=sha_bytes(canon(auth)): errors.append("AUTHORITY_INVALID")
+   auth["receipt_sha256"]=supplied; objs["authority"]=auth
+   if not all(auth.get(k) is True for k in AUTHORITY_FLAGS): errors.append("AUTHORITY_FLAGS")
+  except Exception: errors.append("MISSING_AUTHORITY")
  if require_envelope and not (d/"completion_envelope.json").exists(): errors.append("MISSING_ENVELOPE")
  return (not errors),sorted(errors),objs

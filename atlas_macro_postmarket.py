@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 
 warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL.*")
 import requests
+from atlas_llm_invocation_ledger import record as _record_llm_invocation
 
 SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
@@ -462,6 +463,7 @@ def llm_narrative(ctx: dict) -> str | None:
         "Section 6 must always finish with a complete sentence ending in a period; never stop mid-sentence. Never use internal language such as rows, returned, JSON, API, source, field, variable, proxy counts, or scheduled count phrasing."
     )
     try:
+        _record_llm_invocation("macro_postmarket_openai", "atlas_macro_postmarket.llm_narrative", "HUMAN_REPORT_ONLY")
         r = requests.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
