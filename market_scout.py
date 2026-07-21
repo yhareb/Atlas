@@ -4,6 +4,7 @@ import requests
 import datetime
 import json
 import time
+import pathlib
 
 # Symbols the engine must never trade as stock picks
 ETF_BLOCKLIST = {
@@ -69,12 +70,43 @@ RS_MIN_SCORE = 1.5
 RS_SCAN_UNIVERSE = 100
 RS_TOP_N = 20
 REVERSE_SPLIT_LOOKBACK_DAYS = 30
-SPLIT_CACHE_PATH = "/tmp/atlas_split_cache.json"
-SPLIT_CACHE_TTL_SEC = 24 * 60 * 60
+ATLAS_RUNTIME_STATE_ROOT = pathlib.Path(os.environ.get(
+    "ATLAS_RUNTIME_STATE_ROOT", "/Users/yasser/Library/Application Support/Atlas"
+))
+SPLIT_CACHE_PATH = str(ATLAS_RUNTIME_STATE_ROOT / "provider_cache" / "reverse_split_cache.json")
+SPLIT_CACHE_TTL_SEC = 7 * 24 * 60 * 60
 _REVERSE_SPLIT_CACHE = {}
 _ETF_TYPE_CACHE = {}
 _REFERENCE_TICKER_CACHE = {}
 _LAST_DISCOVERY_BUCKETS = {}
+
+
+def last_discovery_buckets():
+    return {k:list(v) for k,v in _LAST_DISCOVERY_BUCKETS.items()}
+
+
+def _discovery_cache_path():
+    value=os.environ.get("ATLAS_DISCOVERY_CACHE_PATH")
+    return pathlib.Path(value) if value else None
+
+
+def _load_discovery_cache():
+    path=_discovery_cache_path()
+    if not path or os.environ.get("ATLAS_PROVIDER_WARMUP") == "1" or not path.is_file():
+        return None
+    try:
+        payload=json.loads(path.read_text())
+        generated=datetime.datetime.fromisoformat(str(payload["generated_at"]).replace("Z","+00:00"))
+        now=datetime.datetime.now(datetime.timezone.utc)
+        unsigned={k:v for k,v in payload.items() if k!="content_sha256"}
+        expected=__import__('hashlib').sha256(json.dumps(unsigned,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode()).hexdigest()
+        if payload.get("schema")!="atlas.provider_discovery_cache.v1" or payload.get("content_sha256")!=expected or now>generated+datetime.timedelta(seconds=int(payload.get("ttl_seconds") or 0)):
+            return None
+        global _LAST_DISCOVERY_BUCKETS
+        _LAST_DISCOVERY_BUCKETS={k:list(v) for k,v in (payload.get("buckets") or {}).items()}
+        return list(payload.get("tickers") or [])
+    except Exception:
+        return None
 
 
 try:
@@ -228,8 +260,10 @@ def _load_split_disk_cache():
 
 def _save_split_disk_cache(payload):
     try:
+        pathlib.Path(SPLIT_CACHE_PATH).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         tmp = f"{SPLIT_CACHE_PATH}.{os.getpid()}.tmp"
-        with open(tmp, "w") as f:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
             json.dump(payload, f, sort_keys=True)
         os.replace(tmp, SPLIT_CACHE_PATH)
     except Exception:
@@ -252,7 +286,7 @@ def _split_disk_cache_get(cache_key):
 def _split_disk_cache_set(cache_key, value):
     payload = _load_split_disk_cache()
     now = time.time()
-    # Opportunistic pruning keeps /tmp cache small.
+    # Opportunistic pruning enforces the governed seven-day cache retention.
     pruned = {}
     for key, row in payload.items():
         try:
@@ -500,6 +534,9 @@ def discover_earnings_calendar(limit=20):
 
 
 def discover_tickers():
+    cached=_load_discovery_cache()
+    if cached is not None:
+        return cached
     # Use Benzinga to find stocks with breaking news today
     benzinga_key = os.environ.get("BENZINGA_API_KEY")
     catalyst_order = []
