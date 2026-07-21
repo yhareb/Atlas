@@ -30,7 +30,7 @@ def attach_authority(envelope,manifest_path,incident_register_path,llm_ledger_pa
  envelope['envelope_sha256']=sha_bytes(canon(envelope)); return envelope
 
 def main():
- start=dt.datetime.now(dt.timezone.utc); scheduled=start.replace(second=(start.minute//10)*10,microsecond=0)
+ start=dt.datetime.now(dt.timezone.utc); scheduled=start.replace(minute=(start.minute//10)*10,second=0,microsecond=0)
  cid='intraday-'+scheduled.strftime('%Y%m%dT%H%M%SZ')+'-'+uuid.uuid4().hex[:12]
  env=os.environ.copy(); env['ATLAS_CYCLE_ID']=cid; env['ATLAS_CYCLE_SCHEDULED_ET']=scheduled.astimezone(ZoneInfo('America/New_York')).isoformat(); env['ATLAS_CYCLE_RECEIPT_ROOT']=str(ROOT)
  os.environ['ATLAS_CYCLE_ID']=cid; os.environ['ATLAS_CYCLE_RECEIPT_ROOT']=str(ROOT)

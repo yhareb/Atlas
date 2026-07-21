@@ -260,6 +260,14 @@ def load_build_validate_rebuild(manifest, unit):
     def rebuild(reason):
         if manifest.get('rebuild_queue'):
             request_rebuild(manifest['rebuild_queue'], [reason], {'unit': unit})
+        empty_path = build.get('empty_open_set_packet_path')
+        if empty_path:
+            try:
+                empty_packet, _ = _verify_file(empty_path)
+                if empty_packet.get('empty_open_set') is True and empty_packet.get('open_trade_lot_count') == 0:
+                    return {'status': 'IDEMPOTENT_NO_OP', 'packet_path': str(empty_path), 'packet': empty_packet}
+            except RuntimeError:
+                pass
         if all((build.get(x) for x in ('component_paths', 'normalized_inputs_path', 'packet_store', 'lease_path'))):
             return build_current_packets(build['component_paths'], build['normalized_inputs_path'], build['packet_store'], build['lease_path'])
         return {'status': 'BLOCKED'}

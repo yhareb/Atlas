@@ -88,6 +88,12 @@ def select_leaf(unit: str, legacy_thunk: Callable, *, reference: str, projector:
     if selected == 'legacy':
         return legacy_thunk()
     (packet, receipt) = load_build_validate_rebuild(unit)
+    if unit == 'INTRADAY_HOLDINGS' and packet.get('empty_open_set') is True:
+        try:
+            import atlas_cycle_receipts as _cycle_receipts
+            _cycle_receipts.record_holdings({'packet_version': 'canonical_empty_open_set.v1', 'holdings': []}, [])
+        except Exception:
+            pass
     projection = project(unit, packet, receipt)
     if selected == 'shadow':
         value = legacy_thunk()
