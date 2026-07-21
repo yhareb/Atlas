@@ -9,6 +9,7 @@
         <key>ATLAS_INTRADAY_MAX_RUNTIME_SECONDS</key><string>480</string>
         <key>ATLAS_DISCOVERY_CACHE_PATH</key><string>/Users/yasser/Library/Application Support/Atlas/provider_cache/provider_discovery.json</string>
         <key>ATLAS_HOLDING_STATE_AUTHORITY</key><string>legacy</string>
+        <key>ATLAS_OFFHOURS_EVIDENCE_MODE</key><string>1</string>
     </dict>
     <key>ProgramArguments</key>
     <array>

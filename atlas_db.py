@@ -30,6 +30,18 @@ def _audit_db_event(table_name, operation, row_id=None, ticker=None, source_func
         pass
 
 
+def _post_commit_canonical_refresh(transition, trade_id=None, ticker=None):
+    """Post-commit only; governed refresh failure is explicit and fail-closed."""
+    if os.environ.get("ATLAS_CANONICAL_POST_COMMIT_REFRESH") != "1":
+        return None
+    from atlas_holding_state_truth_maintenance import governed_refresh_once
+    return governed_refresh_once(
+        reason="POST_COMMIT_" + transition,
+        run_id="post-commit-%s-%s" % (transition.lower(), trade_id or "na"),
+        trigger="REGISTRATION_EVENT",
+        context={"transition": transition, "trade_id": trade_id, "ticker": ticker, "source": "atlas_db"},
+    )
+
 
 def _fetch_trade_rows(ids):
     """Read specific trade lots by id as dicts."""
@@ -740,6 +752,7 @@ def confirm_trade_fill(trade_id, broker_qty, broker_price, broker_fees, broker_r
              debit, _bk_cash_ledger_id, broker_ref=broker_ref,
              stop_loss=stop_loss, target_price=target_price)
     _audit_db_event("trades", "UPDATE", trade_id, ticker, "confirm_trade_fill")
+    _post_commit_canonical_refresh("OPEN", trade_id, ticker)
     return _fetch_trade_rows([trade_id])[0]
 
 
@@ -866,6 +879,7 @@ def close_trade(ticker, exit_price, quantity=None, fees=0.0, exit_at=None):
     for _affected_id in set(affected_ids) - set(closed_ids):
         _audit_db_event("trades", "UPDATE", _affected_id, ticker, "close_trade")
 
+    _post_commit_canonical_refresh("CLOSE", closed_ids[-1] if closed_ids else None, ticker)
     return closed_ids
 
 
@@ -924,6 +938,7 @@ def close_trade_broker_confirmed(ticker, trade_id, exit_price, quantity, fees, b
     except Exception:
         con.rollback(); con.close(); raise
     con.close()
+    _post_commit_canonical_refresh("CLOSE", closed_id, ticker)
     return {"parent":_fetch_trade_rows([trade_id])[0],"closed":_fetch_trade_rows([closed_id])[0],"partial":partial,"event_id":ev,"remaining_quantity":str(remaining)}
 
 

@@ -50,13 +50,18 @@ ENTRY_ADAPTER = {'pre_market_report.generate_pre_market_report': 'PRE_MARKET_TYP
 def load_build_validate_rebuild(unit: str):
     if unit not in UNITS:
         raise ValueError('UNKNOWN_ACTIVATION_UNIT')
-    if os.environ.get('ATLAS_EXECUTION_CONTEXT','LIVE_SCHEDULER')=='LIVE_SCHEDULER':
-        try:
-            from atlas_holding_state_truth_maintenance import ensure_current_manifest
-            ensure_current_manifest(reason='CONSUMER_'+unit)
-        except Exception:
-            pass
-    manifest = verify_runtime_manifest(os.environ[MANIFEST_ENV])
+    configured=os.environ.get(MANIFEST_ENV)
+    try:
+        manifest=verify_runtime_manifest(configured)
+        key=manifest.get('default_packet_key')
+        if not key or key not in (manifest.get('packets') or {}): raise RuntimeError('CANONICAL_POINTER_BROKEN')
+    except Exception:
+        from atlas_holding_state_truth_maintenance import governed_refresh_once
+        result=governed_refresh_once(reason='BROKEN_RUNTIME_POINTER_CONSUMER_'+unit,trigger='BROKEN_RUNTIME_POINTER')
+        configured=result['manifest_path']; os.environ[MANIFEST_ENV]=configured
+        manifest=verify_runtime_manifest(configured)
+        key=manifest.get('default_packet_key')
+        if not key or key not in (manifest.get('packets') or {}): raise RuntimeError('CANONICAL_POINTER_REPAIRED_MANIFEST_INVALID')
     return coordinator_load(manifest, unit)
 
 def _v3_improved_project(unit, packet, receipt):
@@ -88,6 +93,12 @@ def select_leaf(unit: str, legacy_thunk: Callable, *, reference: str, projector:
     if selected == 'legacy':
         return legacy_thunk()
     (packet, receipt) = load_build_validate_rebuild(unit)
+    if unit == 'INTRADAY_HOLDINGS' and packet.get('empty_open_set') is True:
+        try:
+            import atlas_cycle_receipts as _cycle_receipts
+            _cycle_receipts.record_holdings({'packet_version': 'canonical_empty_open_set.v1', 'holdings': []}, [])
+        except Exception:
+            pass
     projection = project(unit, packet, receipt)
     if selected == 'shadow':
         value = legacy_thunk()
