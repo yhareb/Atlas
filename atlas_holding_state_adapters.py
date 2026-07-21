@@ -45,6 +45,12 @@ def render_section(unit:str,packet:Mapping[str,Any],receipt:Mapping[str,Any])->S
     elif state=='DATA_INCOMPLETE':
         unavailable=tuple(f"{role}: UNAVAILABLE — {', '.join(reasons)}" for role,ok in sorted((receipt.get('price_role_usability') or {}).items()) if not ok)
         lines=(f'{ticker} — DATA INCOMPLETE',)+unavailable
+    elif packet.get('empty_open_set') is True:
+        axes=packet.get('axes') or {}
+        lines=('NO OPEN HOLDINGS — EMPTY OPEN SET',
+               f"Observed: {(axes.get('observed_market_risk_state') or {}).get('state')}",
+               f"Advisory: {(axes.get('advisory_action') or {}).get('action')}",
+               f"Broker: {(axes.get('broker_ledger_lifecycle') or {}).get('state')}")
     else:
         axes=packet.get('axes') or {}; levels=packet.get('canonical_levels') or {}
         lines=(f'{ticker} — CANONICAL HOLDING STATE',

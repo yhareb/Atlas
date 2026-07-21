@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.atlas.canonical-hygiene-producer</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/yasser/scripts/atlas_holding_state_truth_maintenance.py</string>
+    <string>--refresh</string>
+    <string>--reason</string>
+    <string>SCHEDULED_CANONICAL_HYGIENE</string>
+    <string>--execution-context</string>
+    <string>LIVE_SCHEDULER</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ATLAS_DB</key>
+    <string>/Users/yasser/scripts/atlas.db</string>
+    <key>ATLAS_HOLDING_STATE_BASE</key>
+    <string>/Users/yasser/Library/Application Support/Atlas/holding_state_v3</string>
+    <key>ATLAS_EXECUTION_CONTEXT</key>
+    <string>LIVE_SCHEDULER</string>
+    <key>PYTHONPATH</key>
+    <string>/Users/yasser/scripts</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/yasser/Library/Logs/Atlas/canonical-hygiene-producer.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/yasser/Library/Logs/Atlas/canonical-hygiene-producer.err.log</string>
+</dict>
+</plist>

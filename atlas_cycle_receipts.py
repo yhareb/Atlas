@@ -61,23 +61,27 @@ def record_holdings(packet,positions):
  for h in packet.get("holdings") or []:
   pa=h.get("authoritative_price") or {}; broker=h.get("broker_confirmation_evidence") or {}
   rows.append({"ticker":h.get("ticker"),"trade_id":h.get("stop_event_trade_id") or next((p.get("id") or p.get("trade_id") for p in positions if str(p.get("ticker") or "").upper()==str(h.get("ticker") or "").upper()),None),"price":h.get("current_price"),"timestamp":h.get("price_source_timestamp"),"session":h.get("session"),"provider":pa.get("provider"),"source":h.get("current_price_source"),"event_id":h.get("stop_event_id"),"actionable":bool(pa.get("valuation_included")),"incomplete":h.get("final_action")=="DATA INCOMPLETE","entry":h.get("entry"),"stop":h.get("canonical_stop"),"target":h.get("canonical_target"),"broker_confirmation":{"status":h.get("broker_status"),"event_id":broker.get("event_id"),"source":broker.get("source")},"action":h.get("final_action")})
+ empty_open_set=not rows and not (positions or [])
  packet_sha=sha_bytes(canon(packet)); rows_sha=sha_bytes(canon(rows))
- record("holdings_price",{"packet_version":packet.get("packet_version"),"packet_sha256":packet_sha,"header_packet_sha256":packet_sha,"detail_packet_sha256":packet_sha,"open_count":len(rows),"rows_sha256":rows_sha,"rows":rows})
+ record("holdings_price",{"packet_version":packet.get("packet_version"),"packet_sha256":packet_sha,"header_packet_sha256":packet_sha,"detail_packet_sha256":packet_sha,"open_count":len(rows),"empty_open_set":empty_open_set,"rows_sha256":rows_sha,"rows":rows})
  hp=packet.get("holdings_packet") or {}; src=hp.get("source"); sidecar=os.environ.get("ATLAS_HOLDINGS_REUNDERWRITE_SIDECAR","/Users/yasser/Library/Application Support/Atlas/holdings_reunderwrite/db/holdings_reunderwrite.sqlite")
  integrity=None
  try:
   c=sqlite3.connect(f"file:{sidecar}?mode=ro",uri=True); integrity=c.execute("pragma integrity_check").fetchone()[0]; c.close()
  except Exception: integrity="UNAVAILABLE"
- record("holdings_health",{"source_version":"holdings_reunderwrite.v1","packet_id":hp.get("input_digest"),"packet_sha256":sha_file(src) if src and Path(src).is_file() else None,"run_date":hp.get("run_date"),"freshness":hp.get("freshness"),"action":"LOAD_EXISTING_ONLY","source":src,"sidecar_path":sidecar,"sidecar_integrity":integrity,"duplicate":False,"missing":hp.get("status")=="MISSING"})
+ record("holdings_health",{"source_version":"holdings_reunderwrite.v1","packet_id":hp.get("input_digest"),"packet_sha256":sha_file(src) if src and Path(src).is_file() else (packet_sha if empty_open_set else None),"run_date":hp.get("run_date"),"freshness":hp.get("freshness"),"action":"EMPTY_OPEN_SET" if empty_open_set else "LOAD_EXISTING_ONLY","source":src,"sidecar_path":sidecar,"sidecar_integrity":"NOT_APPLICABLE" if empty_open_set else integrity,"duplicate":False,"missing":False if empty_open_set else hp.get("status")=="MISSING","empty_open_set":empty_open_set,"open_count":len(rows)})
 
 def record_perme(summary):
- r=(summary or {}).get("macro_context_v1_receipt") or {}; path=os.environ.get("ATLAS_MACRO_CONTEXT_V1_PATH"); raw={}; artifact={}
+ r=(summary or {}).get("macro_context_v1_receipt") or {}; receipt_path=os.environ.get("ATLAS_PERME_CYCLE_SNAPSHOT_RECEIPT"); snapshot={}; raw={}
  try:
-  raw=json.loads(Path(path).read_text()) if path else {}; artifact=raw.get("artifact") or {}
- except Exception: pass
+  snapshot=json.loads(Path(receipt_path).read_text()) if receipt_path else {}
+  unsigned=dict(snapshot); supplied=unsigned.pop("snapshot_sha256",None)
+  if supplied!=sha_bytes(canon(unsigned)): raise ValueError("PERME_SNAPSHOT_RECEIPT_HASH")
+  raw=json.loads(Path(snapshot["envelope_path"]).read_text())
+ except Exception:
+  snapshot={}; raw={}
  consumed=[x for x in (r.get("consumed_field_paths") or []) if x=="$.macro_regime" or x=="$.event_risks" or x.endswith(".event_id")]
- envelope_sha=sha_file(path) if path and Path(path).is_file() else None
- record("perme_strict",{"envelope_path":path,"envelope_sha256":envelope_sha,"consumer_input_sha256":r.get("input_sha256"),"payload_path":artifact.get("path"),"payload_sha256":artifact.get("sha256"),"status":r.get("status"),"accepted":r.get("status")=="ACCEPTED","rejected":r.get("status")!="ACCEPTED","consumed_paths":consumed,"generated_at":raw.get("generated_at"),"ttl_minutes":(raw.get("freshness") or {}).get("ttl_minutes"),"schema":raw.get("schema")})
+ record("perme_strict",{"snapshot_receipt_path":receipt_path,"snapshot_sha256":snapshot.get("snapshot_sha256"),"envelope_path":snapshot.get("envelope_path"),"envelope_sha256":snapshot.get("envelope_sha256"),"consumer_input_sha256":r.get("input_sha256"),"payload_path":snapshot.get("payload_path"),"payload_sha256":snapshot.get("payload_sha256"),"status":r.get("status"),"accepted":r.get("status")=="ACCEPTED","rejected":r.get("status")!="ACCEPTED","consumed_paths":consumed,"generated_at":snapshot.get("generated_at"),"ttl_minutes":snapshot.get("ttl_minutes"),"schema":raw.get("schema")})
 
 def record_accounting(summary):
  d=cycle_dir(); events=[]
@@ -152,8 +156,8 @@ def emit_authority_receipt(source_envelope_sha256,manifest_path,incident_registe
  hp=(receipts.get("holdings_price") or {}).get("payload") or {}; hh=(receipts.get("holdings_health") or {}).get("payload") or {}; ps=(receipts.get("perme_strict") or {}).get("payload") or {}; ca=(receipts.get("candidate_accounting") or {}).get("payload") or {}
  manifest=_manifest_attestation(manifest_path); incidents=_incident_attestation(incident_register_path); llm=_llm_window_attestation(llm_ledger_path,start_utc,end_utc,cid,manifest)
  flags={
-  "holdings_price_healthy":bool(receipts.get("holdings_price") and hp.get("packet_sha256") and hp.get("packet_sha256")==hp.get("header_packet_sha256")==hp.get("detail_packet_sha256")),
-  "holdings_reevaluation_healthy":bool(receipts.get("holdings_health") and hh.get("missing") is False and hh.get("duplicate") is False and hh.get("sidecar_integrity")=="ok" and hh.get("packet_sha256")),
+  "holdings_price_healthy":bool(receipts.get("holdings_price") and hp.get("packet_sha256") and hp.get("packet_sha256")==hp.get("header_packet_sha256")==hp.get("detail_packet_sha256") and (not hp.get("empty_open_set") or (hp.get("open_count")==0 and hp.get("rows")==[]))),
+  "holdings_reevaluation_healthy":bool(receipts.get("holdings_health") and hh.get("missing") is False and hh.get("duplicate") is False and hh.get("packet_sha256") and ((hh.get("empty_open_set") is True and hh.get("open_count")==0 and hh.get("sidecar_integrity")=="NOT_APPLICABLE") or hh.get("sidecar_integrity")=="ok")),
   "perme_strict":bool(receipts.get("perme_strict") and ps.get("status")=="ACCEPTED" and ps.get("accepted") is True and ps.get("rejected") is False and {"$.macro_regime","$.event_risks"}.issubset(set(ps.get("consumed_paths") or []))),
   "ca_active_complete":bool(receipts.get("candidate_accounting") and ca.get("equation_holds") is True and ca.get("ca_receipt_count")==len(list(d.glob("corporate_action.*.json"))) and ca.get("admission_receipt_count")<=ca.get("ca_receipt_count")),
   "tfe_sole_authority":bool(manifest["policy_valid"] and manifest["active_code_shas_match"] and manifest["inventory_match"] and manifest["inventory_complete"]),
@@ -182,8 +186,15 @@ def verify_cycle(cid,require_envelope=False,require_authority=False):
  if hp.get("packet_sha256")!=hp.get("header_packet_sha256") or hp.get("packet_sha256")!=hp.get("detail_packet_sha256"): errors.append("HOLDINGS_PACKET_LINK")
  perme=(objs.get("perme_strict") or {}).get("payload") or {}
  if perme.get("status")!="ACCEPTED" or perme.get("accepted") is not True or perme.get("rejected") is not False: errors.append("PERME_NOT_ACCEPTED")
+ srp=perme.get("snapshot_receipt_path"); snapshot={}
+ try:
+  snapshot=json.loads(Path(srp).read_text()); supplied=snapshot.pop("snapshot_sha256")
+  if supplied!=sha_bytes(canon(snapshot)): raise ValueError("SNAPSHOT_HASH")
+  snapshot["snapshot_sha256"]=supplied
+ except Exception: errors.append("PERME_SNAPSHOT_INVALID")
  ep=perme.get("envelope_path"); envelope=None
- if not ep or not Path(ep).is_file() or sha_file(ep)!=perme.get("envelope_sha256") or perme.get("consumer_input_sha256")!=perme.get("envelope_sha256"):
+ if (not ep or ep!=snapshot.get("envelope_path") or not Path(ep).is_file()
+     or sha_file(ep)!=perme.get("envelope_sha256") or perme.get("consumer_input_sha256")!=perme.get("envelope_sha256")):
   errors.append("PERME_ENVELOPE_SHA_LINK")
  else:
   try:
@@ -194,7 +205,7 @@ def verify_cycle(cid,require_envelope=False,require_authority=False):
   except Exception: errors.append("PERME_ENVELOPE_INVALID")
  artifact=(envelope or {}).get("artifact") or {}
  pp=perme.get("payload_path")
- if (not pp or not Path(pp).is_file() or sha_file(pp)!=perme.get("payload_sha256")
+ if (not pp or pp!=snapshot.get("payload_path") or not Path(pp).is_file() or sha_file(pp)!=perme.get("payload_sha256")
      or artifact.get("path")!=pp or artifact.get("sha256")!=perme.get("payload_sha256")):
   errors.append("PERME_PAYLOAD_SHA_LINK")
  freshness=(envelope or {}).get("freshness") or {}
