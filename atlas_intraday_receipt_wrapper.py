@@ -3,9 +3,31 @@
 import datetime as dt, hashlib, json, os, subprocess, sys, uuid
 from pathlib import Path
 from zoneinfo import ZoneInfo
-SCRIPTS=Path('/Users/yasser/scripts'); ROOT=Path('/Users/yasser/.hermes/profiles/atlasops/acceptance/machine_cycles')
+SCRIPTS=Path(os.environ.get('ATLAS_SCRIPTS_DIR') or '/Users/yasser/scripts'); ROOT=Path(os.environ.get('ATLAS_CYCLE_RECEIPT_ROOT') or '/Users/yasser/.hermes/profiles/atlasops/acceptance/machine_cycles')
 sys.path.insert(0,str(SCRIPTS))
-from atlas_cycle_receipts import atomic_json,canon,sha_bytes,sha_file,db_health,verify_cycle
+from atlas_cycle_receipts import atomic_json,canon,sha_bytes,sha_file,db_health,verify_cycle,emit_authority_receipt
+DEFAULT_MANIFEST=Path('/Users/yasser/scripts/config/tfe_authority_manifest.json')
+DEFAULT_INCIDENT_REGISTER=Path('/Users/yasser/scripts/config/incident_register.jsonl')
+DEFAULT_LLM_LEDGER=Path('/Users/yasser/scripts/config/llm_invocations.jsonl')
+
+def governed_paths():
+ base=Path(os.environ.get('ATLAS_AUTHORITY_CONFIG_DIR') or DEFAULT_MANIFEST.parent)
+ return (Path(os.environ.get('ATLAS_TFE_AUTHORITY_MANIFEST') or base/'tfe_authority_manifest.json'),Path(os.environ.get('ATLAS_INCIDENT_REGISTER') or base/'incident_register.jsonl'),Path(os.environ.get('ATLAS_LLM_INVOCATION_LEDGER') or base/'llm_invocations.jsonl'))
+
+def attach_authority(envelope,manifest_path,incident_register_path,llm_ledger_path,cid):
+ missing=[name for name,path in (("TFE_AUTHORITY_MANIFEST",manifest_path),("INCIDENT_REGISTER",incident_register_path),("LLM_INVOCATION_LEDGER",llm_ledger_path)) if not Path(path).is_file()]
+ envelope['authority_config_receipt']={'status':'PASS' if not missing else 'DATA_INCOMPLETE','missing':missing,'manifest_path':str(manifest_path),'incident_register_path':str(incident_register_path),'llm_invocation_ledger_path':str(llm_ledger_path)}
+ if missing: envelope['exact_failures'].extend('AUTHORITY_CONFIG_MISSING:'+x for x in missing)
+ # D2: finalize authority-derived source fields before binding the source envelope.
+ authority=emit_authority_receipt('',manifest_path,incident_register_path,llm_ledger_path,envelope['start_utc'],envelope['end_utc'],cid)
+ if not all(authority.get(k) is True for k in ('holdings_price_healthy','holdings_reevaluation_healthy','perme_strict','ca_active_complete','tfe_sole_authority','llm_trading_authority_false','no_p0_p1')): envelope['exact_failures'].append('AUTHORITY_FLAGS'); envelope['classification']='FAIL'
+ source_envelope_sha=sha_bytes(canon(envelope))
+ authority['source_envelope_sha256']=source_envelope_sha
+ unsigned=dict(authority); unsigned.pop('receipt_sha256',None)
+ authority['receipt_sha256']=sha_bytes(canon(unsigned))
+ atomic_json(ROOT/cid/'authority.json',authority)
+ envelope['authority_receipt']=authority; envelope['receipt_hashes']['authority']=authority['receipt_sha256']
+ envelope['envelope_sha256']=sha_bytes(canon(envelope)); return envelope
 
 def main():
  start=dt.datetime.now(dt.timezone.utc); scheduled=start.replace(second=(start.minute//10)*10,microsecond=0)
@@ -33,7 +55,7 @@ def main():
  ok,errors,objs=verify_cycle(cid)
  receipt_hashes={k:v.get('receipt_sha256') for k,v in objs.items()}
  envelope={'schema':'atlas.machine_completion_envelope.v1','cycle_id':cid,'scheduled_et':env['ATLAS_CYCLE_SCHEDULED_ET'],'pid':os.getpid(),'ppid':os.getppid(),'child_pid':child_pid,'start_utc':start.isoformat(),'end_utc':end.isoformat(),'exit_code':exit_code,'source':completion['source'],'source_sha256':completion['source_sha256'],'interpreter':completion['interpreter'],'report':report,'delivery':delivery,'receipt_hashes':receipt_hashes,'db':completion['db'],'lock':completion['lock'],'side_effects':{'observer_local_files_only':True},'classification':'PASS' if ok else 'FAIL','exact_failures':errors}
- envelope['envelope_sha256']=sha_bytes(canon(envelope)); atomic_json(d/'completion_envelope.json',envelope)
+ manifest,incidents,llm_ledger=governed_paths(); envelope=attach_authority(envelope,manifest,incidents,llm_ledger,cid); atomic_json(d/'completion_envelope.json',envelope)
  print('ATLAS_CYCLE_ENVELOPE='+json.dumps({'cycle_id':cid,'classification':envelope['classification'],'exact_failures':errors},sort_keys=True),flush=True)
  return exit_code
 if __name__=='__main__': raise SystemExit(main())
