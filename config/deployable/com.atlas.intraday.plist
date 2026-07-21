@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.atlas.intraday</string>
+    <key>EnvironmentVariables</key><dict>
+        <key>ATLAS_MACRO_CONTEXT_V1_PATH</key><string>/Users/yasser/atlas_inbox/perme_strict/current/perme_atlas_context_v1.json</string>
+        <key>ATLAS_INTRADAY_MAX_RUNTIME_SECONDS</key><string>480</string>
+        <key>ATLAS_DISCOVERY_CACHE_PATH</key><string>/Users/yasser/Library/Application Support/Atlas/provider_cache/provider_discovery.json</string>
+        <key>ATLAS_HOLDING_STATE_AUTHORITY</key><string>legacy</string>
+    </dict>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/yasser/scripts/atlas_intraday_receipt_wrapper.py</string>
+    </array>
+    <key>StandardOutPath</key>
+    <string>/Users/yasser/scripts/atlas_intraday.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/yasser/scripts/atlas_intraday.err.log</string>
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Minute</key><integer>10</integer></dict>
+        <dict><key>Minute</key><integer>20</integer></dict>
+        <dict><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Minute</key><integer>40</integer></dict>
+        <dict><key>Minute</key><integer>50</integer></dict>
+    </array>
+</dict>
+</plist>
