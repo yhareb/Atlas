@@ -4,6 +4,7 @@ import requests
 import datetime
 import json
 import time
+import pathlib
 
 # Symbols the engine must never trade as stock picks
 ETF_BLOCKLIST = {
@@ -75,6 +76,34 @@ _REVERSE_SPLIT_CACHE = {}
 _ETF_TYPE_CACHE = {}
 _REFERENCE_TICKER_CACHE = {}
 _LAST_DISCOVERY_BUCKETS = {}
+
+
+def last_discovery_buckets():
+    return {k:list(v) for k,v in _LAST_DISCOVERY_BUCKETS.items()}
+
+
+def _discovery_cache_path():
+    value=os.environ.get("ATLAS_DISCOVERY_CACHE_PATH")
+    return pathlib.Path(value) if value else None
+
+
+def _load_discovery_cache():
+    path=_discovery_cache_path()
+    if not path or os.environ.get("ATLAS_PROVIDER_WARMUP") == "1" or not path.is_file():
+        return None
+    try:
+        payload=json.loads(path.read_text())
+        generated=datetime.datetime.fromisoformat(str(payload["generated_at"]).replace("Z","+00:00"))
+        now=datetime.datetime.now(datetime.timezone.utc)
+        unsigned={k:v for k,v in payload.items() if k!="content_sha256"}
+        expected=__import__('hashlib').sha256(json.dumps(unsigned,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode()).hexdigest()
+        if payload.get("schema")!="atlas.provider_discovery_cache.v1" or payload.get("content_sha256")!=expected or now>generated+datetime.timedelta(seconds=int(payload.get("ttl_seconds") or 0)):
+            return None
+        global _LAST_DISCOVERY_BUCKETS
+        _LAST_DISCOVERY_BUCKETS={k:list(v) for k,v in (payload.get("buckets") or {}).items()}
+        return list(payload.get("tickers") or [])
+    except Exception:
+        return None
 
 
 try:
@@ -500,6 +529,9 @@ def discover_earnings_calendar(limit=20):
 
 
 def discover_tickers():
+    cached=_load_discovery_cache()
+    if cached is not None:
+        return cached
     # Use Benzinga to find stocks with breaking news today
     benzinga_key = os.environ.get("BENZINGA_API_KEY")
     catalyst_order = []
