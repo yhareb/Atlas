@@ -1,0 +1,230 @@
+{
+  "activation": {
+    "activation_utc": "2026-07-19T21:02:16.849240+00:00",
+    "epoch_sha256": "fe165b362d326d151a21aed6b2ff1faf2be8bb41bbf823b0ccc37ff5a05f727a",
+    "first_genuine_cycle_only": true,
+    "observation_package_receipt": "/tmp/atlas_perme_rewire_20260718T210239Z/output/order36/deployed_sha_receipt.json",
+    "observation_package_receipt_sha256": "ca0ff9c917a51646ff12aaad8494e93ca573a334ddda949ab838adb9fc56aa81",
+    "reason": "POST_OBSERVATION_PACKAGE_ACTIVATION_RESET",
+    "schema": "atlas.machine_cycle_activation.v1"
+  },
+  "activation_sha256": "5486652b83723f1797cefa77854b4a644a5704077a7dda5724aa2dacddfa4258",
+  "archive": "/Users/yasser/scripts/archive/order62_20260720T220339Z",
+  "configs": {
+    "incident_register.jsonl": {
+      "backup": "/Users/yasser/scripts/archive/order62_20260720T220339Z/config/incident_register.jsonl.ABSENT_pre_order62",
+      "state": "absent"
+    },
+    "llm_boundary_inventory.json": {
+      "backup": "/Users/yasser/scripts/archive/order62_20260720T220339Z/config/llm_boundary_inventory.json.ABSENT_pre_order62",
+      "state": "absent"
+    },
+    "llm_invocations.jsonl": {
+      "backup": "/Users/yasser/scripts/archive/order62_20260720T220339Z/config/llm_invocations.jsonl.ABSENT_pre_order62",
+      "state": "absent"
+    },
+    "tfe_authority_manifest.json": {
+      "backup": "/Users/yasser/scripts/archive/order62_20260720T220339Z/config/tfe_authority_manifest.json.ABSENT_pre_order62",
+      "state": "absent"
+    }
+  },
+  "db_backups": {
+    "final_acceptance.sqlite3": "b95f8296e46530308744ccfb62fd7a9e753d82a7df4f792bc78aa8f2fbfa4c9d",
+    "full_session_acceptance.sqlite3": "af322716f3d070b0b7307aa05ff71321b96d7554661dd80050827120c2402760"
+  },
+  "final_db": {
+    "counts": {
+      "cycle_validations_v2": 53,
+      "cycles": 13,
+      "machine_cycle_validations_v3": 456
+    },
+    "foreign_key_errors": [],
+    "integrity": "ok",
+    "tables": [
+      "cycle_validations_v2",
+      "cycles",
+      "machine_cycle_validations_v3"
+    ],
+    "triggers": [
+      {
+        "name": "cycle_validations_v2_no_delete",
+        "sql": "CREATE TRIGGER cycle_validations_v2_no_delete BEFORE DELETE ON cycle_validations_v2\n        BEGIN SELECT RAISE(ABORT,'append-only ledger: DELETE forbidden'); END",
+        "tbl_name": "cycle_validations_v2"
+      },
+      {
+        "name": "cycle_validations_v2_no_update",
+        "sql": "CREATE TRIGGER cycle_validations_v2_no_update BEFORE UPDATE ON cycle_validations_v2\n        BEGIN SELECT RAISE(ABORT,'append-only ledger: UPDATE forbidden'); END",
+        "tbl_name": "cycle_validations_v2"
+      },
+      {
+        "name": "cycles_no_delete",
+        "sql": "CREATE TRIGGER cycles_no_delete BEFORE DELETE ON cycles\n        BEGIN SELECT RAISE(ABORT,'append-only ledger: DELETE forbidden'); END",
+        "tbl_name": "cycles"
+      },
+      {
+        "name": "cycles_no_update",
+        "sql": "CREATE TRIGGER cycles_no_update BEFORE UPDATE ON cycles\n        BEGIN SELECT RAISE(ABORT,'append-only ledger: UPDATE forbidden'); END",
+        "tbl_name": "cycles"
+      },
+      {
+        "name": "machine_cycle_validations_v3_no_delete",
+        "sql": "CREATE TRIGGER machine_cycle_validations_v3_no_delete BEFORE DELETE ON machine_cycle_validations_v3\n        BEGIN SELECT RAISE(ABORT,'append-only ledger: DELETE forbidden'); END",
+        "tbl_name": "machine_cycle_validations_v3"
+      },
+      {
+        "name": "machine_cycle_validations_v3_no_update",
+        "sql": "CREATE TRIGGER machine_cycle_validations_v3_no_update BEFORE UPDATE ON machine_cycle_validations_v3\n        BEGIN SELECT RAISE(ABORT,'append-only ledger: UPDATE forbidden'); END",
+        "tbl_name": "machine_cycle_validations_v3"
+      }
+    ]
+  },
+  "first3": [
+    {
+      "activation_utc": "2026-07-19T21:02:16.849240+00:00",
+      "classification": "FAIL",
+      "completed_utc": "2026-07-19T21:10:05.600940+00:00",
+      "cycle_id": "intraday-20260719T211010Z-8a917e9a622c",
+      "envelope_path": "/Users/yasser/.hermes/profiles/atlasops/acceptance/machine_cycles/intraday-20260719T211010Z-8a917e9a622c/completion_envelope.json",
+      "envelope_sha256": "c03d860ae1f2349299b18fe4eeb3361d521238976e6853bf64a21d9c9b89fb59",
+      "evidence_json": "{\"child_pid\": 60117, \"classification\": \"FAIL\", \"cycle_id\": \"intraday-20260719T211010Z-8a917e9a622c\", \"db\": {\"fk_errors\": 0, \"integrity\": \"ok\", \"sha256\": \"2118816573bebc2e983a6ed0deeb7313fb4d774c92c9b0ff44f5779f03845c03\"}, \"delivery\": {\"sha256\": null, \"success\": false}, \"end_utc\": \"2026-07-19T21:10:05.600940+00:00\", \"envelope_sha256\": \"8931cc0d75880302077725488f41ebf9b4c00d47eb75c72aab08624f0e51da44\", \"exact_failures\": [\"ACCOUNTING_EQUATION\", \"CA_COUNT\", \"MISSING_CANDIDATE_ACCOUNTING\", \"MISSING_HOLDINGS_HEALTH\", \"MISSING_HOLDINGS_PRICE\", \"MISSING_PERME_STRICT\", \"PERME_ENVELOPE_SHA_LINK\", \"PERME_FRESHNESS_INVALID\", \"PERME_NOT_ACCEPTED\", \"PERME_PAYLOAD_SHA_LINK\", \"PERME_UNCONSUMED\"], \"exit_code\": 0, \"interpreter\": \"/usr/bin/python3\", \"lock\": {\"path\": \"/tmp/atlas_intraday.lock\", \"present_after_child\": false}, \"pid\": 60116, \"ppid\": 1, \"receipt_hashes\": {\"child_completion\": \"5ee43e5c7a38c622db16eb731f16cad443e40552249323d113f9383d5fcf219e\"}, \"report\": {\"complete\": false, \"sha256\": null}, \"scheduled_et\": \"2026-07-19T17:10:10-04:00\", \"schema\": \"atlas.machine_completion_envelope.v1\", \"side_effects\": {\"observer_local_files_only\": true}, \"source\": \"/Users/yasser/scripts/atlas_intraday.py\", \"source_sha256\": \"c09001df354402e2a9b007fdf81d82da9b71a7ab02bcf8b6b22316d10a82f500\", \"start_utc\": \"2026-07-19T21:10:05.179052+00:00\"}",
+      "exact_reason": "EXACT_FAIL:ACCOUNTING_EQUATION,CA_COUNT,MISSING_CANDIDATE_ACCOUNTING,MISSING_HOLDINGS_HEALTH,MISSING_HOLDINGS_PRICE,MISSING_PERME_STRICT,PERME_ENVELOPE_SHA_LINK,PERME_FRESHNESS_INVALID,PERME_NOT_ACCEPTED,PERME_PAYLOAD_SHA_LINK,PERME_UNCONSUMED",
+      "inserted_utc": "2026-07-19T21:10:30.634209+00:00",
+      "seconds_to_insert": 25.033269
+    },
+    {
+      "activation_utc": "2026-07-19T21:02:16.849240+00:00",
+      "classification": "FAIL",
+      "completed_utc": "2026-07-19T21:20:01.057629+00:00",
+      "cycle_id": "intraday-20260719T212020Z-62f118638da1",
+      "envelope_path": "/Users/yasser/.hermes/profiles/atlasops/acceptance/machine_cycles/intraday-20260719T212020Z-62f118638da1/completion_envelope.json",
+      "envelope_sha256": "d8b0f14a0f8b7370235f62384446fbaa98cf019a6b2575eae6cc7cef1384b079",
+      "evidence_json": "{\"child_pid\": 60442, \"classification\": \"FAIL\", \"cycle_id\": \"intraday-20260719T212020Z-62f118638da1\", \"db\": {\"fk_errors\": 0, \"integrity\": \"ok\", \"sha256\": \"2118816573bebc2e983a6ed0deeb7313fb4d774c92c9b0ff44f5779f03845c03\"}, \"delivery\": {\"sha256\": null, \"success\": false}, \"end_utc\": \"2026-07-19T21:20:01.057629+00:00\", \"envelope_sha256\": \"23297dc860e86856300c799aecafc4ae52e1598f76039bde5c56691089a05d5e\", \"exact_failures\": [\"ACCOUNTING_EQUATION\", \"CA_COUNT\", \"MISSING_CANDIDATE_ACCOUNTING\", \"MISSING_HOLDINGS_HEALTH\", \"MISSING_HOLDINGS_PRICE\", \"MISSING_PERME_STRICT\", \"PERME_ENVELOPE_SHA_LINK\", \"PERME_FRESHNESS_INVALID\", \"PERME_NOT_ACCEPTED\", \"PERME_PAYLOAD_SHA_LINK\", \"PERME_UNCONSUMED\"], \"exit_code\": 0, \"interpreter\": \"/usr/bin/python3\", \"lock\": {\"path\": \"/tmp/atlas_intraday.lock\", \"present_after_child\": false}, \"pid\": 60441, \"ppid\": 1, \"receipt_hashes\": {\"child_completion\": \"e81aca03acb8005833f0907a863fa992042ac436c61a3305dcd7e21a0ff70d11\"}, \"report\": {\"complete\": false, \"sha256\": null}, \"scheduled_et\": \"2026-07-19T17:20:20-04:00\", \"schema\": \"atlas.machine_completion_envelope.v1\", \"side_effects\": {\"observer_local_files_only\": true}, \"source\": \"/Users/yasser/scripts/atlas_intraday.py\", \"source_sha256\": \"c09001df354402e2a9b007fdf81d82da9b71a7ab02bcf8b6b22316d10a82f500\", \"start_utc\": \"2026-07-19T21:20:00.878984+00:00\"}",
+      "exact_reason": "EXACT_FAIL:ACCOUNTING_EQUATION,CA_COUNT,MISSING_CANDIDATE_ACCOUNTING,MISSING_HOLDINGS_HEALTH,MISSING_HOLDINGS_PRICE,MISSING_PERME_STRICT,PERME_ENVELOPE_SHA_LINK,PERME_FRESHNESS_INVALID,PERME_NOT_ACCEPTED,PERME_PAYLOAD_SHA_LINK,PERME_UNCONSUMED",
+      "inserted_utc": "2026-07-19T21:20:52.728045+00:00",
+      "seconds_to_insert": 51.670416
+    },
+    {
+      "activation_utc": "2026-07-19T21:02:16.849240+00:00",
+      "classification": "FAIL",
+      "completed_utc": "2026-07-19T21:30:03.228866+00:00",
+      "cycle_id": "intraday-20260719T213030Z-92c42e986d5e",
+      "envelope_path": "/Users/yasser/.hermes/profiles/atlasops/acceptance/machine_cycles/intraday-20260719T213030Z-92c42e986d5e/completion_envelope.json",
+      "envelope_sha256": "dcc5e3480a0032b690aee6ea623ff9bb4d6c8f226cee84cddb7546135e008335",
+      "evidence_json": "{\"child_pid\": 60855, \"classification\": \"FAIL\", \"cycle_id\": \"intraday-20260719T213030Z-92c42e986d5e\", \"db\": {\"fk_errors\": 0, \"integrity\": \"ok\", \"sha256\": \"2118816573bebc2e983a6ed0deeb7313fb4d774c92c9b0ff44f5779f03845c03\"}, \"delivery\": {\"sha256\": null, \"success\": false}, \"end_utc\": \"2026-07-19T21:30:03.228866+00:00\", \"envelope_sha256\": \"875f1885baf2ed40a8aebe34b5da627f3cbc0f1c95cdb27f80cab0b79da0ba54\", \"exact_failures\": [\"ACCOUNTING_EQUATION\", \"CA_COUNT\", \"MISSING_CANDIDATE_ACCOUNTING\", \"MISSING_HOLDINGS_HEALTH\", \"MISSING_HOLDINGS_PRICE\", \"MISSING_PERME_STRICT\", \"PERME_ENVELOPE_SHA_LINK\", \"PERME_FRESHNESS_INVALID\", \"PERME_NOT_ACCEPTED\", \"PERME_PAYLOAD_SHA_LINK\", \"PERME_UNCONSUMED\"], \"exit_code\": 0, \"interpreter\": \"/usr/bin/python3\", \"lock\": {\"path\": \"/tmp/atlas_intraday.lock\", \"present_after_child\": false}, \"pid\": 60854, \"ppid\": 1, \"receipt_hashes\": {\"child_completion\": \"02f5b7450511a498dd16c25eea9f34470cc771d0d09df5952786c4b5a1f001ca\"}, \"report\": {\"complete\": false, \"sha256\": null}, \"scheduled_et\": \"2026-07-19T17:30:30-04:00\", \"schema\": \"atlas.machine_completion_envelope.v1\", \"side_effects\": {\"observer_local_files_only\": true}, \"source\": \"/Users/yasser/scripts/atlas_intraday.py\", \"source_sha256\": \"c09001df354402e2a9b007fdf81d82da9b71a7ab02bcf8b6b22316d10a82f500\", \"start_utc\": \"2026-07-19T21:30:03.051878+00:00\"}",
+      "exact_reason": "EXACT_FAIL:ACCOUNTING_EQUATION,CA_COUNT,MISSING_CANDIDATE_ACCOUNTING,MISSING_HOLDINGS_HEALTH,MISSING_HOLDINGS_PRICE,MISSING_PERME_STRICT,PERME_ENVELOPE_SHA_LINK,PERME_FRESHNESS_INVALID,PERME_NOT_ACCEPTED,PERME_PAYLOAD_SHA_LINK,PERME_UNCONSUMED",
+      "inserted_utc": "2026-07-19T21:30:12.711157+00:00",
+      "seconds_to_insert": 9.482291
+    }
+  ],
+  "first3_sha256": "145fd506b9f5bb5d43a00981b909c20196d3da8c14fce6084c5da7e1404d1316",
+  "full_db": {
+    "counts": {
+      "decisions": 0,
+      "event_evidence": 27,
+      "observations": 48092
+    },
+    "foreign_key_errors": [],
+    "integrity": "ok",
+    "tables": [
+      "decisions",
+      "event_evidence",
+      "observations"
+    ],
+    "triggers": [
+      {
+        "name": "dec_no_delete",
+        "sql": "CREATE TRIGGER dec_no_delete BEFORE DELETE ON decisions BEGIN SELECT RAISE(ABORT,'append-only');END",
+        "tbl_name": "decisions"
+      },
+      {
+        "name": "dec_no_update",
+        "sql": "CREATE TRIGGER dec_no_update BEFORE UPDATE ON decisions BEGIN SELECT RAISE(ABORT,'append-only');END",
+        "tbl_name": "decisions"
+      },
+      {
+        "name": "ev_no_delete",
+        "sql": "CREATE TRIGGER ev_no_delete BEFORE DELETE ON event_evidence BEGIN SELECT RAISE(ABORT,'append-only');END",
+        "tbl_name": "event_evidence"
+      },
+      {
+        "name": "ev_no_update",
+        "sql": "CREATE TRIGGER ev_no_update BEFORE UPDATE ON event_evidence BEGIN SELECT RAISE(ABORT,'append-only');END",
+        "tbl_name": "event_evidence"
+      },
+      {
+        "name": "obs_no_delete",
+        "sql": "CREATE TRIGGER obs_no_delete BEFORE DELETE ON observations BEGIN SELECT RAISE(ABORT,'append-only');END",
+        "tbl_name": "observations"
+      },
+      {
+        "name": "obs_no_update",
+        "sql": "CREATE TRIGGER obs_no_update BEFORE UPDATE ON observations BEGIN SELECT RAISE(ABORT,'append-only');END",
+        "tbl_name": "observations"
+      }
+    ]
+  },
+  "historical_machine_rows_count": 456,
+  "historical_machine_rows_sha256": "f0f83dfb198b5fa94888253ac8c8b40dce9d6f28501550dc99456a3c93c46e4f",
+  "sources": {
+    "atlas_acceptance_collector.py": {
+      "backup": "/Users/yasser/scripts/archive/order62_20260720T220339Z/sources/atlas_acceptance_collector.py.bak_order62_20260720T220339Z",
+      "path": "/Users/yasser/.hermes/profiles/atlasops/scripts/atlas_acceptance_collector.py",
+      "sha256": "5ce7ba7ac3197f64ef198e5cf6ed2eb148e7c8fafa4eb26c0a7be34624bfae73",
+      "state": "present"
+    },
+    "atlas_cycle_receipts.py": {
+      "backup": "/Users/yasser/scripts/archive/order62_20260720T220339Z/sources/atlas_cycle_receipts.py.bak_order62_20260720T220339Z",
+      "path": "/Users/yasser/scripts/atlas_cycle_receipts.py",
+      "sha256": "f6baa7d8a2127adab141711819ce2c3e5230059ac40f99104513f6774a005859",
+      "state": "present"
+    },
+    "atlas_full_session_acceptance.py": {
+      "backup": "/Users/yasser/scripts/archive/order62_20260720T220339Z/sources/atlas_full_session_acceptance.py.bak_order62_20260720T220339Z",
+      "path": "/Users/yasser/.hermes/profiles/atlasops/scripts/atlas_full_session_acceptance.py",
+      "sha256": "8fe7183069774575ac2510892298cf4bed88270eb80d51f74df0ddebad84db4b",
+      "state": "present"
+    },
+    "atlas_intraday_receipt_wrapper.py": {
+      "backup": "/Users/yasser/scripts/archive/order62_20260720T220339Z/sources/atlas_intraday_receipt_wrapper.py.bak_order62_20260720T220339Z",
+      "path": "/Users/yasser/scripts/atlas_intraday_receipt_wrapper.py",
+      "sha256": "0f7f32f2e139fddac676d78ed3a1ba52fc49ed60a353babcda317d0d85763e91",
+      "state": "present"
+    },
+    "atlas_llm_invocation_ledger.py": {
+      "backup": "/Users/yasser/scripts/archive/order62_20260720T220339Z/sources/atlas_llm_invocation_ledger.py.ABSENT_pre_order62",
+      "path": "/Users/yasser/scripts/atlas_llm_invocation_ledger.py",
+      "state": "absent"
+    },
+    "atlas_macro_postmarket.py": {
+      "backup": "/Users/yasser/scripts/archive/order62_20260720T220339Z/sources/atlas_macro_postmarket.py.bak_order62_20260720T220339Z",
+      "path": "/Users/yasser/scripts/atlas_macro_postmarket.py",
+      "sha256": "0ec35e26f11a73d8d6ef0daf7cd1b8d8d044bb53ebd89cc092e4b7aa781bbdba",
+      "state": "present"
+    },
+    "atlas_macro_premarket.py": {
+      "backup": "/Users/yasser/scripts/archive/order62_20260720T220339Z/sources/atlas_macro_premarket.py.bak_order62_20260720T220339Z",
+      "path": "/Users/yasser/scripts/atlas_macro_premarket.py",
+      "sha256": "7f434ce255743d385fc0e2484a2097ff5548987bcfded94ba028e6cdddc68230",
+      "state": "present"
+    },
+    "atlas_perme.py": {
+      "backup": "/Users/yasser/scripts/archive/order62_20260720T220339Z/sources/atlas_perme.py.bak_order62_20260720T220339Z",
+      "path": "/Users/yasser/scripts/atlas_perme.py",
+      "sha256": "985718f6416db8812f43c5e0d58010dfdb609cc52921b8b1ed9be7c70d402aae",
+      "state": "present"
+    },
+    "atlas_registration_auditor.py": {
+      "backup": "/Users/yasser/scripts/archive/order62_20260720T220339Z/sources/atlas_registration_auditor.py.bak_order62_20260720T220339Z",
+      "path": "/Users/yasser/scripts/atlas_registration_auditor.py",
+      "sha256": "55535e268b4f5c5c8f221143a6341c5d529f23e71e7d7e1b9bc3317e9ec2e15d",
+      "state": "present"
+    },
+    "pre_market_report.py": {
+      "backup": "/Users/yasser/scripts/archive/order62_20260720T220339Z/sources/pre_market_report.py.bak_order62_20260720T220339Z",
+      "path": "/Users/yasser/scripts/pre_market_report.py",
+      "sha256": "9ff47f99c1dcfd07271305284ec4822863981a9212c7fc1f94507e4a7a354fc7",
+      "state": "present"
+    }
+  },
+  "timestamp_utc": "20260720T220339Z"
+}

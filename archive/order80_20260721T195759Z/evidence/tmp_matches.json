@@ -1,0 +1,42 @@
+[
+  {
+    "file": "/Users/yasser/scripts/atlas_intraday.py",
+    "line": 113,
+    "content": "LOCK_PATH = \"/tmp/atlas_intraday.lock\""
+  },
+  {
+    "file": "/Users/yasser/scripts/atlas_intraday.py",
+    "line": 116,
+    "content": "STAGING_LOCK_PATH = \"/tmp/atlas_intraday_staging.lock\""
+  },
+  {
+    "file": "/Users/yasser/scripts/atlas_intraday.py",
+    "line": 2460,
+    "content": "    msg_path = f\"/tmp/atlas_intraday_msg_{os.getpid()}_{int(time.time() * 1000)}.txt\""
+  },
+  {
+    "file": "/Users/yasser/scripts/atlas_intraday.py",
+    "line": 2610,
+    "content": "            force_dryrun_temp_db = f\"/tmp/atlas_intraday_force_dryrun_{os.getpid()}.db\""
+  },
+  {
+    "file": "/Users/yasser/scripts/atlas_intraday_receipt_wrapper.py",
+    "line": 61,
+    "content": " completion={'schema':'atlas.machine_child_completion.v1','cycle_id':cid,'child_pid_observed':None,'child_started':False,'wrapper_pid':os.getpid(),'wrapper_ppid':os.getppid(),'started_utc':start.isoformat(),'ended_utc':end.isoformat(),'exit_code':1,'source':str(source),'source_sha256':sha_file(source),'interpreter':'/usr/bin/python3','report':{'complete':False,'sha256':None},'delivery':{'success':False,'sha256':None},'db':db_health(db),'lock':{'path':'/tmp/atlas_intraday.lock','present_after_child':Path('/tmp/atlas_intraday.lock').exists()},'side_effect_baseline':{db.name:sha_file(db)} if db.exists() else {},'prechild_failure':{'name':failure,'exception_type':type(exc).__name__}}"
+  },
+  {
+    "file": "/Users/yasser/scripts/atlas_intraday_receipt_wrapper.py",
+    "line": 96,
+    "content": " completion={'schema':'atlas.machine_child_completion.v1','cycle_id':cid,'child_pid_observed':child_pid,'child_started':True,'wrapper_pid':os.getpid(),'wrapper_ppid':os.getppid(),'started_utc':start.isoformat(),'ended_utc':end.isoformat(),'exit_code':exit_code,'source':str(SCRIPTS/'atlas_intraday.py'),'source_sha256':sha_file(SCRIPTS/'atlas_intraday.py'),'interpreter':'/usr/bin/python3','report':report,'delivery':delivery,'db':db_health(SCRIPTS/'atlas.db'),'lock':{'path':'/tmp/atlas_intraday.lock','present_after_child':Path('/tmp/atlas_intraday.lock').exists()},'side_effect_baseline':before}"
+  },
+  {
+    "file": "/Users/yasser/scripts/market_scout.py",
+    "line": 73,
+    "content": "SPLIT_CACHE_PATH = \"/tmp/atlas_split_cache.json\""
+  },
+  {
+    "file": "/Users/yasser/scripts/market_scout.py",
+    "line": 284,
+    "content": "    # Opportunistic pruning keeps /tmp cache small."
+  }
+]

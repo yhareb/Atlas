@@ -1,0 +1,70 @@
+[
+  {
+    "match": true,
+    "path": "/Users/yasser/scripts/atlas_cycle_receipts.py"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/scripts/atlas_db.py"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/scripts/atlas_holding_state_adapters.py"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/scripts/atlas_holding_state_adapters_schema.py"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/scripts/atlas_holding_state_authority.py"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/scripts/atlas_holding_state_consumer_projection.py"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/scripts/atlas_holding_state_feature_gate.py"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/scripts/atlas_holding_state_packet_builder.py"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/scripts/atlas_holding_state_schema.py"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/scripts/atlas_holding_state_truth_maintenance.py"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/scripts/atlas_intraday.py"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/scripts/atlas_intraday_receipt_wrapper.py"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/scripts/atlas_provider_warmup.py"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/scripts/market_scout.py"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/Library/LaunchAgents/com.atlas.canonical-hygiene-producer.plist"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/Library/LaunchAgents/com.atlas.intraday.plist"
+  },
+  {
+    "match": true,
+    "path": "/Users/yasser/Library/LaunchAgents/com.atlas.provider-warmup.plist"
+  }
+]

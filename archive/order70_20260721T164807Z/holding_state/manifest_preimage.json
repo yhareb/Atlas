@@ -1,0 +1,37 @@
+{
+  "broker_order_state": "UNVERIFIED",
+  "build": {
+    "component_paths": [],
+    "lease_path": "/Users/yasser/Library/Application Support/Atlas/holding_state_v3/rebuild/leases/build.lock",
+    "normalized_inputs_path": null,
+    "packet_store": "/Users/yasser/Library/Application Support/Atlas/holding_state_v3/packets/json"
+  },
+  "built_at": "2026-07-21T15:35:45Z",
+  "canonical_unlocked": false,
+  "current": {
+    "digest": "d78bc9f74d1d115dad298942642e8a9e8d08b6405dc68a7c88ef150ac6579e69",
+    "path": "/Users/yasser/Library/Application Support/Atlas/holding_state_v3/current_generations/df89283500e24fe1afa25a4a89c21f18.json"
+  },
+  "default_packet_key": null,
+  "execution_context": "LIVE_SCHEDULER",
+  "generation_id": "cc3f1f026b7668e36e62e16efdc97aca0737dd1eb7ff7e4604195c159ad264e8",
+  "manifest_digest": "560fcdaff8aa58c2f183bc93809aea4029d2ad52eb47cda1a55184f0dc08e3a9",
+  "mode": "shadow",
+  "nyse_session": "2026-07-20",
+  "packets": {},
+  "previous_generation_id": "404d621701772a558bb4e2b4c259c9f01d4bd2dd28cf3c06c4959245dd1d7c54",
+  "publication_sequence": 3,
+  "rebuild_queue": "/Users/yasser/Library/Application Support/Atlas/holding_state_v3/rebuild/queue",
+  "receipts": {},
+  "run_id": "df89283500e24fe1afa25a4a89c21f18",
+  "schema_version": "atlas.runtime_manifest.v3",
+  "truth_db": "/Users/yasser/Library/Application Support/Atlas/holding_state_v3/truth/holding_state_truth.sqlite",
+  "units": [
+    "BROKER_PENDING_VISIBILITY",
+    "CONVERSATION_HOLDINGS",
+    "DAILY_PP_HOLDING_SECTIONS",
+    "EOD_POSTMARKET_HOLDINGS",
+    "INTRADAY_HOLDINGS",
+    "PRE_MARKET_HOLDINGS"
+  ]
+}

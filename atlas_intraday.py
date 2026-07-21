@@ -21,11 +21,6 @@ except Exception:
 
 SCRIPTS_DIR = os.environ.get("ATLAS_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
-ATLAS_RUNTIME_STATE_ROOT = os.environ.get(
-    "ATLAS_RUNTIME_STATE_ROOT", "/Users/yasser/Library/Application Support/Atlas"
-)
-ASYNC_MESSAGE_PAYLOAD_DIR = os.path.join(ATLAS_RUNTIME_STATE_ROOT, "runtime_payloads")
-ASYNC_MESSAGE_PAYLOAD_TTL_SEC = 72 * 60 * 60
 import atlas_db
 try:
     import atlas_rag
@@ -2460,39 +2455,11 @@ def _quick_status_report(reason="scan in progress"):
     lines += ["", "Full scan still running; this status is intentionally no-provider/no-handoff."]
     return "\n".join(lines)
 
-def _stage_async_message_payload(message):
-    """Persist one private async payload and prune unacknowledged payloads after 72h."""
-    os.makedirs(ASYNC_MESSAGE_PAYLOAD_DIR, mode=0o700, exist_ok=True)
-    try:
-        os.chmod(ASYNC_MESSAGE_PAYLOAD_DIR, 0o700)
-    except OSError:
-        pass
-    cutoff = time.time() - ASYNC_MESSAGE_PAYLOAD_TTL_SEC
-    try:
-        for name in os.listdir(ASYNC_MESSAGE_PAYLOAD_DIR):
-            if not name.startswith("atlas_intraday_msg_") or not name.endswith(".txt"):
-                continue
-            candidate = os.path.join(ASYNC_MESSAGE_PAYLOAD_DIR, name)
-            try:
-                if os.path.isfile(candidate) and os.path.getmtime(candidate) < cutoff:
-                    os.unlink(candidate)
-            except OSError:
-                pass
-    except OSError:
-        pass
-    msg_path = os.path.join(
-        ASYNC_MESSAGE_PAYLOAD_DIR,
-        f"atlas_intraday_msg_{os.getpid()}_{int(time.time() * 1000)}.txt",
-    )
-    fd = os.open(msg_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(str(message or ""))
-    return msg_path
-
-
 def _send_telegram_async(message, label="atlas"):
     """Spawn an independent sender so Telegram/network latency cannot block scan/import."""
-    msg_path = _stage_async_message_payload(message)
+    msg_path = f"/tmp/atlas_intraday_msg_{os.getpid()}_{int(time.time() * 1000)}.txt"
+    with open(msg_path, "w") as f:
+        f.write(str(message or ""))
     code = (
         "import os,sys; sys.path.insert(0, '/Users/yasser/scripts'); "
         "from atlas_notify import send_telegram; "

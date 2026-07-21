@@ -1,0 +1,77 @@
+{
+  "archive": "/Users/yasser/scripts/archive/order70_20260721T164807Z",
+  "db": {
+    "/Users/yasser/.hermes/profiles/atlasops/acceptance/final_acceptance.sqlite3": {
+      "-shm": {
+        "backup": "/Users/yasser/scripts/archive/order70_20260721T164807Z/db/final_acceptance.sqlite3-shm",
+        "sha256": "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb"
+      },
+      "-wal": {
+        "backup": "/Users/yasser/scripts/archive/order70_20260721T164807Z/db/final_acceptance.sqlite3-wal",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "backup": "/Users/yasser/scripts/archive/order70_20260721T164807Z/db/final_acceptance.sqlite3",
+      "sha256": "8add3500145060cdcad21f6fc5eb610ff34a4dcf811bf5951ac77be912f3f3ce"
+    },
+    "/Users/yasser/.hermes/profiles/atlasops/acceptance/full_session/full_session_acceptance.sqlite3": {
+      "-shm": {
+        "backup": "/Users/yasser/scripts/archive/order70_20260721T164807Z/db/full_session_acceptance.sqlite3-shm",
+        "sha256": "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb"
+      },
+      "-wal": {
+        "backup": "/Users/yasser/scripts/archive/order70_20260721T164807Z/db/full_session_acceptance.sqlite3-wal",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "backup": "/Users/yasser/scripts/archive/order70_20260721T164807Z/db/full_session_acceptance.sqlite3",
+      "sha256": "8d832faf1e819219e44946667bee9a3b3ff26397b70fde617c1785a422703c22"
+    }
+  },
+  "files": {
+    "/Users/yasser/Library/LaunchAgents/com.atlas.intraday.plist": {
+      "backup": "/Users/yasser/scripts/archive/order70_20260721T164807Z/files/com.atlas.intraday.plist.bak_order70_20260721T164807Z",
+      "backup_sha256": "a2c6872e8f8086ca9e85549f1ed07baf3a58fa113c80a287cdd59c1013153df3",
+      "sha256": "a2c6872e8f8086ca9e85549f1ed07baf3a58fa113c80a287cdd59c1013153df3"
+    },
+    "/Users/yasser/scripts/atlas_cycle_receipts.py": {
+      "backup": "/Users/yasser/scripts/archive/order70_20260721T164807Z/files/atlas_cycle_receipts.py.bak_order70_20260721T164807Z",
+      "backup_sha256": "bce1742f3d4e23e51226e1f1dd0a07e2c8d8a88d59a98fd0e5a86cd2adb2b387",
+      "sha256": "bce1742f3d4e23e51226e1f1dd0a07e2c8d8a88d59a98fd0e5a86cd2adb2b387"
+    },
+    "/Users/yasser/scripts/atlas_holding_state_adapters.py": {
+      "backup": "/Users/yasser/scripts/archive/order70_20260721T164807Z/files/atlas_holding_state_adapters.py.bak_order70_20260721T164807Z",
+      "backup_sha256": "fc800d8ba43782569cbb2ea59c87cc04849c0ef9d9d3b42fed203ced8b046f68",
+      "sha256": "fc800d8ba43782569cbb2ea59c87cc04849c0ef9d9d3b42fed203ced8b046f68"
+    },
+    "/Users/yasser/scripts/atlas_holding_state_consumer_projection.py": {
+      "backup": "/Users/yasser/scripts/archive/order70_20260721T164807Z/files/atlas_holding_state_consumer_projection.py.bak_order70_20260721T164807Z",
+      "backup_sha256": "e764762b2b95fa5264c6b2c389a99529c3d2bd5a3129e0c74d0ddddf2b403414",
+      "sha256": "e764762b2b95fa5264c6b2c389a99529c3d2bd5a3129e0c74d0ddddf2b403414"
+    },
+    "/Users/yasser/scripts/atlas_holding_state_packet_builder.py": {
+      "backup": "/Users/yasser/scripts/archive/order70_20260721T164807Z/files/atlas_holding_state_packet_builder.py.bak_order70_20260721T164807Z",
+      "backup_sha256": "3a34040e4a3799f8230dd337ffef0598aafe375929746571627d8b5e4c776dd2",
+      "sha256": "3a34040e4a3799f8230dd337ffef0598aafe375929746571627d8b5e4c776dd2"
+    },
+    "/Users/yasser/scripts/atlas_holding_state_truth_maintenance.py": {
+      "backup": "/Users/yasser/scripts/archive/order70_20260721T164807Z/files/atlas_holding_state_truth_maintenance.py.bak_order70_20260721T164807Z",
+      "backup_sha256": "53f9678f23772b6fe9a6642734700f65634c4b2dd7d0c75a3ea88f520c4249d2",
+      "sha256": "53f9678f23772b6fe9a6642734700f65634c4b2dd7d0c75a3ea88f520c4249d2"
+    },
+    "/Users/yasser/scripts/atlas_intraday_receipt_wrapper.py": {
+      "backup": "/Users/yasser/scripts/archive/order70_20260721T164807Z/files/atlas_intraday_receipt_wrapper.py.bak_order70_20260721T164807Z",
+      "backup_sha256": "2a5ff8376acf3b91bf8fb0f46b1430f768ef6c9feb7073350b08a15868017cb0",
+      "sha256": "2a5ff8376acf3b91bf8fb0f46b1430f768ef6c9feb7073350b08a15868017cb0"
+    }
+  },
+  "head": "4a6129a7f06a57a51f554ebb75c7e70658481bdc",
+  "holding_pointer": {
+    "lstat_mtime_ns": 1784648145236822769,
+    "path": "/Users/yasser/Library/Application Support/Atlas/holding_state_v3/manifests/current_runtime_manifest.json",
+    "resolved": "/Users/yasser/Library/Application Support/Atlas/holding_state_v3/manifests/holding_state_runtime_shadow_df89283500e24fe1afa25a4a89c21f18.json",
+    "resolved_mtime_ns": 1784648145236616976,
+    "resolved_sha256": "73a6b88f4f04d215f19742faf7e37de23b71408859e003cf1bdda760a2aeb88f",
+    "symlink": true,
+    "target": "/Users/yasser/Library/Application Support/Atlas/holding_state_v3/manifests/holding_state_runtime_shadow_df89283500e24fe1afa25a4a89c21f18.json"
+  },
+  "timestamp": "20260721T164807Z"
+}

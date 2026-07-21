@@ -1,0 +1,298 @@
+{
+  "archive": "/Users/yasser/scripts/archive/order64_20260721T073337Z",
+  "db_backups": {
+    "final_acceptance.sqlite3": {
+      "checkpoint": [
+        0,
+        0,
+        0
+      ],
+      "sidecars": {
+        "-shm": {
+          "bytes": 32768,
+          "sha256": "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb"
+        },
+        "-wal": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "db": {
+          "bytes": 1417216,
+          "sha256": "36213c8450714d48756fc596e82efab1d95db050b7247afc5282194d4e3752e3"
+        }
+      },
+      "sqlite_backup_sha256": "d58ab7cce5c0843649e7f36bce611f31eca3fa3cc78516434e6fe3d2a167d66a"
+    },
+    "full_session_acceptance.sqlite3": {
+      "checkpoint": [
+        0,
+        0,
+        0
+      ],
+      "sidecars": {
+        "-shm": {
+          "bytes": 32768,
+          "sha256": "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb"
+        },
+        "-wal": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "db": {
+          "bytes": 27906048,
+          "sha256": "a49e4cfa5cee5666c5787e9bfce6451a738709222ac93f71663edac1d7b7c5d1"
+        }
+      },
+      "sqlite_backup_sha256": "b120898235f3cbd989bd5ca1c86d2bb27f9d0a802b7cae55c112cc7dd0d803fb"
+    }
+  },
+  "final": {
+    "activations_count": 2,
+    "activations_sha256": "39fc05b64055728042c95e6ed500c7028a7fac2692df5e6f8701a6efb5675a86",
+    "fk_count": 0,
+    "integrity": "ok",
+    "retained_failed_cycle": [
+      {
+        "activation_utc": "2026-07-20T22:06:41.775960+00:00",
+        "classification": "FAIL",
+        "completed_utc": "2026-07-20T22:10:04.934574+00:00",
+        "cycle_id": "intraday-20260720T221010Z-9a2f109215b1",
+        "envelope_path": "/Users/yasser/.hermes/profiles/atlasops/acceptance/machine_cycles/intraday-20260720T221010Z-9a2f109215b1/completion_envelope.json",
+        "envelope_sha256": "44d55188eca145b82af1353cbacf37416969aefc94ed40dc476d053505f88213",
+        "evidence_json": "{\"authority_config_receipt\": {\"incident_register_path\": \"/Users/yasser/scripts/config/incident_register.jsonl\", \"llm_invocation_ledger_path\": \"/Users/yasser/scripts/config/llm_invocations.jsonl\", \"manifest_path\": \"/Users/yasser/scripts/config/tfe_authority_manifest.json\", \"missing\": [], \"status\": \"PASS\"}, \"authority_receipt\": {\"ca_active_complete\": false, \"cycle_id\": \"intraday-20260720T221010Z-9a2f109215b1\", \"derivation_receipts\": {\"ca_active_complete\": null, \"holdings_price_healthy\": null, \"holdings_reevaluation_healthy\": null, \"llm_trading_authority_false\": \"d8386413894aaedee05478220134632b51ee9b5790e92eda1c9f129759a7f5d6\", \"no_p0_p1\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\", \"perme_strict\": null, \"tfe_sole_authority\": \"71694c4d70aac3b5c3f6944363ca3e764e09fdd8427884e350582978962321cc\"}, \"holdings_price_healthy\": false, \"holdings_reevaluation_healthy\": false, \"incident_attestation\": {\"append_only_format\": \"JSONL\", \"register_sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\", \"unresolved_p0_p1\": []}, \"llm_trading_authority_false\": true, \"no_p0_p1\": true, \"perme_strict\": false, \"receipt_sha256\": \"ff2d804fed7e2cd5ef718c1168440af6988b5e687e1448cbcc5522a0176fdcf4\", \"runtime_attestation\": {\"active_code_shas\": {\"/Users/yasser/scripts/atlas_engine.py\": \"757f673fbc7b9b29f13336a128583988c4b942bec82c6947bff11de3eb2997ae\", \"/Users/yasser/scripts/atlas_intraday.py\": \"c78265e1241dd9abbc17985a69f3f7cf6ce65490daa41026e49fc4bfc885025e\", \"/Users/yasser/scripts/atlas_manage.py\": \"e6e736e3a0a254002685b2976cc6da968ff6bb6d495c30db059f36108a976556\", \"/Users/yasser/scripts/atlas_portfolio.py\": \"9d4399205d2c591c376f29b0a1c34e3b5449b613f83c620fea90efe550feac69\"}, \"active_code_shas_match\": true, \"inventory_sha256\": \"20c6aeed5de67ce675ba22bda478893c12d725e3e1e36f10e5b313aae0c8e18b\", \"llm_window\": {\"cycle_rows\": [], \"cycle_window_end_utc\": \"2026-07-20T22:10:04.934574+00:00\", \"cycle_window_start_utc\": \"2026-07-20T22:10:04.756218+00:00\", \"errors\": [], \"ledger_sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\", \"trading_authority_capable_invocations\": [], \"unclassified\": []}, \"manifest_sha256\": \"71694c4d70aac3b5c3f6944363ca3e764e09fdd8427884e350582978962321cc\"}, \"schema\": \"atlas.machine_authority_receipt.v1\", \"source_envelope_sha256\": \"df517ec946daa5552b8b9a368d5e4e81c0c1fa6a0c7239bffa09d82eb9a0e563\", \"tfe_sole_authority\": true}, \"child_pid\": 55755, \"classification\": \"FAIL\", \"cycle_id\": \"intraday-20260720T221010Z-9a2f109215b1\", \"db\": {\"fk_errors\": 0, \"integrity\": \"ok\", \"sha256\": \"49c6932f0b14c17383859a7e36d18e30a04028a3a5d807694cc2e5a54e775eec\"}, \"delivery\": {\"sha256\": null, \"success\": false}, \"end_utc\": \"2026-07-20T22:10:04.934574+00:00\", \"envelope_sha256\": \"128e828cc51ffbe0e39ef65dca24eb646f5904011032d8acffef55d078e626b4\", \"exact_failures\": [\"ACCOUNTING_EQUATION\", \"CA_COUNT\", \"MISSING_CANDIDATE_ACCOUNTING\", \"MISSING_HOLDINGS_HEALTH\", \"MISSING_HOLDINGS_PRICE\", \"MISSING_PERME_STRICT\", \"PERME_ENVELOPE_SHA_LINK\", \"PERME_FRESHNESS_INVALID\", \"PERME_NOT_ACCEPTED\", \"PERME_PAYLOAD_SHA_LINK\", \"PERME_UNCONSUMED\", \"AUTHORITY_FLAGS\"], \"exit_code\": 0, \"interpreter\": \"/usr/bin/python3\", \"lock\": {\"path\": \"/tmp/atlas_intraday.lock\", \"present_after_child\": false}, \"pid\": 55754, \"ppid\": 1, \"receipt_hashes\": {\"authority\": \"ff2d804fed7e2cd5ef718c1168440af6988b5e687e1448cbcc5522a0176fdcf4\", \"child_completion\": \"d8386413894aaedee05478220134632b51ee9b5790e92eda1c9f129759a7f5d6\"}, \"report\": {\"complete\": false, \"sha256\": null}, \"scheduled_et\": \"2026-07-20T18:10:10-04:00\", \"schema\": \"atlas.machine_completion_envelope.v1\", \"side_effects\": {\"observer_local_files_only\": true}, \"source\": \"/Users/yasser/scripts/atlas_intraday.py\", \"source_sha256\": \"c78265e1241dd9abbc17985a69f3f7cf6ce65490daa41026e49fc4bfc885025e\", \"start_utc\": \"2026-07-20T22:10:04.756218+00:00\"}",
+        "exact_reason": "EXACT_FAIL:ACCOUNTING_EQUATION,AUTHORITY_FLAGS,AUTHORITY_SOURCE_ENVELOPE,CA_COUNT,MISSING_CANDIDATE_ACCOUNTING,MISSING_HOLDINGS_HEALTH,MISSING_HOLDINGS_PRICE,MISSING_PERME_STRICT,PERME_ENVELOPE_SHA_LINK,PERME_FRESHNESS_INVALID,PERME_NOT_ACCEPTED,PERME_PAYLOAD_SHA_LINK,PERME_UNCONSUMED",
+        "inserted_utc": "2026-07-20T22:10:48.643182+00:00",
+        "seconds_to_insert": 43.708608
+      }
+    ],
+    "retained_failed_cycle_sha256": "26b6cfe248060157d86f3f910197a1ca2d4acfd4ecaa71ab084f3366a1c29ccb",
+    "retained_order62_activations": [
+      {
+        "activation_id": "act-20260720T220641-775960+0000-2ce39a4f8679",
+        "activation_utc": "2026-07-20T22:06:41.775960+00:00",
+        "authority_schema": "atlas.machine_authority_receipt.v1",
+        "created_utc": "2026-07-20T22:06:41.775960+00:00",
+        "observation_package_receipt_path": "git:commit/a0f0195c010e5d127837b726348a88a3f2c5b164",
+        "observation_package_receipt_sha256": "a0f0195c010e5d127837b726348a88a3f2c5b164",
+        "reason": "POST_AUTHORITY_RECEIPT_SCHEMA_REACTIVATION",
+        "rollback_of_activation_id": null,
+        "supersedes_activation_id": null,
+        "supersedes_activation_utc": "2026-07-19T21:02:16.849240+00:00",
+        "trading_epoch_sha256": "fe165b362d326d151a21aed6b2ff1faf2be8bb41bbf823b0ccc37ff5a05f727a"
+      },
+      {
+        "activation_id": "rollback-20260720T221302-563738+0000-157c0e9f95b2",
+        "activation_utc": "2026-07-20T22:13:02.563738+00:00",
+        "authority_schema": "atlas.machine_authority_receipt.v1",
+        "created_utc": "2026-07-20T22:13:02.563738+00:00",
+        "observation_package_receipt_path": "/tmp/atlas_perme_rewire_20260718T210239Z/output/order36/deployed_sha_receipt.json",
+        "observation_package_receipt_sha256": "ca0ff9c917a51646ff12aaad8494e93ca573a334ddda949ab838adb9fc56aa81",
+        "reason": "ROLLBACK_ORDER62_OFFHOURS_COHORT_AND_AUTHORITY_SOURCE_ENVELOPE_FAILURE",
+        "rollback_of_activation_id": "act-20260720T220641-775960+0000-2ce39a4f8679",
+        "supersedes_activation_id": "act-20260720T220641-775960+0000-2ce39a4f8679",
+        "supersedes_activation_utc": "2026-07-20T22:06:41.775960+00:00",
+        "trading_epoch_sha256": "fe165b362d326d151a21aed6b2ff1faf2be8bb41bbf823b0ccc37ff5a05f727a"
+      }
+    ],
+    "retained_order62_activations_sha256": "39fc05b64055728042c95e6ed500c7028a7fac2692df5e6f8701a6efb5675a86",
+    "triggers": [
+      {
+        "name": "cycle_validations_v2_no_delete",
+        "sql": "CREATE TRIGGER cycle_validations_v2_no_delete BEFORE DELETE ON cycle_validations_v2\n        BEGIN SELECT RAISE(ABORT,'append-only ledger: DELETE forbidden'); END",
+        "tbl_name": "cycle_validations_v2"
+      },
+      {
+        "name": "cycle_validations_v2_no_update",
+        "sql": "CREATE TRIGGER cycle_validations_v2_no_update BEFORE UPDATE ON cycle_validations_v2\n        BEGIN SELECT RAISE(ABORT,'append-only ledger: UPDATE forbidden'); END",
+        "tbl_name": "cycle_validations_v2"
+      },
+      {
+        "name": "cycles_no_delete",
+        "sql": "CREATE TRIGGER cycles_no_delete BEFORE DELETE ON cycles\n        BEGIN SELECT RAISE(ABORT,'append-only ledger: DELETE forbidden'); END",
+        "tbl_name": "cycles"
+      },
+      {
+        "name": "cycles_no_update",
+        "sql": "CREATE TRIGGER cycles_no_update BEFORE UPDATE ON cycles\n        BEGIN SELECT RAISE(ABORT,'append-only ledger: UPDATE forbidden'); END",
+        "tbl_name": "cycles"
+      },
+      {
+        "name": "machine_cycle_activations_v2_no_delete",
+        "sql": "CREATE TRIGGER machine_cycle_activations_v2_no_delete BEFORE DELETE ON machine_cycle_activations_v2 BEGIN SELECT RAISE(ABORT,'machine_cycle_activations_v2 is append-only'); END",
+        "tbl_name": "machine_cycle_activations_v2"
+      },
+      {
+        "name": "machine_cycle_activations_v2_no_update",
+        "sql": "CREATE TRIGGER machine_cycle_activations_v2_no_update BEFORE UPDATE ON machine_cycle_activations_v2 BEGIN SELECT RAISE(ABORT,'machine_cycle_activations_v2 is append-only'); END",
+        "tbl_name": "machine_cycle_activations_v2"
+      },
+      {
+        "name": "machine_cycle_validations_v3_no_delete",
+        "sql": "CREATE TRIGGER machine_cycle_validations_v3_no_delete BEFORE DELETE ON machine_cycle_validations_v3\n        BEGIN SELECT RAISE(ABORT,'append-only ledger: DELETE forbidden'); END",
+        "tbl_name": "machine_cycle_validations_v3"
+      },
+      {
+        "name": "machine_cycle_validations_v3_no_update",
+        "sql": "CREATE TRIGGER machine_cycle_validations_v3_no_update BEFORE UPDATE ON machine_cycle_validations_v3\n        BEGIN SELECT RAISE(ABORT,'append-only ledger: UPDATE forbidden'); END",
+        "tbl_name": "machine_cycle_validations_v3"
+      }
+    ],
+    "v3_count": 513,
+    "v3_sha256": "9a27703d950eddfddb849e8d64affdba52bb059cfa224e6d254b9950d0a3e325"
+  },
+  "full": {
+    "counts": {
+      "decisions": 0,
+      "event_evidence": 27,
+      "observations": 54241
+    },
+    "fk_count": 0,
+    "integrity": "ok",
+    "triggers": [
+      {
+        "name": "dec_no_delete",
+        "sql": "CREATE TRIGGER dec_no_delete BEFORE DELETE ON decisions BEGIN SELECT RAISE(ABORT,'append-only');END",
+        "tbl_name": "decisions"
+      },
+      {
+        "name": "dec_no_update",
+        "sql": "CREATE TRIGGER dec_no_update BEFORE UPDATE ON decisions BEGIN SELECT RAISE(ABORT,'append-only');END",
+        "tbl_name": "decisions"
+      },
+      {
+        "name": "ev_no_delete",
+        "sql": "CREATE TRIGGER ev_no_delete BEFORE DELETE ON event_evidence BEGIN SELECT RAISE(ABORT,'append-only');END",
+        "tbl_name": "event_evidence"
+      },
+      {
+        "name": "ev_no_update",
+        "sql": "CREATE TRIGGER ev_no_update BEFORE UPDATE ON event_evidence BEGIN SELECT RAISE(ABORT,'append-only');END",
+        "tbl_name": "event_evidence"
+      },
+      {
+        "name": "obs_no_delete",
+        "sql": "CREATE TRIGGER obs_no_delete BEFORE DELETE ON observations BEGIN SELECT RAISE(ABORT,'append-only');END",
+        "tbl_name": "observations"
+      },
+      {
+        "name": "obs_no_update",
+        "sql": "CREATE TRIGGER obs_no_update BEFORE UPDATE ON observations BEGIN SELECT RAISE(ABORT,'append-only');END",
+        "tbl_name": "observations"
+      }
+    ]
+  },
+  "pointer": {
+    "backup": "/Users/yasser/scripts/archive/order64_20260721T073337Z/pointer/ACTIVATION.json.bak_order64_20260721T073337Z",
+    "bytes": 484,
+    "path": "/Users/yasser/.hermes/profiles/atlasops/acceptance/machine_cycles/ACTIVATION.json",
+    "sha256": "5486652b83723f1797cefa77854b4a644a5704077a7dda5724aa2dacddfa4258"
+  },
+  "targets": {
+    "atlas_acceptance_collector.py": {
+      "adjacent_backup": "/Users/yasser/.hermes/profiles/atlasops/scripts/atlas_acceptance_collector.py.bak_order64_20260721T073337Z",
+      "archive_backup": "/Users/yasser/scripts/archive/order64_20260721T073337Z/sources/atlas_acceptance_collector.py.bak_order64_20260721T073337Z",
+      "mode": "0o755",
+      "path": "/Users/yasser/.hermes/profiles/atlasops/scripts/atlas_acceptance_collector.py",
+      "sha256": "5ce7ba7ac3197f64ef198e5cf6ed2eb148e7c8fafa4eb26c0a7be34624bfae73",
+      "state": "present"
+    },
+    "atlas_cycle_receipts.py": {
+      "adjacent_backup": "/Users/yasser/scripts/atlas_cycle_receipts.py.bak_order64_20260721T073337Z",
+      "archive_backup": "/Users/yasser/scripts/archive/order64_20260721T073337Z/sources/atlas_cycle_receipts.py.bak_order64_20260721T073337Z",
+      "mode": "0o755",
+      "path": "/Users/yasser/scripts/atlas_cycle_receipts.py",
+      "sha256": "f6baa7d8a2127adab141711819ce2c3e5230059ac40f99104513f6774a005859",
+      "state": "present"
+    },
+    "atlas_full_session_acceptance.py": {
+      "adjacent_backup": "/Users/yasser/.hermes/profiles/atlasops/scripts/atlas_full_session_acceptance.py.bak_order64_20260721T073337Z",
+      "archive_backup": "/Users/yasser/scripts/archive/order64_20260721T073337Z/sources/atlas_full_session_acceptance.py.bak_order64_20260721T073337Z",
+      "mode": "0o700",
+      "path": "/Users/yasser/.hermes/profiles/atlasops/scripts/atlas_full_session_acceptance.py",
+      "sha256": "8fe7183069774575ac2510892298cf4bed88270eb80d51f74df0ddebad84db4b",
+      "state": "present"
+    },
+    "atlas_intraday_receipt_wrapper.py": {
+      "adjacent_backup": "/Users/yasser/scripts/atlas_intraday_receipt_wrapper.py.bak_order64_20260721T073337Z",
+      "archive_backup": "/Users/yasser/scripts/archive/order64_20260721T073337Z/sources/atlas_intraday_receipt_wrapper.py.bak_order64_20260721T073337Z",
+      "mode": "0o755",
+      "path": "/Users/yasser/scripts/atlas_intraday_receipt_wrapper.py",
+      "sha256": "0f7f32f2e139fddac676d78ed3a1ba52fc49ed60a353babcda317d0d85763e91",
+      "state": "present"
+    },
+    "atlas_llm_invocation_ledger.py": {
+      "marker": "/Users/yasser/scripts/archive/order64_20260721T073337Z/sources/atlas_llm_invocation_ledger.py.ABSENT_pre_order64_20260721T073337Z",
+      "path": "/Users/yasser/scripts/atlas_llm_invocation_ledger.py",
+      "state": "absent"
+    },
+    "atlas_macro_postmarket.py": {
+      "adjacent_backup": "/Users/yasser/scripts/atlas_macro_postmarket.py.bak_order64_20260721T073337Z",
+      "archive_backup": "/Users/yasser/scripts/archive/order64_20260721T073337Z/sources/atlas_macro_postmarket.py.bak_order64_20260721T073337Z",
+      "mode": "0o755",
+      "path": "/Users/yasser/scripts/atlas_macro_postmarket.py",
+      "sha256": "0ec35e26f11a73d8d6ef0daf7cd1b8d8d044bb53ebd89cc092e4b7aa781bbdba",
+      "state": "present"
+    },
+    "atlas_macro_premarket.py": {
+      "adjacent_backup": "/Users/yasser/scripts/atlas_macro_premarket.py.bak_order64_20260721T073337Z",
+      "archive_backup": "/Users/yasser/scripts/archive/order64_20260721T073337Z/sources/atlas_macro_premarket.py.bak_order64_20260721T073337Z",
+      "mode": "0o755",
+      "path": "/Users/yasser/scripts/atlas_macro_premarket.py",
+      "sha256": "7f434ce255743d385fc0e2484a2097ff5548987bcfded94ba028e6cdddc68230",
+      "state": "present"
+    },
+    "atlas_perme.py": {
+      "adjacent_backup": "/Users/yasser/scripts/atlas_perme.py.bak_order64_20260721T073337Z",
+      "archive_backup": "/Users/yasser/scripts/archive/order64_20260721T073337Z/sources/atlas_perme.py.bak_order64_20260721T073337Z",
+      "mode": "0o755",
+      "path": "/Users/yasser/scripts/atlas_perme.py",
+      "sha256": "985718f6416db8812f43c5e0d58010dfdb609cc52921b8b1ed9be7c70d402aae",
+      "state": "present"
+    },
+    "atlas_receipt_fit_validator.py": {
+      "adjacent_backup": "/Users/yasser/.hermes/profiles/atlasops/scripts/atlas_receipt_fit_validator.py.bak_order64_20260721T073337Z",
+      "archive_backup": "/Users/yasser/scripts/archive/order64_20260721T073337Z/sources/atlas_receipt_fit_validator.py.bak_order64_20260721T073337Z",
+      "mode": "0o600",
+      "path": "/Users/yasser/.hermes/profiles/atlasops/scripts/atlas_receipt_fit_validator.py",
+      "sha256": "beb7392bd0beab7b9c5ff11b15a42cce08572bed3fb1d9bb42367c5f7c72bbe7",
+      "state": "present"
+    },
+    "atlas_registration_auditor.py": {
+      "adjacent_backup": "/Users/yasser/scripts/atlas_registration_auditor.py.bak_order64_20260721T073337Z",
+      "archive_backup": "/Users/yasser/scripts/archive/order64_20260721T073337Z/sources/atlas_registration_auditor.py.bak_order64_20260721T073337Z",
+      "mode": "0o644",
+      "path": "/Users/yasser/scripts/atlas_registration_auditor.py",
+      "sha256": "55535e268b4f5c5c8f221143a6341c5d529f23e71e7d7e1b9bc3317e9ec2e15d",
+      "state": "present"
+    },
+    "incident_register.jsonl": {
+      "marker": "/Users/yasser/scripts/archive/order64_20260721T073337Z/config/incident_register.jsonl.ABSENT_pre_order64_20260721T073337Z",
+      "path": "/Users/yasser/scripts/config/incident_register.jsonl",
+      "state": "absent"
+    },
+    "llm_boundary_inventory.json": {
+      "marker": "/Users/yasser/scripts/archive/order64_20260721T073337Z/config/llm_boundary_inventory.json.ABSENT_pre_order64_20260721T073337Z",
+      "path": "/Users/yasser/scripts/config/llm_boundary_inventory.json",
+      "state": "absent"
+    },
+    "llm_invocations.jsonl": {
+      "marker": "/Users/yasser/scripts/archive/order64_20260721T073337Z/config/llm_invocations.jsonl.ABSENT_pre_order64_20260721T073337Z",
+      "path": "/Users/yasser/scripts/config/llm_invocations.jsonl",
+      "state": "absent"
+    },
+    "pre_market_report.py": {
+      "adjacent_backup": "/Users/yasser/scripts/pre_market_report.py.bak_order64_20260721T073337Z",
+      "archive_backup": "/Users/yasser/scripts/archive/order64_20260721T073337Z/sources/pre_market_report.py.bak_order64_20260721T073337Z",
+      "mode": "0o644",
+      "path": "/Users/yasser/scripts/pre_market_report.py",
+      "sha256": "9ff47f99c1dcfd07271305284ec4822863981a9212c7fc1f94507e4a7a354fc7",
+      "state": "present"
+    },
+    "tfe_authority_manifest.json": {
+      "marker": "/Users/yasser/scripts/archive/order64_20260721T073337Z/config/tfe_authority_manifest.json.ABSENT_pre_order64_20260721T073337Z",
+      "path": "/Users/yasser/scripts/config/tfe_authority_manifest.json",
+      "state": "absent"
+    }
+  },
+  "timestamp_utc": "20260721T073337Z"
+}
